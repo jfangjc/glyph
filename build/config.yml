@@ -1,0 +1,83 @@
+# This file contains the configuration for this project.
+# When you update `info` or `fileAssociations`, run `wails3 task common:update:build-assets` to update the assets.
+# Note that this will overwrite any changes you have made to the assets.
+version: "3"
+
+# This information is used to generate the build assets.
+info:
+    companyName: "Glyph" # The name of the company
+    productName: "Glyph" # The name of the application
+    productIdentifier: "app.glyph.editor" # The unique product identifier
+    description: "A focused editor for Markdown, LaTeX, Org Mode, Typst, and plain text." # The application description
+    copyright: "(c) 2026, Glyph" # Copyright text
+    comments: "Cross-platform document editor" # Comments
+    version: "0.0.1" # The application version
+    # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
+    #                               # Should match the name of your .icon file without the extension
+    #                               # If not set and Assets.car exists, defaults to "appicon"
+
+# Dev mode configuration
+dev_mode:
+    root_path: .
+    log_level: warn
+    debounce: 1000
+    ignore:
+        dir:
+            - .git
+            - node_modules
+            - frontend
+            - bin
+        file:
+            - .DS_Store
+            - .gitignore
+            - .gitkeep
+            - "*_test.go"
+        watched_extension:
+            - "*.go"
+            - "*.js" # Watch for changes to JS/TS files included using the //wails:include directive.
+            - "*.ts" # The frontend directory will be excluded entirely by the setting above.
+        git_ignore: true
+    executes:
+        - cmd: wails3 build DEV=true
+          type: blocking
+        - cmd: wails3 task common:dev:frontend
+          type: background
+        - cmd: wails3 task run
+          type: primary
+
+# File Associations
+# More information at: https://v3.wails.io/noit/done/yet
+fileAssociations:
+  - ext: md
+    name: Markdown
+    description: Markdown document
+    role: Editor
+    mimeType: text/markdown
+  - ext: markdown
+    name: Markdown
+    description: Markdown document
+    role: Editor
+    mimeType: text/markdown
+  - ext: tex
+    name: LaTeX
+    description: LaTeX source document
+    role: Editor
+    mimeType: text/x-tex
+  - ext: org
+    name: Org Mode
+    description: Org Mode document
+    role: Editor
+    mimeType: text/org
+  - ext: typ
+    name: Typst
+    description: Typst source document
+    role: Editor
+    mimeType: text/plain
+  - ext: txt
+    name: Plain Text
+    description: Plain text document
+    role: Editor
+    mimeType: text/plain
+
+# Other data
+other: []

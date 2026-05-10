@@ -1,0 +1,22 @@
+{
+    "name": "glyph-frontend",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite --host 127.0.0.1",
+        "typecheck": "tsc --noEmit",
+        "clean:dist": "node -e \"const fs=require('fs'),path=require('path');fs.mkdirSync('dist',{recursive:true});for(const name of fs.readdirSync('dist')){if(name!=='.gitkeep')fs.rmSync(path.join('dist',name),{recursive:true,force:true});}fs.closeSync(fs.openSync(path.join('dist','.gitkeep'),'a'));\"",
+        "preserve:dist": "node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').closeSync(require('fs').openSync('dist/.gitkeep','a'))\"",
+        "build:dev": "npm run clean:dist && vite build --minify false --mode development && npm run preserve:dist",
+        "build": "npm run typecheck && npm run clean:dist && vite build --mode production && npm run preserve:dist",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "@wailsio/runtime": "latest"
+    },
+    "devDependencies": {
+        "typescript": "^4.9.3",
+        "vite": "^5.0.0"
+    }
+}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Glyph
+Comment=A focused editor for Markdown, LaTeX, Org Mode, Typst, and plain text.
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/glyph %u
+Terminal=false
+Type=Application
+Icon=glyph
+Categories=Utility;
+StartupWMClass=glyph
+
+ 
