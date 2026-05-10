@@ -1,0 +1,94 @@
+:root {
+    --windows-titlebar-height: 37px;
+    --windows-caption-button-width: 47px;
+    --windows-caption-icon-size: 10px;
+    --windows-caption-fg: #1f1f1f;
+    --windows-caption-fg-inactive: #8a8a8a;
+    --windows-caption-hover-bg: rgb(0 0 0 / 9%);
+    --windows-caption-close-hover-bg: #e90924;
+    --windows-caption-close-hover-fg: #fffcff;
+}
+
+.windows-titlebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 20;
+    display: flex;
+    justify-content: flex-end;
+    height: var(--windows-titlebar-height);
+    background: transparent;
+    color: var(--windows-caption-fg);
+    pointer-events: none;
+    user-select: none;
+}
+
+.windows-drag-region {
+    flex: 1 1 auto;
+    height: 100%;
+    background: transparent;
+    pointer-events: auto;
+    --wails-draggable: drag;
+}
+
+.windows-window-controls {
+    display: flex;
+    flex: 0 0 auto;
+    height: 100%;
+    pointer-events: auto;
+    --wails-draggable: no-drag;
+}
+
+.window-control {
+    display: grid;
+    place-items: center;
+    width: var(--windows-caption-button-width);
+    height: var(--windows-titlebar-height);
+    margin: 0;
+    padding: 1px 0 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    line-height: 1;
+    cursor: default;
+}
+
+.window-control-icon {
+    display: block;
+    width: var(--windows-caption-icon-size);
+    height: var(--windows-caption-icon-size);
+    font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", "Segoe UI Symbol", sans-serif;
+    font-size: var(--windows-caption-icon-size);
+    font-weight: 400;
+    line-height: var(--windows-caption-icon-size);
+    text-align: center;
+}
+
+.window-control:hover {
+    background: var(--windows-caption-hover-bg);
+}
+
+.window-control:active {
+    filter: brightness(0.88);
+}
+
+.window-control:focus {
+    outline: 0;
+}
+
+.window-control:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--windows-caption-fg) 70%, transparent);
+    outline-offset: -3px;
+}
+
+.window-control-close:hover {
+    background: var(--windows-caption-close-hover-bg);
+    color: var(--windows-caption-close-hover-fg);
+}
+
+body:not(.window-focused) .windows-titlebar {
+    color: var(--windows-caption-fg-inactive);
+}

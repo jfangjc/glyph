@@ -18,7 +18,7 @@ var assets embed.FS
 func main() {
 	app := application.New(application.Options{
 		Name:        "Glyph",
-		Description: "A focused editor for Markdown, LaTeX, Org Mode, Typst, and plain text.",
+		Description: "A lightweight, minimalistic cross-platform Markdown editor.",
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -33,6 +33,7 @@ func main() {
 		Height:    760,
 		MinWidth:  820,
 		MinHeight: 560,
+		Frameless: true,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			TitleBar:                application.MacTitleBarHiddenInset,
