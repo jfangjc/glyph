@@ -1,9 +1,18 @@
+html {
+    scrollbar-width: none;
+    overflow-x: auto;
+    overflow: hidden;
+}
+
+html::-webkit-scrollbar {
+    display: none;
+}
+
 :root {
     color: #1f1f1f;
     background: #ffffff;
     font-family: Consolas, "SFMono-Regular", monospace;
     font-size: 1rem;
-    line-height: 1.5;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;

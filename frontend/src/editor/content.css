@@ -1,0 +1,34 @@
+.block[data-type="heading-1"] .block-content {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.block[data-type="heading-2"] .block-content {
+    font-size: 1.32rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.block[data-type="list"] .block-content::before {
+    color: #6a6a6a;
+    content: "- ";
+}
+
+.block[data-type="quote"] {
+    border-left: 3px solid #c9c9c9;
+    padding-left: 10px;
+}
+
+.block[data-type="quote"] .block-content {
+    color: #4c4c4c;
+    font-style: italic;
+}
+
+.block[data-type="code"] .block-content {
+    border: 1px solid #dedede;
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: #f6f6f6;
+    font-size: 0.9rem;
+}

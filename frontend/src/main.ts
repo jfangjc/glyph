@@ -1,5 +1,6 @@
 import "./global.css";
 import "./editor/editor.css";
+import "./editor/content.css";
 import { installEditor } from "./editor/editor";
 import { installWindowsPlatform } from "./platform/windows/windows";
 

@@ -1,6 +1,15 @@
 .editor-shell {
-    min-height: 100vh;
     background: #ffffff;
+    height: 100vh;
+    width: 100vw;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.editor-shell::-webkit-scrollbar {
+    display: none;
 }
 
 .document-surface {
@@ -29,18 +38,14 @@
 
 .block {
     display: grid;
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: start;
-    min-height: 34px;
-    border-radius: 6px;
-    padding: 3px 0;
 }
 
 .todo-checkbox {
     display: none;
-    width: 16px;
-    height: 16px;
-    margin: 7px 4px 0 0;
+    width: 1rem;
+    height: 1rem;
 }
 
 .block[data-type="todo"] .todo-checkbox {
@@ -48,10 +53,10 @@
 }
 
 .block-content {
-    min-width: 0;
+    width: 50vw;
     min-height: 28px;
     outline: 0;
-    padding: 2px 0;
+    padding: 0;
     white-space: pre-wrap;
     word-break: break-word;
 }
@@ -60,39 +65,4 @@
     color: #9a9a9a;
     content: attr(data-placeholder);
     pointer-events: none;
-}
-
-.block[data-type="heading-1"] .block-content {
-    font-size: 1.75rem;
-    font-weight: 700;
-    line-height: 1.25;
-}
-
-.block[data-type="heading-2"] .block-content {
-    font-size: 1.32rem;
-    font-weight: 700;
-    line-height: 1.35;
-}
-
-.block[data-type="list"] .block-content::before {
-    color: #6a6a6a;
-    content: "- ";
-}
-
-.block[data-type="quote"] {
-    border-left: 3px solid #c9c9c9;
-    padding-left: 10px;
-}
-
-.block[data-type="quote"] .block-content {
-    color: #4c4c4c;
-    font-style: italic;
-}
-
-.block[data-type="code"] .block-content {
-    border: 1px solid #dedede;
-    border-radius: 6px;
-    padding: 10px 12px;
-    background: #f6f6f6;
-    font-size: 0.9rem;
 }
