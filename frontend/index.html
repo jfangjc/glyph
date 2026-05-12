@@ -6,25 +6,7 @@
     <title>Glyph</title>
   </head>
   <body>
-    <main id="app" class="editor-shell">
-      <section class="document-surface" aria-label="Editor">
-        <input id="document-title" class="document-title" aria-label="Document title" value="Untitled" />
-        <div id="editor" class="block-editor" aria-label="Document blocks">
-          <article class="block" data-block data-type="paragraph">
-            <input class="todo-checkbox" type="checkbox" aria-label="Todo complete" />
-            <div class="block-content" contenteditable="true" role="textbox" aria-label="Paragraph block" data-placeholder="Start writing"></div>
-          </article>
-        </div>
-      </section>
-
-      <template id="block-template">
-        <article class="block" data-block data-type="paragraph">
-          <input class="todo-checkbox" type="checkbox" aria-label="Todo complete" />
-          <div class="block-content" contenteditable="true" role="textbox" aria-label="Paragraph block" data-placeholder="Keep writing"></div>
-        </article>
-      </template>
-    </main>
-
+    <main id="app"></main>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
