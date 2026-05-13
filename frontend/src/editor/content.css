@@ -10,9 +10,76 @@
     line-height: 1.35;
 }
 
-.block[data-type="list"] .block-content::before {
-    color: #6a6a6a;
-    content: "- ";
+.block[data-type="heading-3"] .block-content {
+    font-size: 1.16rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.block[data-type="heading-4"] .block-content {
+    font-size: 1.05rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.block[data-type="heading-5"] .block-content {
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.block[data-type="heading-6"] .block-content {
+    color: #4f4f4f;
+    font-size: 0.94rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.block[data-type="list"] {
+    --list-dot-size: 0.4rem;
+
+    column-gap: 0.35rem;
+    grid-template-columns: 1.1rem minmax(0, 1fr);
+    position: relative;
+}
+
+.block[data-type="list"]::before {
+    background: #6a6a6a;
+    border-radius: 50%;
+    content: "";
+    grid-column: 1;
+    height: var(--list-dot-size);
+    justify-self: center;
+    left: calc((1.1rem - var(--list-dot-size)) / 2);
+    pointer-events: none;
+    position: absolute;
+    top: 0.72em;
+    transform: translateY(-50%);
+    user-select: none;
+    width: var(--list-dot-size);
+}
+
+.block[data-type="list"] .block-content {
+    grid-column: 2;
+}
+
+.block[data-type="list"][data-indent="1"] {
+    margin-left: 1.5rem;
+}
+
+.block[data-type="list"][data-indent="2"] {
+    margin-left: 3rem;
+}
+
+.block[data-type="list"][data-indent="3"] {
+    margin-left: 4.5rem;
+}
+
+.block[data-type="list"][data-indent]::before {
+    --list-dot-size: 0.36rem;
+
+    background: transparent;
+    border: 1.5px solid #6a6a6a;
 }
 
 .block[data-type="quote"] {
@@ -30,5 +97,17 @@
     border-radius: 6px;
     padding: 10px 12px;
     background: #f6f6f6;
+    font-family: Consolas, "SFMono-Regular", monospace;
     font-size: 0.9rem;
+    line-height: 1.55;
+    tab-size: 4;
+}
+
+.block-content code {
+    border-radius: 4px;
+    padding: 0 0.25em;
+    background: #eeeeee;
+    color: #222222;
+    font-family: Consolas, "SFMono-Regular", monospace;
+    font-size: 0.92em;
 }
