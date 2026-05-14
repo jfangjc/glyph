@@ -521,8 +521,8 @@ function splitBlock(block: HTMLElement): void {
     const currentType = readBlockType(block.dataset.type);
 
     if (text === "" && shouldResetEmptyBlock(currentType)) {
-        setBlockType(block, "paragraph");
-        focusBlock(block);
+        clearBlockProperties(block);
+        focusBlockAtOffset(block, 0);
         return;
     }
 
@@ -548,6 +548,7 @@ function applyMarkdownShortcut(block: HTMLElement): boolean {
     setBlockType(block, shortcut.type);
     setBlockIndent(block, shortcut.indent ?? 0);
     setBlockText(block, text.slice(shortcut.marker.length));
+    ensureEditableBlockAfter(block);
     focusBlock(block);
     return true;
 }
@@ -995,6 +996,16 @@ function indentListBlocks(block: HTMLElement, delta: number): boolean {
 function removeOrMergeBackward(block: HTMLElement): boolean {
     const type = readBlockType(block.dataset.type);
 
+    if (!isCaretAtBlockEdge(block, "start")) {
+        return false;
+    }
+
+    if (type !== "paragraph") {
+        clearBlockProperties(block);
+        focusBlockAtOffset(block, 0);
+        return true;
+    }
+
     if (getBlockText(block) === "") {
         const previous = getSiblingBlock(block, "previous");
         if (previous) {
@@ -1003,17 +1014,7 @@ function removeOrMergeBackward(block: HTMLElement): boolean {
             return true;
         }
 
-        if (type !== "paragraph") {
-            setBlockType(block, "paragraph");
-            focusBlock(block);
-            return true;
-        }
-
         return true;
-    }
-
-    if (!isCaretAtBlockEdge(block, "start")) {
-        return false;
     }
 
     const previous = getSiblingBlock(block, "previous");
@@ -1026,6 +1027,20 @@ function removeOrMergeBackward(block: HTMLElement): boolean {
     block.remove();
     focusBlockAtOffset(previous, offset);
     return true;
+}
+
+function clearBlockProperties(block: HTMLElement): void {
+    setBlockType(block, "paragraph");
+    setTodoChecked(block, false);
+    setCodeInfo(block, "");
+}
+
+function ensureEditableBlockAfter(block: HTMLElement): void {
+    if (getSiblingBlock(block, "next")) {
+        return;
+    }
+
+    block.after(createBlock("paragraph"));
 }
 
 function mergeForward(block: HTMLElement): boolean {

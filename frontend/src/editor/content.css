@@ -63,6 +63,21 @@
     grid-column: 2;
 }
 
+.block[data-type="todo"] {
+    column-gap: 0.35rem;
+    grid-template-columns: 1.1rem minmax(0, 1fr);
+}
+
+.block[data-type="todo"] .todo-checkbox {
+    grid-column: 1;
+    justify-self: center;
+    margin: 0.18em 0 0;
+}
+
+.block[data-type="todo"] .block-content {
+    grid-column: 2;
+}
+
 .block[data-type="list"][data-indent="1"] {
     margin-left: 1.5rem;
 }
