@@ -1,4 +1,5 @@
 import editorHtml from "./editor.html?raw";
+import { chooseFileToOpen, readFile, saveFile, type DocumentFile } from "../file/file-service";
 
 type BlockType =
     | "paragraph"
@@ -17,6 +18,20 @@ type Shortcut = {
     marker: string;
     type: BlockType;
     indent?: number;
+};
+
+type ParsedBlock = {
+    type: BlockType;
+    text: string;
+    indent?: number;
+    checked?: boolean;
+    codeInfo?: string;
+};
+
+type ParsedDocument = {
+    title: string;
+    usesTitle: boolean;
+    blocks: ParsedBlock[];
 };
 
 type SelectedBlockRange = {
@@ -74,15 +89,314 @@ const htmlEscapes: Record<string, string> = {
     "'": "&#39;",
 };
 
+const autoSaveIntervalMs = 30_000;
+
+let activeFilePath: string | null = null;
+let documentUsesTitle = false;
+let hasUnsavedChanges = false;
+let isOpeningFile = false;
+let isSavingFile = false;
+let saveAgainAfterCurrent = false;
+let lastSavedMarkdown = "";
+
 export function installEditor(root: HTMLElement): void {
     root.classList.add("editor-shell");
     root.insertAdjacentHTML("beforeend", editorHtml);
 
     const editor = getElement<HTMLElement>("editor");
+    const title = getElement<HTMLInputElement>("document-title");
 
     editor.addEventListener("keydown", handleEditorKeydown);
     editor.addEventListener("input", handleEditorInput);
     editor.addEventListener("paste", handleEditorPaste);
+    editor.addEventListener("change", handleEditorChange);
+    title.addEventListener("input", handleTitleInput);
+    window.addEventListener("keydown", handleGlobalKeydown);
+    window.setInterval(() => void saveCurrentDocument(), autoSaveIntervalMs);
+
+    lastSavedMarkdown = serializeDocumentMarkdown();
+    syncFirstBlockPlaceholder();
+}
+
+function handleGlobalKeydown(event: KeyboardEvent): void {
+    if (!isOpenFileShortcut(event)) {
+        return;
+    }
+
+    event.preventDefault();
+    void openDocument();
+}
+
+function handleTitleInput(): void {
+    documentUsesTitle = true;
+    markDocumentDirty();
+}
+
+function handleEditorChange(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
+        markDocumentDirty();
+    }
+}
+
+async function openDocument(): Promise<void> {
+    if (isOpeningFile) {
+        return;
+    }
+
+    isOpeningFile = true;
+
+    try {
+        if (activeFilePath && hasUnsavedChanges && !(await saveCurrentDocument())) {
+            return;
+        }
+
+        const selectedPath = await chooseFileToOpen();
+        if (!selectedPath) {
+            return;
+        }
+
+        loadDocument(await readFile(selectedPath));
+    } catch (error) {
+        console.error("Failed to open file:", error);
+    } finally {
+        isOpeningFile = false;
+    }
+}
+
+async function saveCurrentDocument(): Promise<boolean> {
+    if (!activeFilePath || !hasUnsavedChanges) {
+        return true;
+    }
+
+    if (isSavingFile) {
+        saveAgainAfterCurrent = true;
+        return false;
+    }
+
+    const path = activeFilePath;
+    const content = serializeDocumentMarkdown();
+
+    if (content === lastSavedMarkdown) {
+        hasUnsavedChanges = false;
+        return true;
+    }
+
+    isSavingFile = true;
+    let saved = false;
+
+    try {
+        await saveFile(path, content);
+
+        if (activeFilePath === path) {
+            lastSavedMarkdown = content;
+            hasUnsavedChanges = serializeDocumentMarkdown() !== lastSavedMarkdown;
+        }
+
+        saved = !hasUnsavedChanges;
+    } catch (error) {
+        console.error("Failed to autosave file:", error);
+    } finally {
+        isSavingFile = false;
+
+        if (saveAgainAfterCurrent) {
+            saveAgainAfterCurrent = false;
+            void saveCurrentDocument();
+        }
+    }
+
+    return saved;
+}
+
+function loadDocument(documentFile: DocumentFile): void {
+    const parsedDocument = parseMarkdownDocument(documentFile);
+    const title = getElement<HTMLInputElement>("document-title");
+
+    activeFilePath = documentFile.path;
+    documentUsesTitle = parsedDocument.usesTitle;
+    title.value = parsedDocument.title;
+    replaceEditorBlocks(parsedDocument.blocks);
+    lastSavedMarkdown = serializeDocumentMarkdown();
+    hasUnsavedChanges = false;
+}
+
+function parseMarkdownDocument(documentFile: DocumentFile): ParsedDocument {
+    const lines = documentFile.content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+
+    if (lines.length > 1 && lines[lines.length - 1] === "") {
+        lines.pop();
+    }
+
+    let title = titleFromFileName(documentFile.name);
+    let usesTitle = false;
+    let startLine = 0;
+    const titleMatch = lines[0]?.match(/^#\s+(.+)$/);
+
+    if (titleMatch) {
+        title = titleMatch[1].trim() || title;
+        usesTitle = true;
+        startLine = lines[1] === "" ? 2 : 1;
+    }
+
+    const blocks: ParsedBlock[] = [];
+
+    for (let index = startLine; index < lines.length; index += 1) {
+        const line = lines[index];
+        const fence = readCodeFence(line);
+
+        if (fence) {
+            const codeLines: string[] = [];
+            index += 1;
+
+            while (index < lines.length && !isClosingCodeFence(lines[index], fence.marker)) {
+                codeLines.push(lines[index]);
+                index += 1;
+            }
+
+            blocks.push({ type: "code", text: codeLines.join("\n"), codeInfo: fence.info });
+            continue;
+        }
+
+        blocks.push(parseMarkdownLine(line));
+    }
+
+    return {
+        title,
+        usesTitle,
+        blocks: blocks.length > 0 ? blocks : [{ type: "paragraph", text: "" }],
+    };
+}
+
+function parseMarkdownLine(line: string): ParsedBlock {
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+        return {
+            type: `heading-${headingMatch[1].length}` as BlockType,
+            text: headingMatch[2],
+        };
+    }
+
+    const todoMatch = line.match(/^-\s+\[([ xX])\]\s?(.*)$/);
+    if (todoMatch) {
+        return {
+            type: "todo",
+            text: todoMatch[2],
+            checked: todoMatch[1].toLowerCase() === "x",
+        };
+    }
+
+    const listMatch = line.match(/^(\s*)-\s+(.*)$/);
+    if (listMatch) {
+        return {
+            type: "list",
+            text: listMatch[2],
+            indent: Math.min(Math.floor(listMatch[1].length / 2), 3),
+        };
+    }
+
+    const quoteMatch = line.match(/^>\s?(.*)$/);
+    if (quoteMatch) {
+        return { type: "quote", text: quoteMatch[1] };
+    }
+
+    return { type: "paragraph", text: line };
+}
+
+function serializeDocumentMarkdown(): string {
+    const title = getElement<HTMLInputElement>("document-title").value.trim();
+    const body = getEditorBlocks().map(serializeBlock).join("\n");
+    const content = documentUsesTitle && title ? `# ${title}${body ? `\n\n${body}` : ""}` : body;
+
+    return content ? `${content}\n` : "";
+}
+
+function serializeBlock(block: HTMLElement): string {
+    const type = readBlockType(block.dataset.type);
+    const text = getBlockText(block);
+
+    if (headingTypes.has(type)) {
+        return `${"#".repeat(Number(type.slice("heading-".length)))} ${text}`;
+    }
+
+    if (type === "list") {
+        return `${"  ".repeat(readBlockIndent(block))}- ${text}`;
+    }
+
+    if (type === "todo") {
+        return `- [${getTodoCheckbox(block).checked ? "x" : " "}] ${text}`;
+    }
+
+    if (type === "quote") {
+        return text
+            .split("\n")
+            .map((line) => (line ? `> ${line}` : ">"))
+            .join("\n");
+    }
+
+    if (type === "code") {
+        const fence = createCodeFence(text);
+        const codeInfo = block.dataset.codeInfo ? ` ${block.dataset.codeInfo}` : "";
+        const code = text.endsWith("\n") ? text : `${text}\n`;
+
+        return `${fence}${codeInfo}\n${code}${fence}`;
+    }
+
+    return text;
+}
+
+function replaceEditorBlocks(blocks: ParsedBlock[]): void {
+    const editor = getElement<HTMLElement>("editor");
+    const nextBlocks = blocks.map((block) => createBlock(block.type, block.text, block));
+
+    editor.replaceChildren(...nextBlocks);
+    syncFirstBlockPlaceholder();
+    focusBlockAtOffset(nextBlocks[0], 0);
+}
+
+function readCodeFence(line: string): { marker: string; info: string } | null {
+    const match = line.trim().match(/^(`{3,}|~{3,})(.*)$/);
+    if (!match) {
+        return null;
+    }
+
+    return {
+        marker: match[1],
+        info: match[2].trim(),
+    };
+}
+
+function isClosingCodeFence(line: string, fence: string): boolean {
+    const trimmed = line.trim();
+    const fenceCharacter = fence[0];
+
+    return trimmed.startsWith(fenceCharacter.repeat(fence.length)) && trimmed.split("").every((char) => char === fenceCharacter);
+}
+
+function createCodeFence(text: string): string {
+    const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
+
+    return "`".repeat(Math.max(3, longestRun + 1));
+}
+
+function titleFromFileName(fileName: string): string {
+    const extensionIndex = fileName.lastIndexOf(".");
+    const title = extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName;
+
+    return title || "Untitled";
+}
+
+function syncFirstBlockPlaceholder(): void {
+    const [firstBlock, ...remainingBlocks] = getEditorBlocks();
+
+    if (!firstBlock) {
+        return;
+    }
+
+    getBlockContent(firstBlock).dataset.placeholder = "Start writing";
+
+    for (const block of remainingBlocks) {
+        delete getBlockContent(block).dataset.placeholder;
+    }
 }
 
 function handleEditorKeydown(event: KeyboardEvent): void {
@@ -101,6 +415,7 @@ function handleEditorKeydown(event: KeyboardEvent): void {
 
     if (event.key === "Tab" && indentListBlocks(block, event.shiftKey ? -1 : 1)) {
         event.preventDefault();
+        markDocumentDirty();
         return;
     }
 
@@ -108,26 +423,31 @@ function handleEditorKeydown(event: KeyboardEvent): void {
         event.preventDefault();
         if (readBlockType(block.dataset.type) === "code" && !event.ctrlKey && !event.metaKey) {
             replaceSelectionWithText(block, "\n");
+            markDocumentDirty();
             return;
         }
 
         splitBlock(deleteSelectedContent() ?? block);
+        markDocumentDirty();
         return;
     }
 
     if (event.key === "Backspace" || event.key === "Delete") {
         if (deleteSelectedContent()) {
             event.preventDefault();
+            markDocumentDirty();
             return;
         }
 
         if (event.key === "Backspace" && removeOrMergeBackward(block)) {
             event.preventDefault();
+            markDocumentDirty();
             return;
         }
 
         if (event.key === "Delete" && mergeForward(block)) {
             event.preventDefault();
+            markDocumentDirty();
             return;
         }
     }
@@ -135,6 +455,7 @@ function handleEditorKeydown(event: KeyboardEvent): void {
     if (isPlainTextKey(event) && getSelectedBlockRange()) {
         event.preventDefault();
         replaceSelectionWithText(block, event.key);
+        markDocumentDirty();
     }
 }
 
@@ -147,6 +468,8 @@ function handleEditorInput(event: Event): void {
     if (!applyMarkdownShortcut(block)) {
         renderBlockContent(block);
     }
+
+    markDocumentDirty();
 }
 
 function handleEditorPaste(event: ClipboardEvent): void {
@@ -159,6 +482,7 @@ function handleEditorPaste(event: ClipboardEvent): void {
 
     event.preventDefault();
     insertPastedText(block, text.replace(/\r\n?/g, "\n"));
+    markDocumentDirty();
 }
 
 function splitBlock(block: HTMLElement): void {
@@ -202,7 +526,7 @@ function applyMarkdownShortcut(block: HTMLElement): boolean {
     return true;
 }
 
-function createBlock(type: BlockType = "paragraph", text = ""): HTMLElement {
+function createBlock(type: BlockType = "paragraph", text = "", options: Partial<ParsedBlock> = {}): HTMLElement {
     const blockTemplate = getElement<HTMLTemplateElement>("block-template");
     const fragment = blockTemplate.content.cloneNode(true) as DocumentFragment;
     const block = fragment.querySelector<HTMLElement>("[data-block]");
@@ -213,6 +537,9 @@ function createBlock(type: BlockType = "paragraph", text = ""): HTMLElement {
 
     setBlockType(block, type);
     setBlockText(block, text);
+    setBlockIndent(block, options.indent ?? 0);
+    setTodoChecked(block, options.checked ?? false);
+    setCodeInfo(block, options.codeInfo ?? "");
     return block;
 }
 
@@ -222,6 +549,10 @@ function setBlockType(block: HTMLElement, type: BlockType): void {
 
     if (type !== "list") {
         setBlockIndent(block, 0);
+    }
+
+    if (type !== "code") {
+        delete block.dataset.codeInfo;
     }
 }
 
@@ -245,6 +576,19 @@ function setBlockIndent(block: HTMLElement, indent: number): void {
     delete block.dataset.indent;
 }
 
+function setTodoChecked(block: HTMLElement, checked: boolean): void {
+    getTodoCheckbox(block).checked = checked;
+}
+
+function setCodeInfo(block: HTMLElement, codeInfo: string): void {
+    if (readBlockType(block.dataset.type) === "code" && codeInfo) {
+        block.dataset.codeInfo = codeInfo;
+        return;
+    }
+
+    delete block.dataset.codeInfo;
+}
+
 function getBlockText(block: HTMLElement): string {
     return getBlockContent(block).textContent ?? "";
 }
@@ -260,6 +604,15 @@ function getBlockContent(block: HTMLElement): HTMLElement {
         throw new Error("Block is missing .block-content");
     }
     return content;
+}
+
+function getTodoCheckbox(block: HTMLElement): HTMLInputElement {
+    const checkbox = block.querySelector<HTMLInputElement>(".todo-checkbox");
+    if (!checkbox) {
+        throw new Error("Block is missing .todo-checkbox");
+    }
+
+    return checkbox;
 }
 
 function findBlock(target: EventTarget | Node | null): HTMLElement | null {
@@ -633,6 +986,14 @@ function renderInlineCode(text: string): string {
 
 function shouldResetEmptyBlock(type: BlockType): boolean {
     return type === "list" || type === "todo" || type === "quote";
+}
+
+function markDocumentDirty(): void {
+    hasUnsavedChanges = true;
+}
+
+function isOpenFileShortcut(event: KeyboardEvent): boolean {
+    return event.key.toLowerCase() === "o" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
 }
 
 function isSelectAllShortcut(event: KeyboardEvent): boolean {

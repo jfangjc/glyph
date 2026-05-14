@@ -19,6 +19,9 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "Glyph",
 		Description: "A lightweight, minimalistic cross-platform Markdown editor.",
+		Services: []application.Service{
+			application.NewService(&FileService{}),
+		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
