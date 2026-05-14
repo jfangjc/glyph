@@ -1,5 +1,6 @@
+import { Browser } from "@wailsio/runtime";
 import editorHtml from "./editor.html?raw";
-import { chooseFileToOpen, readFile, saveFile, type DocumentFile } from "../file/file-service";
+import { chooseFileToOpen, readFile, readImage, saveFile, type DocumentFile } from "../file/file-service";
 
 type BlockType =
     | "paragraph"
@@ -32,6 +33,12 @@ type ParsedDocument = {
     title: string;
     usesTitle: boolean;
     blocks: ParsedBlock[];
+};
+
+type InlineToken = {
+    raw: string;
+    label: string;
+    destination: string;
 };
 
 type SelectedBlockRange = {
@@ -90,6 +97,7 @@ const htmlEscapes: Record<string, string> = {
 };
 
 const autoSaveIntervalMs = 30_000;
+const localImageCache = new Map<string, Promise<string | null>>();
 
 let activeFilePath: string | null = null;
 let documentUsesTitle = false;
@@ -110,6 +118,7 @@ export function installEditor(root: HTMLElement): void {
     editor.addEventListener("input", handleEditorInput);
     editor.addEventListener("paste", handleEditorPaste);
     editor.addEventListener("change", handleEditorChange);
+    editor.addEventListener("click", handleEditorClick);
     title.addEventListener("input", handleTitleInput);
     window.addEventListener("keydown", handleGlobalKeydown);
     window.setInterval(() => void saveCurrentDocument(), autoSaveIntervalMs);
@@ -137,6 +146,23 @@ function handleEditorChange(event: Event): void {
     if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
         markDocumentDirty();
     }
+}
+
+function handleEditorClick(event: MouseEvent): void {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+        return;
+    }
+
+    const link = target.closest("a.markdown-link") as HTMLAnchorElement | null;
+    const href = link?.dataset.href;
+    if (!href) {
+        return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    void Browser.OpenURL(href).catch((error) => console.error("Failed to open URL:", error));
 }
 
 async function openDocument(): Promise<void> {
@@ -561,10 +587,15 @@ function setBlockText(block: HTMLElement, text: string): void {
 
     if (readBlockType(block.dataset.type) === "code") {
         content.textContent = text;
+        delete content.dataset.renderedMarkdown;
         return;
     }
 
-    content.innerHTML = renderInlineCode(text);
+    const html = renderInlineMarkdown(text);
+
+    content.innerHTML = html;
+    content.dataset.renderedMarkdown = html;
+    hydrateImagePreviews(block);
 }
 
 function setBlockIndent(block: HTMLElement, indent: number): void {
@@ -590,7 +621,13 @@ function setCodeInfo(block: HTMLElement, codeInfo: string): void {
 }
 
 function getBlockText(block: HTMLElement): string {
-    return getBlockContent(block).textContent ?? "";
+    const content = getBlockContent(block);
+
+    if (readBlockType(block.dataset.type) === "code") {
+        return content.textContent ?? "";
+    }
+
+    return getMarkdownText(content);
 }
 
 function readBlockIndent(block: HTMLElement): number {
@@ -644,10 +681,15 @@ function focusBlockAtOffset(block: HTMLElement, offset: number): void {
 }
 
 function getCaretOffset(root: HTMLElement, anchorNode: Node, anchorOffset: number): number {
-    const range = document.createRange();
-    range.selectNodeContents(root);
-    range.setEnd(anchorNode, anchorOffset);
-    return range.toString().length;
+    if (anchorNode === root) {
+        return getMarkdownLengthBeforeChild(root, anchorOffset);
+    }
+
+    if (!root.contains(anchorNode)) {
+        return getMarkdownText(root).length;
+    }
+
+    return getMarkdownBoundaryOffset(root, anchorNode, anchorOffset);
 }
 
 function getCurrentBlockOffset(block: HTMLElement): number {
@@ -662,21 +704,128 @@ function getCurrentBlockOffset(block: HTMLElement): number {
 }
 
 function getTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let current = walker.nextNode();
-    let remaining = Math.max(0, offset);
+    const position = findMarkdownTextPosition(root, Math.max(0, offset));
 
-    while (current) {
-        const length = current.textContent?.length ?? 0;
-        if (remaining <= length) {
-            return { node: current, offset: remaining };
-        }
-
-        remaining -= length;
-        current = walker.nextNode();
+    if (position) {
+        return position;
     }
 
     return { node: root, offset: root.childNodes.length };
+}
+
+function getMarkdownText(node: Node): string {
+    const renderedMarkdown = readRenderedMarkdown(node);
+    if (renderedMarkdown !== null) {
+        return renderedMarkdown;
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent ?? "";
+    }
+
+    let text = "";
+    for (const child of Array.from(node.childNodes)) {
+        text += getMarkdownText(child);
+    }
+
+    return text;
+}
+
+function getMarkdownBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
+    const renderedMarkdown = readRenderedMarkdown(current);
+    if (renderedMarkdown !== null) {
+        return current === anchorNode && anchorOffset <= 0 ? 0 : renderedMarkdown.length;
+    }
+
+    if (current === anchorNode) {
+        if (current.nodeType === Node.TEXT_NODE) {
+            return Math.min(anchorOffset, current.textContent?.length ?? 0);
+        }
+
+        return getMarkdownLengthBeforeChild(current, anchorOffset);
+    }
+
+    let offset = 0;
+    for (const child of Array.from(current.childNodes)) {
+        if (child === anchorNode || child.contains(anchorNode)) {
+            return offset + getMarkdownBoundaryOffset(child, anchorNode, anchorOffset);
+        }
+
+        offset += getMarkdownText(child).length;
+    }
+
+    return offset;
+}
+
+function getMarkdownLengthBeforeChild(node: Node, childOffset: number): number {
+    return Array.from(node.childNodes)
+        .slice(0, Math.max(0, childOffset))
+        .reduce((length, child) => length + getMarkdownText(child).length, 0);
+}
+
+function findMarkdownTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } | null {
+    const remaining = { value: offset };
+
+    for (const child of Array.from(root.childNodes)) {
+        const position = findMarkdownTextPositionInNode(child, remaining);
+        if (position) {
+            return position;
+        }
+    }
+
+    return null;
+}
+
+function findMarkdownTextPositionInNode(
+    node: Node,
+    remaining: { value: number },
+): { node: Node; offset: number } | null {
+    const renderedMarkdown = readRenderedMarkdown(node);
+    if (renderedMarkdown !== null) {
+        if (remaining.value <= renderedMarkdown.length) {
+            return getAtomicNodePosition(node, remaining.value >= renderedMarkdown.length);
+        }
+
+        remaining.value -= renderedMarkdown.length;
+        return null;
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+        const length = node.textContent?.length ?? 0;
+        if (remaining.value <= length) {
+            return { node, offset: remaining.value };
+        }
+
+        remaining.value -= length;
+        return null;
+    }
+
+    for (const child of Array.from(node.childNodes)) {
+        const position = findMarkdownTextPositionInNode(child, remaining);
+        if (position) {
+            return position;
+        }
+    }
+
+    return null;
+}
+
+function getAtomicNodePosition(node: Node, after: boolean): { node: Node; offset: number } {
+    const parent = node.parentNode;
+    if (!parent) {
+        return { node, offset: 0 };
+    }
+
+    const childIndex = Array.from(parent.childNodes).findIndex((child) => child === node);
+    return { node: parent, offset: Math.max(0, childIndex) + (after ? 1 : 0) };
+}
+
+function readRenderedMarkdown(node: Node): string | null {
+    if (!(node instanceof HTMLElement)) {
+        return null;
+    }
+
+    return node.dataset.markdownRaw ?? null;
 }
 
 function getActiveBlock(target: EventTarget | Node | null): HTMLElement | null {
@@ -949,39 +1098,328 @@ function renderBlockContent(block: HTMLElement): void {
             ? getCaretOffset(content, selection.focusNode, selection.focusOffset)
             : getBlockText(block).length;
     const text = getBlockText(block);
-    const html = renderInlineCode(text);
+    const html = renderInlineMarkdown(text);
 
-    if (content.innerHTML === html) {
+    if (content.dataset.renderedMarkdown === html) {
         return;
     }
 
     content.innerHTML = html;
+    content.dataset.renderedMarkdown = html;
+    hydrateImagePreviews(block);
     focusBlockAtOffset(block, offset);
 }
 
-function renderInlineCode(text: string): string {
+function renderInlineMarkdown(text: string): string {
     let html = "";
     let index = 0;
 
     while (index < text.length) {
-        const start = text.indexOf("`", index);
-        if (start < 0) {
-            html += escapeHtml(text.slice(index));
-            break;
+        const inlineCode = readInlineCode(text, index);
+        if (inlineCode) {
+            html += `<code>${escapeHtml(inlineCode)}</code>`;
+            index += inlineCode.length;
+            continue;
         }
 
-        const end = text.indexOf("`", start + 1);
-        if (end < 0) {
-            html += escapeHtml(text.slice(index));
-            break;
+        const image = readInlineToken(text, index, true);
+        if (image) {
+            html += renderImageToken(image);
+            index += image.raw.length;
+            continue;
         }
 
-        html += escapeHtml(text.slice(index, start));
-        html += `<code>${escapeHtml(text.slice(start, end + 1))}</code>`;
-        index = end + 1;
+        const link = readInlineToken(text, index, false);
+        if (link) {
+            html += renderLinkToken(link);
+            index += link.raw.length;
+            continue;
+        }
+
+        const url = readBareUrl(text, index);
+        if (url) {
+            html += renderBareUrl(url);
+            index += url.length;
+            continue;
+        }
+
+        html += escapeHtml(text[index]);
+        index += 1;
     }
 
     return html;
+}
+
+function readInlineCode(text: string, index: number): string | null {
+    if (text[index] !== "`") {
+        return null;
+    }
+
+    const end = text.indexOf("`", index + 1);
+    return end < 0 ? null : text.slice(index, end + 1);
+}
+
+function readInlineToken(text: string, index: number, image: boolean): InlineToken | null {
+    const opener = image ? "![" : "[";
+    if (!text.startsWith(opener, index)) {
+        return null;
+    }
+
+    const labelStart = index + opener.length;
+    const labelEnd = findUnescapedCharacter(text, "]", labelStart);
+    if (labelEnd < 0 || text[labelEnd + 1] !== "(") {
+        return null;
+    }
+
+    const destinationStart = labelEnd + 2;
+    const destinationEnd = findClosingParenthesis(text, destinationStart);
+    if (destinationEnd < 0) {
+        return null;
+    }
+
+    const destination = readLinkDestination(text.slice(destinationStart, destinationEnd));
+    if (!destination) {
+        return null;
+    }
+
+    return {
+        raw: text.slice(index, destinationEnd + 1),
+        label: unescapeMarkdownDestination(text.slice(labelStart, labelEnd)),
+        destination,
+    };
+}
+
+function renderImageToken(token: InlineToken): string {
+    const source = escapeHtml(token.destination);
+    const alt = escapeHtml(token.label);
+
+    return `${escapeHtml(token.raw)}<span class="markdown-image-preview" contenteditable="false" data-image-source="${source}" data-image-alt="${alt}" data-state="loading" aria-hidden="true"></span>`;
+}
+
+function renderLinkToken(token: InlineToken): string {
+    const href = normalizeExternalUrl(token.destination);
+    const hrefAttributes = href ? ` href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"` : "";
+
+    return `<a class="markdown-link" contenteditable="false"${hrefAttributes} data-markdown-raw="${escapeHtml(token.raw)}" rel="noreferrer">${escapeHtml(token.label)}</a>`;
+}
+
+function renderBareUrl(url: string): string {
+    const href = normalizeExternalUrl(url);
+    if (!href) {
+        return escapeHtml(url);
+    }
+
+    const escapedHref = escapeHtml(href);
+    return `<a class="markdown-link" contenteditable="false" href="${escapedHref}" data-href="${escapedHref}" data-markdown-raw="${escapeHtml(url)}" rel="noreferrer">${escapeHtml(url)}</a>`;
+}
+
+function readLinkDestination(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return "";
+    }
+
+    if (trimmed.startsWith("<")) {
+        const closingBracket = findUnescapedCharacter(trimmed, ">", 1);
+        return closingBracket > 1 ? unescapeMarkdownDestination(trimmed.slice(1, closingBracket)) : "";
+    }
+
+    const titleMatch = trimmed.match(/^(\S+)\s+(?:"[^"]*"|'[^']*'|\([^)]*\))$/);
+    return unescapeMarkdownDestination(titleMatch?.[1] ?? trimmed);
+}
+
+function readBareUrl(text: string, index: number): string | null {
+    if (index > 0 && /[A-Za-z0-9]/.test(text[index - 1])) {
+        return null;
+    }
+
+    const match = text.slice(index).match(/^(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/i);
+    if (!match) {
+        return null;
+    }
+
+    return trimTrailingUrlPunctuation(match[0]);
+}
+
+function trimTrailingUrlPunctuation(value: string): string {
+    let url = value;
+
+    while (/[.,;:!?]$/.test(url)) {
+        url = url.slice(0, -1);
+    }
+
+    while (url.endsWith(")") && countCharacters(url, "(") < countCharacters(url, ")")) {
+        url = url.slice(0, -1);
+    }
+
+    return url;
+}
+
+function countCharacters(value: string, character: string): number {
+    return value.split(character).length - 1;
+}
+
+function findUnescapedCharacter(text: string, character: string, startIndex: number): number {
+    for (let index = startIndex; index < text.length; index += 1) {
+        if (text[index] === "\\") {
+            index += 1;
+            continue;
+        }
+
+        if (text[index] === character) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+function findClosingParenthesis(text: string, startIndex: number): number {
+    let nestedDepth = 0;
+
+    for (let index = startIndex; index < text.length; index += 1) {
+        if (text[index] === "\\") {
+            index += 1;
+            continue;
+        }
+
+        if (text[index] === "(") {
+            nestedDepth += 1;
+            continue;
+        }
+
+        if (text[index] === ")") {
+            if (nestedDepth === 0) {
+                return index;
+            }
+
+            nestedDepth -= 1;
+        }
+    }
+
+    return -1;
+}
+
+function normalizeExternalUrl(value: string): string | null {
+    const trimmed = value.trim();
+    const urlText = trimmed.match(/^www\./i) ? `https://${trimmed}` : trimmed;
+
+    try {
+        const url = new URL(urlText);
+        return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:" ? url.href : null;
+    } catch {
+        return null;
+    }
+}
+
+function normalizeExternalImageUrl(value: string): string | null {
+    const trimmed = value.trim();
+
+    if (/^data:image\//i.test(trimmed)) {
+        return trimmed;
+    }
+
+    try {
+        const url = new URL(trimmed);
+        return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+    } catch {
+        return null;
+    }
+}
+
+function unescapeMarkdownDestination(value: string): string {
+    return value.replace(/\\([\\`*{}\[\]()#+\-.!_>])/g, "$1");
+}
+
+function hydrateImagePreviews(block: HTMLElement): void {
+    const baseFilePath = activeFilePath;
+
+    const previews = Array.from(getBlockContent(block).querySelectorAll<HTMLElement>(".markdown-image-preview"));
+
+    for (const preview of previews) {
+        const source = preview.dataset.imageSource;
+        if (!source) {
+            continue;
+        }
+
+        const cacheKey = `${baseFilePath ?? ""}\u0000${source}`;
+        if (preview.dataset.resolvedFor === cacheKey) {
+            continue;
+        }
+
+        preview.dataset.resolvedFor = cacheKey;
+        preview.dataset.state = "loading";
+        preview.replaceChildren();
+
+        const externalImageUrl = normalizeExternalImageUrl(source);
+        if (externalImageUrl) {
+            setImagePreviewSource(preview, externalImageUrl, cacheKey);
+            continue;
+        }
+
+        void resolveLocalImageSource(source, baseFilePath).then((dataUrl) => {
+            if (preview.dataset.resolvedFor !== cacheKey) {
+                return;
+            }
+
+            if (!dataUrl) {
+                preview.dataset.state = "error";
+                preview.replaceChildren();
+                return;
+            }
+
+            setImagePreviewSource(preview, dataUrl, cacheKey);
+        });
+    }
+}
+
+function setImagePreviewSource(preview: HTMLElement, source: string, cacheKey: string): void {
+    if (preview.dataset.resolvedFor !== cacheKey) {
+        return;
+    }
+
+    const image = document.createElement("img");
+    image.alt = preview.dataset.imageAlt ?? "";
+    image.decoding = "async";
+    image.draggable = false;
+    image.loading = "lazy";
+    image.addEventListener("load", () => {
+        if (preview.dataset.resolvedFor === cacheKey) {
+            preview.dataset.state = "ready";
+        }
+    });
+    image.addEventListener("error", () => {
+        if (preview.dataset.resolvedFor === cacheKey) {
+            preview.dataset.state = "error";
+            preview.replaceChildren();
+        }
+    });
+
+    image.src = source;
+    preview.replaceChildren(image);
+
+    if (image.complete && image.naturalWidth > 0) {
+        preview.dataset.state = "ready";
+    }
+}
+
+function resolveLocalImageSource(source: string, baseFilePath: string | null): Promise<string | null> {
+    const cacheKey = `${baseFilePath ?? ""}\u0000${source}`;
+    const cached = localImageCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
+    const request = readImage(source, baseFilePath)
+        .then((image) => image.dataUrl)
+        .catch((error) => {
+            localImageCache.delete(cacheKey);
+            console.error("Failed to load local image:", error);
+            return null;
+        });
+
+    localImageCache.set(cacheKey, request);
+    return request;
 }
 
 function shouldResetEmptyBlock(type: BlockType): boolean {

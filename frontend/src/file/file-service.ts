@@ -6,6 +6,12 @@ export type DocumentFile = {
     content: string;
 };
 
+export type ImageFile = {
+    path: string;
+    mimeType: string;
+    dataUrl: string;
+};
+
 const textFileFilters: Dialogs.FileFilter[] = [
     { DisplayName: "Markdown", Pattern: "*.md;*.markdown" },
     { DisplayName: "Text Documents", Pattern: "*.txt;*.tex;*.org;*.typ" },
@@ -35,4 +41,8 @@ export function readFile(path: string): Promise<DocumentFile> {
 
 export function saveFile(path: string, content: string): Promise<void> {
     return Call.ByName("main.FileService.SaveFile", path, content) as Promise<void>;
+}
+
+export function readImage(path: string, baseFilePath: string | null): Promise<ImageFile> {
+    return Call.ByName("main.FileService.ReadImage", path, baseFilePath ?? "") as Promise<ImageFile>;
 }
