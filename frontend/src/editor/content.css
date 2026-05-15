@@ -127,6 +127,14 @@
     font-size: 0.92em;
 }
 
+.markdown-token {
+    position: relative;
+}
+
+.markdown-link-token {
+    display: inline;
+}
+
 .markdown-link {
     color: #0a66c2;
     cursor: pointer;
@@ -139,11 +147,64 @@
     color: #084f9b;
 }
 
-.markdown-image-preview {
+.markdown-link-label {
+    cursor: default;
+}
+
+.markdown-token-source {
+    display: none;
+    color: inherit;
+    font: inherit;
+    white-space: nowrap;
+}
+
+.markdown-token[data-active="true"] [data-markdown-ignore="true"] {
+    display: none;
+}
+
+.markdown-token[data-active="true"] .markdown-token-source {
+    display: inline;
+}
+
+.markdown-token[data-active="true"] .markdown-token-source,
+.markdown-token-source:focus {
+    outline: 0;
+    user-select: text;
+}
+
+.markdown-image-token {
     display: block;
     width: min(100%, 640px);
+}
+
+.markdown-image-token .markdown-token-source {
+    position: absolute;
+    z-index: 1;
+    top: 6px;
+    left: 6px;
+    max-width: calc(100% - 12px);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
+.markdown-image-token[data-active="true"] {
+    display: inline;
+    width: auto;
+}
+
+.markdown-image-token[data-active="true"] .markdown-token-source {
+    display: inline;
+    position: static;
+    max-width: none;
+    overflow: visible;
+    box-shadow: none;
+    white-space: pre-wrap;
+}
+
+.markdown-image-preview {
+    display: block;
+    width: 100%;
     min-height: 0;
-    margin: 8px 0 12px;
+    margin: 4px 0 5px;
     overflow: hidden;
     border: 1px solid #d8d8d8;
     border-radius: 6px;

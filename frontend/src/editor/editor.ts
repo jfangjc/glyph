@@ -97,7 +97,9 @@ const htmlEscapes: Record<string, string> = {
 };
 
 const autoSaveIntervalMs = 30_000;
+const caretSpacerCharacter = String.fromCharCode(8203);
 const localImageCache = new Map<string, Promise<string | null>>();
+type MarkdownTokenEdge = "start" | "end";
 
 let activeFilePath: string | null = null;
 let documentUsesTitle = false;
@@ -106,6 +108,9 @@ let isOpeningFile = false;
 let isSavingFile = false;
 let saveAgainAfterCurrent = false;
 let lastSavedMarkdown = "";
+let suppressSelectionChange = false;
+let pendingHorizontalNavigationTarget: { token: HTMLElement; edge: MarkdownTokenEdge; requestId: number } | null = null;
+let pendingHorizontalNavigationRequestId = 0;
 
 export function installEditor(root: HTMLElement): void {
     root.classList.add("editor-shell");
@@ -120,6 +125,7 @@ export function installEditor(root: HTMLElement): void {
     editor.addEventListener("change", handleEditorChange);
     editor.addEventListener("click", handleEditorClick);
     title.addEventListener("input", handleTitleInput);
+    document.addEventListener("selectionchange", handleSelectionChange);
     window.addEventListener("keydown", handleGlobalKeydown);
     window.setInterval(() => void saveCurrentDocument(), autoSaveIntervalMs);
 
@@ -154,15 +160,161 @@ function handleEditorClick(event: MouseEvent): void {
         return;
     }
 
+    const token = target.closest<HTMLElement>(".markdown-token");
+    if (token) {
+        if (target.closest(".markdown-token-source")) {
+            setActiveMarkdownToken(token);
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const link = token.querySelector<HTMLAnchorElement>("a.markdown-link");
+        const href = link?.dataset.href;
+        if (href && (event.ctrlKey || event.metaKey)) {
+            void Browser.OpenURL(href).catch((error) => console.error("Failed to open URL:", error));
+            return;
+        }
+
+        activateMarkdownTokenSource(token);
+        return;
+    }
+
     const link = target.closest("a.markdown-link") as HTMLAnchorElement | null;
     const href = link?.dataset.href;
     if (!href) {
+        clearActiveMarkdownToken();
         return;
     }
 
     event.preventDefault();
     event.stopPropagation();
-    void Browser.OpenURL(href).catch((error) => console.error("Failed to open URL:", error));
+    clearActiveMarkdownToken();
+
+    if (event.ctrlKey || event.metaKey) {
+        void Browser.OpenURL(href).catch((error) => console.error("Failed to open URL:", error));
+    }
+}
+
+function handleSelectionChange(): void {
+    if (suppressSelectionChange) {
+        return;
+    }
+
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+    const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
+
+    const token = source?.closest<HTMLElement>(".markdown-token");
+    if (source && token) {
+        setActiveMarkdownToken(token);
+        return;
+    }
+
+    if (selection?.isCollapsed && revealPendingHorizontalNavigationTarget()) {
+        return;
+    }
+
+    if (selection?.isCollapsed && focusNode) {
+        const imagePosition = findImageTokenAtCaret(focusNode, selection.focusOffset);
+        if (imagePosition) {
+            activateMarkdownTokenSource(imagePosition.token, imagePosition.edge);
+            return;
+        }
+    }
+
+    clearActiveMarkdownToken();
+}
+
+function setActiveMarkdownToken(token: HTMLElement): void {
+    const editor = getElement<HTMLElement>("editor");
+    const activeTokens = Array.from(editor.querySelectorAll<HTMLElement>(".markdown-token[data-active]"));
+
+    if (activeTokens.length === 1 && activeTokens[0] === token && token.dataset.active === "true") {
+        return;
+    }
+
+    for (const activeToken of activeTokens) {
+        if (activeToken !== token) {
+            delete activeToken.dataset.active;
+        }
+    }
+
+    token.dataset.active = "true";
+}
+
+function activateMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "end"): void {
+    setActiveMarkdownToken(token);
+    suppressSelectionChangeForFrame();
+    focusMarkdownTokenSource(token, edge);
+}
+
+function revealPendingHorizontalNavigationTarget(): boolean {
+    const target = pendingHorizontalNavigationTarget;
+    pendingHorizontalNavigationTarget = null;
+
+    if (!target?.token.isConnected || target.token.dataset.active === "true") {
+        return false;
+    }
+
+    activateMarkdownTokenSource(target.token, target.edge);
+    return true;
+}
+
+function suppressSelectionChangeForFrame(): void {
+    suppressSelectionChange = true;
+    window.requestAnimationFrame(() => {
+        suppressSelectionChange = false;
+    });
+}
+
+function focusMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "end"): void {
+    const source = token.querySelector<HTMLElement>(".markdown-token-source");
+    const selection = document.getSelection();
+    const range = document.createRange();
+
+    if (!source || !selection) {
+        return;
+    }
+
+    const position = getTextPosition(source, edge === "start" ? 0 : source.textContent?.length ?? 0);
+
+    range.setStart(position.node, position.offset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+}
+
+function clearActiveMarkdownToken(options: { focusBlock?: HTMLElement; focusOffset?: number } = {}): void {
+    const editor = getElement<HTMLElement>("editor");
+    const activeTokens = Array.from(editor.querySelectorAll<HTMLElement>(".markdown-token[data-active]"));
+
+    if (activeTokens.length === 0) {
+        return;
+    }
+
+    const selection = document.getSelection();
+    const selectionBlock = options.focusBlock ?? findBlock(selection?.focusNode ?? null);
+    const selectionOffset =
+        options.focusOffset ??
+        (selectionBlock && selection?.focusNode
+            ? getCaretOffset(getBlockContent(selectionBlock), selection.focusNode, selection.focusOffset)
+            : null);
+    const blocks = Array.from(
+        new Set(activeTokens.map((token) => findBlock(token)).filter((block): block is HTMLElement => Boolean(block))),
+    );
+    const updates = blocks.map((block) => ({ block, text: getBlockText(block) }));
+
+    for (const update of updates) {
+        setBlockText(update.block, update.text);
+    }
+
+    if (selectionBlock?.isConnected && selectionOffset !== null) {
+        suppressSelectionChangeForFrame();
+        focusBlockAtOffset(selectionBlock, Math.min(selectionOffset, getBlockText(selectionBlock).length));
+    }
 }
 
 async function openDocument(): Promise<void> {
@@ -439,6 +591,8 @@ function handleEditorKeydown(event: KeyboardEvent): void {
         return;
     }
 
+    trackHorizontalMarkdownNavigation(event);
+
     if (event.key === "Tab" && indentListBlocks(block, event.shiftKey ? -1 : 1)) {
         event.preventDefault();
         markDocumentDirty();
@@ -485,9 +639,56 @@ function handleEditorKeydown(event: KeyboardEvent): void {
     }
 }
 
+function trackHorizontalMarkdownNavigation(event: KeyboardEvent): void {
+    if (
+        (event.key !== "ArrowLeft" && event.key !== "ArrowRight") ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+    ) {
+        pendingHorizontalNavigationTarget = null;
+        return;
+    }
+
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    if (!selection?.isCollapsed || !focusNode) {
+        pendingHorizontalNavigationTarget = null;
+        return;
+    }
+
+    const direction = event.key === "ArrowLeft" ? "previous" : "next";
+    const token = findAdjacentInactiveMarkdownToken(focusNode, selection.focusOffset, direction);
+    if (!token?.classList.contains("markdown-link-token")) {
+        pendingHorizontalNavigationTarget = null;
+        return;
+    }
+
+    const requestId = pendingHorizontalNavigationRequestId + 1;
+    pendingHorizontalNavigationRequestId = requestId;
+    pendingHorizontalNavigationTarget = {
+        token,
+        edge: direction === "previous" ? "end" : "start",
+        requestId,
+    };
+
+    window.requestAnimationFrame(() => {
+        if (pendingHorizontalNavigationTarget?.requestId === requestId) {
+            revealPendingHorizontalNavigationTarget();
+        }
+    });
+}
+
 function handleEditorInput(event: Event): void {
     const block = getActiveBlock(event.target);
     if (!block) {
+        return;
+    }
+
+    if (isEditingMarkdownTokenSource()) {
+        normalizeActiveMarkdownTokenSource(block);
+        markDocumentDirty();
         return;
     }
 
@@ -496,6 +697,48 @@ function handleEditorInput(event: Event): void {
     }
 
     markDocumentDirty();
+}
+
+function isEditingMarkdownTokenSource(): boolean {
+    const focusNode = document.getSelection()?.focusNode;
+    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+
+    return Boolean(focusElement?.closest(".markdown-token-source"));
+}
+
+function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+    const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
+
+    if (!selection?.isCollapsed || !focusNode || !source) {
+        return;
+    }
+
+    const text = getMarkdownText(source);
+    const tokenMatch = findFirstInlineToken(text);
+    if (!tokenMatch || (tokenMatch.start === 0 && tokenMatch.token.raw.length === text.length)) {
+        return;
+    }
+
+    const content = getBlockContent(block);
+    const offset = getCaretOffset(content, focusNode, selection.focusOffset);
+    const markdown = getBlockText(block);
+
+    setBlockText(block, markdown);
+    focusBlockAtOffset(block, Math.min(offset, getBlockText(block).length));
+}
+
+function findFirstInlineToken(text: string): { start: number; token: InlineToken } | null {
+    for (let index = 0; index < text.length; index += 1) {
+        const token = readInlineToken(text, index, true) ?? readInlineToken(text, index, false);
+        if (token) {
+            return { start: index, token };
+        }
+    }
+
+    return null;
 }
 
 function handleEditorPaste(event: ClipboardEvent): void {
@@ -715,13 +958,17 @@ function getTextPosition(root: HTMLElement, offset: number): { node: Node; offse
 }
 
 function getMarkdownText(node: Node): string {
+    if (shouldIgnoreMarkdownNode(node)) {
+        return "";
+    }
+
     const renderedMarkdown = readRenderedMarkdown(node);
     if (renderedMarkdown !== null) {
         return renderedMarkdown;
     }
 
     if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent ?? "";
+        return stripCaretSpacers(node.textContent ?? "");
     }
 
     let text = "";
@@ -733,6 +980,10 @@ function getMarkdownText(node: Node): string {
 }
 
 function getMarkdownBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
+    if (shouldIgnoreMarkdownNode(current)) {
+        return 0;
+    }
+
     const renderedMarkdown = readRenderedMarkdown(current);
     if (renderedMarkdown !== null) {
         return current === anchorNode && anchorOffset <= 0 ? 0 : renderedMarkdown.length;
@@ -740,7 +991,7 @@ function getMarkdownBoundaryOffset(current: Node, anchorNode: Node, anchorOffset
 
     if (current === anchorNode) {
         if (current.nodeType === Node.TEXT_NODE) {
-            return Math.min(anchorOffset, current.textContent?.length ?? 0);
+            return stripCaretSpacers((current.textContent ?? "").slice(0, anchorOffset)).length;
         }
 
         return getMarkdownLengthBeforeChild(current, anchorOffset);
@@ -781,6 +1032,10 @@ function findMarkdownTextPositionInNode(
     node: Node,
     remaining: { value: number },
 ): { node: Node; offset: number } | null {
+    if (shouldIgnoreMarkdownNode(node)) {
+        return null;
+    }
+
     const renderedMarkdown = readRenderedMarkdown(node);
     if (renderedMarkdown !== null) {
         if (remaining.value <= renderedMarkdown.length) {
@@ -791,10 +1046,21 @@ function findMarkdownTextPositionInNode(
         return null;
     }
 
-    if (node.nodeType === Node.TEXT_NODE) {
-        const length = node.textContent?.length ?? 0;
+    if (isInactiveMarkdownToken(node)) {
+        const length = getMarkdownText(node).length;
         if (remaining.value <= length) {
-            return { node, offset: remaining.value };
+            return getAtomicNodePosition(node, remaining.value >= length);
+        }
+
+        remaining.value -= length;
+        return null;
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent ?? "";
+        const length = stripCaretSpacers(text).length;
+        if (remaining.value <= length) {
+            return { node, offset: getDomTextOffsetForMarkdownOffset(text, remaining.value) };
         }
 
         remaining.value -= length;
@@ -821,12 +1087,127 @@ function getAtomicNodePosition(node: Node, after: boolean): { node: Node; offset
     return { node: parent, offset: Math.max(0, childIndex) + (after ? 1 : 0) };
 }
 
+function findAdjacentInactiveMarkdownToken(
+    node: Node,
+    offset: number,
+    direction: "previous" | "next",
+): HTMLElement | null {
+    const boundary = getSelectionBoundary(node, offset, direction);
+    if (!boundary) {
+        return null;
+    }
+
+    let candidate: Node | null =
+        direction === "previous"
+            ? boundary.parent.childNodes[boundary.offset - 1] ?? null
+            : boundary.parent.childNodes[boundary.offset] ?? null;
+
+    while (candidate?.nodeType === Node.TEXT_NODE && isCaretSpacerOnly(candidate.textContent ?? "")) {
+        candidate = direction === "previous" ? candidate.previousSibling : candidate.nextSibling;
+    }
+
+    if (candidate instanceof HTMLElement && candidate.classList.contains("markdown-token") && candidate.dataset.active !== "true") {
+        return candidate;
+    }
+
+    return null;
+}
+
+function findImageTokenAtCaret(
+    node: Node,
+    offset: number,
+): { token: HTMLElement; edge: "start" | "end" } | null {
+    const containingToken = findContainingInactiveImageToken(node);
+    if (containingToken) {
+        return { token: containingToken, edge: offset <= 0 ? "start" : "end" };
+    }
+
+    const nextToken = findAdjacentInactiveMarkdownToken(node, offset, "next");
+    if (nextToken?.classList.contains("markdown-image-token")) {
+        return { token: nextToken, edge: "start" };
+    }
+
+    const previousToken = findAdjacentInactiveMarkdownToken(node, offset, "previous");
+    if (previousToken?.classList.contains("markdown-image-token")) {
+        return { token: previousToken, edge: "end" };
+    }
+
+    return null;
+}
+
+function findContainingInactiveImageToken(node: Node): HTMLElement | null {
+    const element = node instanceof Element ? node : node.parentElement;
+    const token = element?.closest<HTMLElement>(".markdown-image-token");
+
+    return token && token.dataset.active !== "true" ? token : null;
+}
+
+function getSelectionBoundary(
+    node: Node,
+    offset: number,
+    direction: "previous" | "next",
+): { parent: Node; offset: number } | null {
+    if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent ?? "";
+        const before = stripCaretSpacers(text.slice(0, offset));
+        const after = stripCaretSpacers(text.slice(offset));
+
+        if ((direction === "previous" && before !== "") || (direction === "next" && after !== "")) {
+            return null;
+        }
+
+        const parent = node.parentNode;
+        if (!parent) {
+            return null;
+        }
+
+        const childIndex = Array.from(parent.childNodes).findIndex((child) => child === node);
+        return { parent, offset: direction === "previous" ? childIndex : childIndex + 1 };
+    }
+
+    return { parent: node, offset };
+}
+
+function isCaretSpacerOnly(text: string): boolean {
+    return text !== "" && stripCaretSpacers(text) === "";
+}
+
+function stripCaretSpacers(text: string): string {
+    return text.split(caretSpacerCharacter).join("");
+}
+
+function getDomTextOffsetForMarkdownOffset(text: string, offset: number): number {
+    let markdownOffset = 0;
+
+    for (let index = 0; index < text.length; index += 1) {
+        if (text[index] === caretSpacerCharacter) {
+            continue;
+        }
+
+        if (markdownOffset >= offset) {
+            return index;
+        }
+
+        markdownOffset += 1;
+    }
+
+    return text.length;
+}
+
 function readRenderedMarkdown(node: Node): string | null {
     if (!(node instanceof HTMLElement)) {
         return null;
     }
 
     return node.dataset.markdownRaw ?? null;
+}
+
+function shouldIgnoreMarkdownNode(node: Node): boolean {
+    return node instanceof HTMLElement && node.dataset.markdownIgnore === "true";
+}
+
+function isInactiveMarkdownToken(node: Node): boolean {
+    return node instanceof HTMLElement && node.classList.contains("markdown-token") && node.dataset.active !== "true";
 }
 
 function getActiveBlock(target: EventTarget | Node | null): HTMLElement | null {
@@ -1207,15 +1588,20 @@ function readInlineToken(text: string, index: number, image: boolean): InlineTok
 function renderImageToken(token: InlineToken): string {
     const source = escapeHtml(token.destination);
     const alt = escapeHtml(token.label);
+    const raw = escapeHtml(token.raw);
 
-    return `${escapeHtml(token.raw)}<span class="markdown-image-preview" contenteditable="false" data-image-source="${source}" data-image-alt="${alt}" data-state="loading" aria-hidden="true"></span>`;
+    return `<span class="markdown-token markdown-image-token"><span class="markdown-image-preview" contenteditable="false" data-markdown-ignore="true" data-image-source="${source}" data-image-alt="${alt}" data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>`;
 }
 
 function renderLinkToken(token: InlineToken): string {
     const href = normalizeExternalUrl(token.destination);
     const hrefAttributes = href ? ` href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"` : "";
+    const label = href
+        ? `<a class="markdown-link" contenteditable="false" data-markdown-ignore="true" tabindex="-1"${hrefAttributes} rel="noreferrer">${escapeHtml(token.label)}</a>`
+        : `<span class="markdown-link markdown-link-label" contenteditable="false" data-markdown-ignore="true">${escapeHtml(token.label)}</span>`;
+    const raw = escapeHtml(token.raw);
 
-    return `<a class="markdown-link" contenteditable="false"${hrefAttributes} data-markdown-raw="${escapeHtml(token.raw)}" rel="noreferrer">${escapeHtml(token.label)}</a>`;
+    return `<span class="markdown-token markdown-link-token">${label}<span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderBareUrl(url: string): string {
