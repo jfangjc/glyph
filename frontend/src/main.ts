@@ -1,12 +1,12 @@
-import "./global.css";
+import "./styles/global.css";
+import "./styles/theme.css";
 import "./editor/editor.css";
-import "./editor/content.css";
 import { installEditor } from "./editor/editor";
-import { installWindowsPlatform } from "./platform/windows/windows";
+import { installWindowControls } from "./platform/window-controls/window-controls";
 
 const app = getElement<HTMLElement>("app");
 
-installWindowsPlatform();
+installWindowControls();
 installEditor(app);
 
 function getElement<TElement extends HTMLElement>(id: string): TElement {

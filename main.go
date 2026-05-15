@@ -4,6 +4,8 @@ import (
 	"embed"
 	"log"
 
+	"glyph/internal/documents"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -20,7 +22,7 @@ func main() {
 		Name:        "Glyph",
 		Description: "A lightweight, minimalistic cross-platform Markdown editor.",
 		Services: []application.Service{
-			application.NewService(&FileService{}),
+			application.NewService(&documents.Service{}),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

@@ -1,85 +1,13 @@
-package main
+package documents
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"mime"
-	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
-
-type DocumentFile struct {
-	Path    string `json:"path"`
-	Name    string `json:"name"`
-	Content string `json:"content"`
-}
-
-type ImageFile struct {
-	Path     string `json:"path"`
-	MimeType string `json:"mimeType"`
-	DataURL  string `json:"dataUrl"`
-}
-
-type FileService struct{}
-
-func (*FileService) ReadFile(path string) (*DocumentFile, error) {
-	resolvedPath, err := resolveFilePath(path)
-	if err != nil {
-		return nil, err
-	}
-
-	content, err := os.ReadFile(resolvedPath)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DocumentFile{
-		Path:    resolvedPath,
-		Name:    filepath.Base(resolvedPath),
-		Content: string(content),
-	}, nil
-}
-
-func (*FileService) SaveFile(path string, content string) error {
-	resolvedPath, err := resolveFilePath(path)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(resolvedPath, []byte(content), 0o644)
-}
-
-func (*FileService) ReadImage(path string, baseFilePath string) (*ImageFile, error) {
-	resolvedPath, err := resolveLocalAssetPath(path, baseFilePath)
-	if err != nil {
-		return nil, err
-	}
-
-	content, err := os.ReadFile(resolvedPath)
-	if err != nil {
-		return nil, err
-	}
-
-	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(resolvedPath)))
-	if mimeType == "" {
-		mimeType = http.DetectContentType(content)
-	}
-
-	if !strings.HasPrefix(mimeType, "image/") {
-		return nil, fmt.Errorf("%s is not an image", resolvedPath)
-	}
-
-	return &ImageFile{
-		Path:     resolvedPath,
-		MimeType: mimeType,
-		DataURL:  "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
-	}, nil
-}
 
 func resolveFilePath(path string) (string, error) {
 	if path == "" {

@@ -5,7 +5,7 @@ import { System, Window } from "@wailsio/runtime";
 let maximiseButton: HTMLButtonElement | null = null;
 let snapAssistTimer = 0;
 
-export function installWindowsPlatform(): void {
+export function installWindowControls(): void {
     if (!isWindowsHost()) {
         return;
     }
