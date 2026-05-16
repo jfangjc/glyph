@@ -4,6 +4,18 @@ export type InlineToken = {
     destination: string;
 };
 
+type EmphasisToken = {
+    raw: string;
+    marker: "*" | "**" | "***" | "_" | "__" | "___";
+    label: string;
+    emphasis: boolean;
+    strong: boolean;
+};
+
+type MarkdownInlineToken = {
+    raw: string;
+};
+
 const htmlEscapes: Record<string, string> = {
     "&": "&amp;",
     "<": "&lt;",
@@ -38,6 +50,13 @@ export function renderInlineMarkdown(text: string): string {
             continue;
         }
 
+        const emphasis = readEmphasisToken(text, index);
+        if (emphasis) {
+            html += renderEmphasisToken(emphasis);
+            index += emphasis.raw.length;
+            continue;
+        }
+
         const url = readBareUrl(text, index);
         if (url) {
             html += renderBareUrl(url);
@@ -52,9 +71,9 @@ export function renderInlineMarkdown(text: string): string {
     return html;
 }
 
-export function findFirstInlineToken(text: string): { start: number; token: InlineToken } | null {
+export function findFirstInlineToken(text: string): { start: number; token: MarkdownInlineToken } | null {
     for (let index = 0; index < text.length; index += 1) {
-        const token = readInlineToken(text, index, true) ?? readInlineToken(text, index, false);
+        const token = readInlineToken(text, index, true) ?? readInlineToken(text, index, false) ?? readEmphasisToken(text, index);
         if (token) {
             return { start: index, token };
         }
@@ -115,6 +134,89 @@ function readInlineToken(text: string, index: number, image: boolean): InlineTok
         label: unescapeMarkdownDestination(text.slice(labelStart, labelEnd)),
         destination,
     };
+}
+
+function readEmphasisToken(text: string, index: number): EmphasisToken | null {
+    const marker = readEmphasisMarker(text, index);
+    if (!marker || isEscapedAt(text, index)) {
+        return null;
+    }
+
+    const labelStart = index + marker.length;
+    if (labelStart >= text.length || /\s/.test(text[labelStart])) {
+        return null;
+    }
+
+    if (marker.includes("_") && index > 0 && /[A-Za-z0-9]/.test(text[index - 1])) {
+        return null;
+    }
+
+    let labelEnd = findUnescapedSequence(text, marker, labelStart);
+    while (labelEnd >= 0) {
+        const label = text.slice(labelStart, labelEnd);
+        const characterAfterMarker = text[labelEnd + marker.length] ?? "";
+
+        if (
+            label !== "" &&
+            !/\s$/.test(label) &&
+            !(marker.includes("_") && /[A-Za-z0-9]/.test(characterAfterMarker))
+        ) {
+            return {
+                raw: text.slice(index, labelEnd + marker.length),
+                marker,
+                label,
+                emphasis: marker.length === 1 || marker.length === 3,
+                strong: marker.length >= 2,
+            };
+        }
+
+        labelEnd = findUnescapedSequence(text, marker, labelEnd + marker.length);
+    }
+
+    return null;
+}
+
+function readEmphasisMarker(text: string, index: number): EmphasisToken["marker"] | null {
+    if (text.startsWith("***", index)) {
+        return "***";
+    }
+
+    if (text.startsWith("___", index)) {
+        return "___";
+    }
+
+    if (text.startsWith("**", index)) {
+        return "**";
+    }
+
+    if (text.startsWith("__", index)) {
+        return "__";
+    }
+
+    if (text[index] === "*") {
+        return "*";
+    }
+
+    if (text[index] === "_") {
+        return "_";
+    }
+
+    return null;
+}
+
+function renderEmphasisToken(token: EmphasisToken): string {
+    const raw = escapeHtml(token.raw);
+    const label = escapeHtml(token.label);
+
+    if (token.strong && token.emphasis) {
+        return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-markdown-ignore="true"><em class="markdown-emphasis">${label}</em></strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    }
+
+    if (token.strong) {
+        return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-markdown-ignore="true">${label}</strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    }
+
+    return `<span class="markdown-token markdown-format-token"><em class="markdown-emphasis" contenteditable="false" data-markdown-ignore="true">${label}</em><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderImageToken(token: InlineToken): string {
@@ -205,6 +307,31 @@ function findUnescapedCharacter(text: string, character: string, startIndex: num
     }
 
     return -1;
+}
+
+function findUnescapedSequence(text: string, sequence: string, startIndex: number): number {
+    for (let index = startIndex; index < text.length; index += 1) {
+        if (text[index] === "\\") {
+            index += 1;
+            continue;
+        }
+
+        if (text.startsWith(sequence, index)) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+function isEscapedAt(text: string, index: number): boolean {
+    let slashCount = 0;
+
+    for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+        slashCount += 1;
+    }
+
+    return slashCount % 2 === 1;
 }
 
 function findClosingParenthesis(text: string, startIndex: number): number {

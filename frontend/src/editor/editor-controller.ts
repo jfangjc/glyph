@@ -25,7 +25,10 @@ type SelectedBlockRange = {
     endOffset: number;
 };
 
+type InlineFormat = "bold" | "italic";
+
 let suppressSelectionChange = false;
+let suppressedMarkdownTokenActivation: { block: HTMLElement; offset: number } | null = null;
 let pendingHorizontalNavigationTarget: { token: HTMLElement; edge: MarkdownTokenEdge; requestId: number } | null = null;
 let pendingHorizontalNavigationRequestId = 0;
 
@@ -131,11 +134,38 @@ function handleSelectionChange(): void {
         return;
     }
 
+    if (selection?.isCollapsed && shouldSuppressMarkdownTokenActivation(selection)) {
+        return;
+    }
+
     if (activateMarkdownTokenAtCaret()) {
         return;
     }
 
     clearActiveMarkdownToken();
+}
+
+function shouldSuppressMarkdownTokenActivation(selection: Selection): boolean {
+    const suppressed = suppressedMarkdownTokenActivation;
+    const focusNode = selection.focusNode;
+    if (!suppressed || !focusNode || !suppressed.block.isConnected) {
+        suppressedMarkdownTokenActivation = null;
+        return false;
+    }
+
+    const block = findBlock(focusNode);
+    if (!block) {
+        suppressedMarkdownTokenActivation = null;
+        return false;
+    }
+
+    const offset = getCaretOffset(getBlockContent(block), focusNode, selection.focusOffset);
+    if (block === suppressed.block && offset === suppressed.offset) {
+        return true;
+    }
+
+    suppressedMarkdownTokenActivation = null;
+    return false;
 }
 
 function setActiveMarkdownToken(token: HTMLElement): void {
@@ -170,6 +200,10 @@ function activateMarkdownTokenAtCaret(): boolean {
     const focusNode = selection?.focusNode;
 
     if (!selection?.isCollapsed || !focusNode) {
+        return false;
+    }
+
+    if (shouldSuppressMarkdownTokenActivation(selection)) {
         return false;
     }
 
@@ -218,7 +252,9 @@ function focusMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "e
     selection.addRange(range);
 }
 
-function clearActiveMarkdownToken(options: { focusBlock?: HTMLElement; focusOffset?: number } = {}): void {
+function clearActiveMarkdownToken(
+    options: { focusBlock?: HTMLElement; focusOffset?: number; suppressTokenActivationAtFocus?: boolean } = {},
+): void {
     const editor = getElement<HTMLElement>("editor");
     const activeTokens = Array.from(editor.querySelectorAll<HTMLElement>(".markdown-token[data-active]"));
 
@@ -244,11 +280,12 @@ function clearActiveMarkdownToken(options: { focusBlock?: HTMLElement; focusOffs
             tokens,
             text: getBlockText(block),
             hasSourceEdits: tokens.some(hasActiveMarkdownTokenSourceEdits),
+            hasFormatToken: tokens.some(isFormatMarkdownToken),
         };
     });
 
     for (const update of updates) {
-        if (update.hasSourceEdits) {
+        if (update.hasSourceEdits || update.hasFormatToken) {
             setBlockText(update.block, update.text);
             continue;
         }
@@ -259,13 +296,23 @@ function clearActiveMarkdownToken(options: { focusBlock?: HTMLElement; focusOffs
     }
 
     if (selectionBlock?.isConnected && selectionOffset !== null) {
+        const focusOffset = Math.min(selectionOffset, getBlockText(selectionBlock).length);
+
+        if (options.suppressTokenActivationAtFocus || updates.some((update) => update.hasFormatToken)) {
+            suppressedMarkdownTokenActivation = { block: selectionBlock, offset: focusOffset };
+        }
+
         suppressSelectionChangeForFrame();
-        focusBlockAtOffset(selectionBlock, Math.min(selectionOffset, getBlockText(selectionBlock).length));
+        focusBlockAtOffset(selectionBlock, focusOffset);
     }
 }
 
 function hasActiveMarkdownTokenSourceEdits(token: HTMLElement): boolean {
     return token.dataset.sourceBeforeActivation !== undefined && getMarkdownText(token) !== token.dataset.sourceBeforeActivation;
+}
+
+function isFormatMarkdownToken(token: HTMLElement): boolean {
+    return token.classList.contains("markdown-format-token");
 }
 
 function deactivateMarkdownToken(token: HTMLElement): void {
@@ -336,6 +383,20 @@ function handleEditorKeydown(event: KeyboardEvent): void {
 
     const block = getActiveBlock(event.target);
     if (!block) {
+        return;
+    }
+
+    const inlineFormat = readInlineFormatShortcut(event);
+    if (inlineFormat) {
+        event.preventDefault();
+        if (applyInlineFormatShortcut(block, inlineFormat)) {
+            markDocumentDirty();
+        }
+        return;
+    }
+
+    if (moveCaretOutOfActiveMarkdownTokenSource(event, block)) {
+        event.preventDefault();
         return;
     }
 
@@ -461,7 +522,11 @@ function trackVerticalMarkdownImageNavigation(event: KeyboardEvent, block: HTMLE
 }
 
 function isNavigableMarkdownToken(token: HTMLElement): boolean {
-    return token.classList.contains("markdown-link-token") || token.classList.contains("markdown-image-token");
+    return (
+        token.classList.contains("markdown-link-token") ||
+        token.classList.contains("markdown-image-token") ||
+        token.classList.contains("markdown-format-token")
+    );
 }
 
 function handleEditorInput(event: Event): void {
@@ -490,6 +555,42 @@ function isEditingMarkdownTokenSource(): boolean {
     return Boolean(focusElement?.closest(".markdown-token-source"));
 }
 
+function moveCaretOutOfActiveMarkdownTokenSource(event: KeyboardEvent, block: HTMLElement): boolean {
+    if (
+        (event.key !== "ArrowLeft" && event.key !== "ArrowRight") ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+    ) {
+        return false;
+    }
+
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+    const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
+    const token = source?.closest<HTMLElement>(".markdown-token");
+
+    if (!selection?.isCollapsed || !focusNode || !source || token?.dataset.active !== "true") {
+        return false;
+    }
+
+    const sourceOffset = getCaretOffset(source, focusNode, selection.focusOffset);
+    const sourceLength = getMarkdownText(source).length;
+    const isLeavingStart = event.key === "ArrowLeft" && sourceOffset === 0;
+    const isLeavingEnd = event.key === "ArrowRight" && sourceOffset === sourceLength;
+
+    if (!isLeavingStart && !isLeavingEnd) {
+        return false;
+    }
+
+    const blockOffset = getCaretOffset(getBlockContent(block), focusNode, selection.focusOffset);
+    pendingHorizontalNavigationTarget = null;
+    clearActiveMarkdownToken({ focusBlock: block, focusOffset: blockOffset, suppressTokenActivationAtFocus: true });
+    return true;
+}
+
 function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
     const selection = document.getSelection();
     const focusNode = selection?.focusNode;
@@ -497,6 +598,10 @@ function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
     const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
 
     if (!selection?.isCollapsed || !focusNode || !source) {
+        return;
+    }
+
+    if (source.closest(".markdown-format-token")) {
         return;
     }
 
@@ -832,6 +937,98 @@ function replaceSelectionWithText(block: HTMLElement, text: string): void {
     insertTextAtCaret(selectedBlock, text);
 }
 
+function applyInlineFormatShortcut(block: HTMLElement, format: InlineFormat): boolean {
+    const marker = format === "bold" ? "**" : "*";
+    const selectedRange = getSelectedBlockRange();
+
+    if (!selectedRange) {
+        return insertInlineFormatPair(block, marker);
+    }
+
+    return toggleInlineFormatForSelection(selectedRange, marker);
+}
+
+function insertInlineFormatPair(block: HTMLElement, marker: string): boolean {
+    if (readBlockType(block.dataset.type) === "code") {
+        return false;
+    }
+
+    const content = getBlockContent(block);
+    const selection = document.getSelection();
+    const text = getBlockText(block);
+    const offset = selection?.focusNode
+        ? getCaretOffset(content, selection.focusNode, selection.focusOffset)
+        : text.length;
+
+    setBlockText(block, text.slice(0, offset) + marker + marker + text.slice(offset));
+    focusBlockAtOffset(block, offset + marker.length);
+    return true;
+}
+
+function toggleInlineFormatForSelection(selectedRange: SelectedBlockRange, marker: string): boolean {
+    let changed = false;
+    let focusTarget: { block: HTMLElement; offset: number } | null = null;
+
+    for (const block of selectedRange.blocks) {
+        if (readBlockType(block.dataset.type) === "code") {
+            continue;
+        }
+
+        const text = getBlockText(block);
+        const start = block === selectedRange.startBlock ? selectedRange.startOffset : 0;
+        const end = block === selectedRange.endBlock ? selectedRange.endOffset : text.length;
+        const update = toggleInlineFormatInText(text, start, end, marker);
+
+        if (!update) {
+            continue;
+        }
+
+        setBlockText(block, update.text);
+        changed = true;
+        focusTarget = { block, offset: update.focusOffset };
+    }
+
+    if (focusTarget) {
+        focusBlockAtOffset(focusTarget.block, focusTarget.offset);
+    }
+
+    return changed;
+}
+
+function toggleInlineFormatInText(
+    text: string,
+    start: number,
+    end: number,
+    marker: string,
+): { text: string; focusOffset: number } | null {
+    if (start === end) {
+        return null;
+    }
+
+    const selectedText = text.slice(start, end);
+    if (selectedText.startsWith(marker) && selectedText.endsWith(marker) && selectedText.length >= marker.length * 2) {
+        return {
+            text:
+                text.slice(0, start) +
+                selectedText.slice(marker.length, selectedText.length - marker.length) +
+                text.slice(end),
+            focusOffset: end - marker.length * 2,
+        };
+    }
+
+    if (text.slice(start - marker.length, start) === marker && text.slice(end, end + marker.length) === marker) {
+        return {
+            text: text.slice(0, start - marker.length) + selectedText + text.slice(end + marker.length),
+            focusOffset: end - marker.length,
+        };
+    }
+
+    return {
+        text: text.slice(0, start) + marker + selectedText + marker + text.slice(end),
+        focusOffset: end + marker.length * 2,
+    };
+}
+
 function insertTextAtCaret(block: HTMLElement, text: string): void {
     const content = getBlockContent(block);
     const selection = document.getSelection();
@@ -1106,12 +1303,24 @@ function renderBlockContent(block: HTMLElement): void {
     content.innerHTML = html;
     content.dataset.renderedMarkdown = html;
     hydrateMarkdownImagePreviews(content, documentState.activeFilePath);
-    focusBlockAtOffset(block, offset);
+    const focusOffset = Math.min(offset, getBlockText(block).length);
+
+    focusBlockAtOffset(block, focusOffset);
+    suppressAdjacentFormatTokenActivation(block, focusOffset);
     activateMarkdownTokenAtCaret();
 }
 
+function suppressAdjacentFormatTokenActivation(block: HTMLElement, offset: number): void {
+    const position = getTextPosition(getBlockContent(block), offset);
+    const tokenPosition = findMarkdownTokenAtCaret(position.node, position.offset, isFormatMarkdownToken);
+
+    if (tokenPosition) {
+        suppressedMarkdownTokenActivation = { block, offset };
+    }
+}
+
 function shouldResetEmptyBlock(type: BlockType): boolean {
-    return type === "list" || type === "todo" || type === "quote";
+    return type === "list" || type === "todo";
 }
 
 function isOpenFileShortcut(event: KeyboardEvent): boolean {
@@ -1120,6 +1329,23 @@ function isOpenFileShortcut(event: KeyboardEvent): boolean {
 
 function isSelectAllShortcut(event: KeyboardEvent): boolean {
     return event.key.toLowerCase() === "a" && (event.ctrlKey || event.metaKey);
+}
+
+function readInlineFormatShortcut(event: KeyboardEvent): InlineFormat | null {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+        return null;
+    }
+
+    const key = event.key.toLowerCase();
+    if (key === "b") {
+        return "bold";
+    }
+
+    if (key === "i") {
+        return "italic";
+    }
+
+    return null;
 }
 
 function isPlainTextKey(event: KeyboardEvent): boolean {

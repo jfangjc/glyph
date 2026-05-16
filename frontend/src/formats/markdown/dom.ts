@@ -16,12 +16,7 @@ export function getMarkdownText(node: Node): string {
         return stripCaretSpacers(node.textContent ?? "");
     }
 
-    let text = "";
-    for (const child of Array.from(node.childNodes)) {
-        text += getMarkdownText(child);
-    }
-
-    return text;
+    return getMarkdownChildText(node);
 }
 
 export function getMarkdownBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
@@ -169,6 +164,15 @@ function findMarkdownTextPositionInNode(
     }
 
     return null;
+}
+
+function getMarkdownChildText(node: Node): string {
+    let text = "";
+    for (const child of Array.from(node.childNodes)) {
+        text += getMarkdownText(child);
+    }
+
+    return text;
 }
 
 function getAtomicNodePosition(node: Node, after: boolean): { node: Node; offset: number } {
