@@ -7,9 +7,12 @@ export type BlockType =
     | "heading-5"
     | "heading-6"
     | "list"
+    | "ordered-list"
     | "todo"
     | "quote"
-    | "code";
+    | "code"
+    | "rule"
+    | "reference";
 
 export type ParsedBlock = {
     type: BlockType;
@@ -17,12 +20,16 @@ export type ParsedBlock = {
     indent?: number;
     checked?: boolean;
     codeInfo?: string;
+    listMarker?: string;
+    listNumber?: string;
+    quoteLevel?: number;
 };
 
 export type ParsedDocument = {
     title: string;
     usesTitle: boolean;
     blocks: ParsedBlock[];
+    references?: Record<string, { destination: string; title?: string }>;
 };
 
 export const blockLabels: Record<BlockType, string> = {
@@ -34,9 +41,12 @@ export const blockLabels: Record<BlockType, string> = {
     "heading-5": "Heading 5",
     "heading-6": "Heading 6",
     list: "List item",
+    "ordered-list": "Ordered list item",
     todo: "Todo",
     quote: "Quote",
     code: "Code",
+    rule: "Horizontal rule",
+    reference: "Reference",
 };
 
 export const headingTypes = new Set<BlockType>([

@@ -63,6 +63,27 @@
     grid-column: 2;
 }
 
+.block[data-type="ordered-list"] {
+    column-gap: 0.35rem;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    position: relative;
+}
+
+.block[data-type="ordered-list"]::before {
+    color: #6a6a6a;
+    content: attr(data-list-number) ".";
+    font-variant-numeric: tabular-nums;
+    grid-column: 1;
+    justify-self: end;
+    line-height: 1.6;
+    pointer-events: none;
+    user-select: none;
+}
+
+.block[data-type="ordered-list"] .block-content {
+    grid-column: 2;
+}
+
 .block[data-type="todo"] {
     column-gap: 0.35rem;
     grid-template-columns: 1.1rem minmax(0, 1fr);
@@ -82,11 +103,26 @@
     margin-left: 1.5rem;
 }
 
+.block[data-type="ordered-list"][data-indent="1"],
+.block[data-type="todo"][data-indent="1"] {
+    margin-left: 1.5rem;
+}
+
 .block[data-type="list"][data-indent="2"] {
     margin-left: 3rem;
 }
 
+.block[data-type="ordered-list"][data-indent="2"],
+.block[data-type="todo"][data-indent="2"] {
+    margin-left: 3rem;
+}
+
 .block[data-type="list"][data-indent="3"] {
+    margin-left: 4.5rem;
+}
+
+.block[data-type="ordered-list"][data-indent="3"],
+.block[data-type="todo"][data-indent="3"] {
     margin-left: 4.5rem;
 }
 
@@ -107,6 +143,17 @@
     font-style: italic;
 }
 
+.block[data-type="quote"][data-quote-level="2"] {
+    margin-left: 1.25rem;
+}
+
+.block[data-type="quote"][data-quote-level="3"],
+.block[data-type="quote"][data-quote-level="4"],
+.block[data-type="quote"][data-quote-level="5"],
+.block[data-type="quote"][data-quote-level="6"] {
+    margin-left: 2.5rem;
+}
+
 .block[data-type="code"] .block-content {
     border: 1px solid #dedede;
     border-radius: 6px;
@@ -116,6 +163,33 @@
     font-size: 0.9rem;
     line-height: 1.55;
     tab-size: 4;
+}
+
+.block[data-type="rule"] {
+    display: block;
+    padding: 10px 0;
+}
+
+.block[data-type="rule"] .block-content {
+    width: 100%;
+    min-height: 14px;
+    position: relative;
+}
+
+.block[data-type="rule"] .block-content::before {
+    border-top: 1px solid #d1d1d1;
+    content: "";
+    display: block;
+    left: 0;
+    position: absolute;
+    right: 0;
+    top: 50%;
+}
+
+.block[data-type="reference"] .block-content {
+    color: #6b6b6b;
+    font-family: Consolas, "SFMono-Regular", monospace;
+    font-size: 0.9rem;
 }
 
 .block-content code {
@@ -144,6 +218,14 @@
 }
 
 .markdown-format-token {
+    display: inline;
+}
+
+.markdown-code-token {
+    display: inline;
+}
+
+.markdown-escape {
     display: inline;
 }
 

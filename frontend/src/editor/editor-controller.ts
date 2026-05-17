@@ -8,9 +8,10 @@ import {
     getMarkdownText,
     type MarkdownTokenEdge,
 } from "../formats/markdown/dom";
-import { parseMarkdownDocument, serializeMarkdownDocument } from "../formats/markdown/document";
+import { parseMarkdownDocument, parseMarkdownFragment, serializeMarkdownDocument } from "../formats/markdown/document";
 import { hydrateMarkdownImagePreviews } from "../formats/markdown/images";
 import { findFirstInlineToken, renderInlineMarkdown } from "../formats/markdown/inline";
+import { parseMarkdownReferenceDefinition, type MarkdownReferenceMap } from "../formats/markdown/references";
 import { markdownShortcuts } from "../formats/markdown/shortcuts";
 import type { DocumentFile } from "../bridge/types";
 import { bindDocumentActions, openDocument, startDocumentAutosave } from "../documents/document-actions";
@@ -31,6 +32,9 @@ let suppressSelectionChange = false;
 let suppressedMarkdownTokenActivation: { block: HTMLElement; offset: number } | null = null;
 let pendingHorizontalNavigationTarget: { token: HTMLElement; edge: MarkdownTokenEdge; requestId: number } | null = null;
 let pendingHorizontalNavigationRequestId = 0;
+let pendingVerticalLeadingTokenNavigationRequestId = 0;
+let pendingVerticalLeadingTokenNavigationTarget: { requestId: number } | null = null;
+let markdownReferences: MarkdownReferenceMap = {};
 
 export function installEditorController(): void {
     const editor = getElement<HTMLElement>("editor");
@@ -77,7 +81,7 @@ function handleEditorClick(event: MouseEvent): void {
         return;
     }
 
-    const token = target.closest<HTMLElement>(".markdown-token");
+    const token = findClickedMarkdownToken(target);
     if (token) {
         if (target.closest(".markdown-token-source")) {
             setActiveMarkdownToken(token);
@@ -114,6 +118,17 @@ function handleEditorClick(event: MouseEvent): void {
     }
 }
 
+function findClickedMarkdownToken(target: Element): HTMLElement | null {
+    const directToken = target.closest<HTMLElement>(".markdown-token");
+    const containingToken = directToken?.parentElement?.closest<HTMLElement>(".markdown-token");
+
+    if (containingToken && isEditableMarkdownToken(containingToken)) {
+        return containingToken;
+    }
+
+    return directToken && isEditableMarkdownToken(directToken) ? directToken : null;
+}
+
 function handleSelectionChange(): void {
     if (suppressSelectionChange) {
         return;
@@ -123,14 +138,18 @@ function handleSelectionChange(): void {
     const focusNode = selection?.focusNode;
     const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
     const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
+    const sourceToken = source ? getMarkdownTokenForSource(source) : null;
 
-    const token = source?.closest<HTMLElement>(".markdown-token");
-    if (source && token) {
-        setActiveMarkdownToken(token);
+    if (sourceToken) {
+        setActiveMarkdownToken(sourceToken);
         return;
     }
 
     if (selection?.isCollapsed && revealPendingHorizontalNavigationTarget()) {
+        return;
+    }
+
+    if (selection?.isCollapsed && revealPendingVerticalLeadingTokenNavigationTarget()) {
         return;
     }
 
@@ -207,7 +226,7 @@ function activateMarkdownTokenAtCaret(): boolean {
         return false;
     }
 
-    const tokenPosition = findMarkdownTokenAtCaret(focusNode, selection.focusOffset, isNavigableMarkdownToken);
+    const tokenPosition = findMarkdownTokenAtCaret(focusNode, selection.focusOffset, isEditableMarkdownToken);
     if (!tokenPosition) {
         return false;
     }
@@ -228,6 +247,44 @@ function revealPendingHorizontalNavigationTarget(): boolean {
     return true;
 }
 
+function revealPendingVerticalLeadingTokenNavigationTarget(): boolean {
+    const target = pendingVerticalLeadingTokenNavigationTarget;
+    pendingVerticalLeadingTokenNavigationTarget = null;
+
+    if (!target) {
+        return false;
+    }
+
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    if (!selection?.isCollapsed || !focusNode) {
+        return false;
+    }
+
+    const previousToken = findAdjacentInactiveMarkdownToken(focusNode, selection.focusOffset, "previous");
+    if (previousToken && isEditableMarkdownToken(previousToken) && isLeadingTokenInBlock(previousToken)) {
+        activateMarkdownTokenSource(previousToken, "start");
+        return true;
+    }
+
+    const nextToken = findAdjacentInactiveMarkdownToken(focusNode, selection.focusOffset, "next");
+    if (nextToken && isEditableMarkdownToken(nextToken) && isLeadingTokenInBlock(nextToken)) {
+        activateMarkdownTokenSource(nextToken, "start");
+        return true;
+    }
+
+    return false;
+}
+
+function isLeadingTokenInBlock(token: HTMLElement): boolean {
+    const block = findBlock(token);
+    if (!block) {
+        return false;
+    }
+
+    return getMarkdownBoundaryOffset(getBlockContent(block), token, 0) === 0;
+}
+
 function suppressSelectionChangeForFrame(): void {
     suppressSelectionChange = true;
     window.requestAnimationFrame(() => {
@@ -236,7 +293,7 @@ function suppressSelectionChangeForFrame(): void {
 }
 
 function focusMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "end"): void {
-    const source = token.querySelector<HTMLElement>(".markdown-token-source");
+    const source = getMarkdownTokenSource(token);
     const selection = document.getSelection();
     const range = document.createRange();
 
@@ -311,6 +368,21 @@ function hasActiveMarkdownTokenSourceEdits(token: HTMLElement): boolean {
     return token.dataset.sourceBeforeActivation !== undefined && getMarkdownText(token) !== token.dataset.sourceBeforeActivation;
 }
 
+function isEditableMarkdownToken(token: HTMLElement): boolean {
+    return getMarkdownTokenSource(token) !== null;
+}
+
+function getMarkdownTokenSource(token: HTMLElement): HTMLElement | null {
+    return Array.from(token.children).find(
+        (child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains("markdown-token-source"),
+    ) ?? null;
+}
+
+function getMarkdownTokenForSource(source: HTMLElement): HTMLElement | null {
+    const parent = source.parentElement;
+    return parent instanceof HTMLElement && parent.classList.contains("markdown-token") ? parent : null;
+}
+
 function isFormatMarkdownToken(token: HTMLElement): boolean {
     return token.classList.contains("markdown-format-token");
 }
@@ -326,6 +398,7 @@ function loadDocument(documentFile: DocumentFile): void {
 
     documentState.activeFilePath = documentFile.path;
     documentState.usesTitle = parsedDocument.usesTitle;
+    markdownReferences = parsedDocument.references ?? {};
     title.value = parsedDocument.title;
     replaceEditorBlocks(parsedDocument.blocks);
     documentState.lastSavedMarkdown = serializeDocumentMarkdown();
@@ -337,6 +410,57 @@ function serializeDocumentMarkdown(): string {
     return serializeMarkdownDocument(title, documentState.usesTitle, getEditorBlocks().map(readEditorBlock));
 }
 
+function markEditorDirty(): void {
+    syncMarkdownReferences();
+    markDocumentDirty();
+}
+
+function syncMarkdownReferences(): void {
+    const nextReferences = readMarkdownReferences();
+    if (JSON.stringify(nextReferences) === JSON.stringify(markdownReferences)) {
+        return;
+    }
+
+    markdownReferences = nextReferences;
+    rerenderInlineMarkdownBlocks();
+}
+
+function readMarkdownReferences(): MarkdownReferenceMap {
+    const references: MarkdownReferenceMap = {};
+
+    for (const block of getEditorBlocks()) {
+        if (readBlockType(block.dataset.type) !== "reference") {
+            continue;
+        }
+
+        const definition = parseMarkdownReferenceDefinition(getBlockText(block));
+        if (definition) {
+            references[definition.normalizedLabel] = definition.reference;
+        }
+    }
+
+    return references;
+}
+
+function rerenderInlineMarkdownBlocks(): void {
+    const selection = document.getSelection();
+    const activeBlock = findBlock(selection?.focusNode ?? null);
+    const activeOffset =
+        activeBlock && selection?.focusNode
+            ? getCaretOffset(getBlockContent(activeBlock), selection.focusNode, selection.focusOffset)
+            : null;
+
+    for (const block of getEditorBlocks()) {
+        if (isInlineMarkdownBlockType(readBlockType(block.dataset.type))) {
+            setBlockText(block, getBlockText(block));
+        }
+    }
+
+    if (activeBlock?.isConnected && activeOffset !== null) {
+        focusBlockAtOffset(activeBlock, Math.min(activeOffset, getBlockText(activeBlock).length));
+    }
+}
+
 function readEditorBlock(block: HTMLElement): ParsedBlock {
     const type = readBlockType(block.dataset.type);
 
@@ -346,6 +470,9 @@ function readEditorBlock(block: HTMLElement): ParsedBlock {
         indent: readBlockIndent(block),
         checked: type === "todo" ? getTodoCheckbox(block).checked : undefined,
         codeInfo: block.dataset.codeInfo,
+        listMarker: readBlockListMarker(block),
+        listNumber: readBlockListNumber(block),
+        quoteLevel: readBlockQuoteLevel(block),
     };
 }
 
@@ -390,7 +517,7 @@ function handleEditorKeydown(event: KeyboardEvent): void {
     if (inlineFormat) {
         event.preventDefault();
         if (applyInlineFormatShortcut(block, inlineFormat)) {
-            markDocumentDirty();
+            markEditorDirty();
         }
         return;
     }
@@ -401,13 +528,14 @@ function handleEditorKeydown(event: KeyboardEvent): void {
     }
 
     trackHorizontalMarkdownNavigation(event);
+    trackVerticalLeadingTokenNavigation(event, block);
     if (trackVerticalMarkdownImageNavigation(event, block)) {
         return;
     }
 
     if (event.key === "Tab" && indentListBlocks(block, event.shiftKey ? -1 : 1)) {
         event.preventDefault();
-        markDocumentDirty();
+        markEditorDirty();
         return;
     }
 
@@ -415,31 +543,31 @@ function handleEditorKeydown(event: KeyboardEvent): void {
         event.preventDefault();
         if (readBlockType(block.dataset.type) === "code" && !event.ctrlKey && !event.metaKey) {
             replaceSelectionWithText(block, "\n");
-            markDocumentDirty();
+            markEditorDirty();
             return;
         }
 
         splitBlock(deleteSelectedContent() ?? block);
-        markDocumentDirty();
+        markEditorDirty();
         return;
     }
 
     if (event.key === "Backspace" || event.key === "Delete") {
         if (deleteSelectedContent()) {
             event.preventDefault();
-            markDocumentDirty();
+            markEditorDirty();
             return;
         }
 
         if (event.key === "Backspace" && removeOrMergeBackward(block)) {
             event.preventDefault();
-            markDocumentDirty();
+            markEditorDirty();
             return;
         }
 
         if (event.key === "Delete" && mergeForward(block)) {
             event.preventDefault();
-            markDocumentDirty();
+            markEditorDirty();
             return;
         }
     }
@@ -447,7 +575,7 @@ function handleEditorKeydown(event: KeyboardEvent): void {
     if (isPlainTextKey(event) && getSelectedBlockRange()) {
         event.preventDefault();
         replaceSelectionWithText(block, event.key);
-        markDocumentDirty();
+        markEditorDirty();
     }
 }
 
@@ -472,7 +600,7 @@ function trackHorizontalMarkdownNavigation(event: KeyboardEvent): void {
 
     const direction = event.key === "ArrowLeft" ? "previous" : "next";
     const token = findAdjacentInactiveMarkdownToken(focusNode, selection.focusOffset, direction);
-    if (!token || !isNavigableMarkdownToken(token)) {
+    if (!token || !isEditableMarkdownToken(token)) {
         pendingHorizontalNavigationTarget = null;
         return;
     }
@@ -488,6 +616,35 @@ function trackHorizontalMarkdownNavigation(event: KeyboardEvent): void {
     window.requestAnimationFrame(() => {
         if (pendingHorizontalNavigationTarget?.requestId === requestId) {
             revealPendingHorizontalNavigationTarget();
+        }
+    });
+}
+
+function trackVerticalLeadingTokenNavigation(event: KeyboardEvent, block: HTMLElement): void {
+    if (
+        (event.key !== "ArrowUp" && event.key !== "ArrowDown") ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+    ) {
+        pendingVerticalLeadingTokenNavigationTarget = null;
+        return;
+    }
+
+    const selection = document.getSelection();
+    if (!selection?.isCollapsed || getCurrentBlockOffset(block) !== 0) {
+        pendingVerticalLeadingTokenNavigationTarget = null;
+        return;
+    }
+
+    const requestId = pendingVerticalLeadingTokenNavigationRequestId + 1;
+    pendingVerticalLeadingTokenNavigationRequestId = requestId;
+    pendingVerticalLeadingTokenNavigationTarget = { requestId };
+
+    window.requestAnimationFrame(() => {
+        if (pendingVerticalLeadingTokenNavigationTarget?.requestId === requestId) {
+            revealPendingVerticalLeadingTokenNavigationTarget();
         }
     });
 }
@@ -517,16 +674,9 @@ function trackVerticalMarkdownImageNavigation(event: KeyboardEvent, block: HTMLE
 
     event.preventDefault();
     pendingHorizontalNavigationTarget = null;
+    pendingVerticalLeadingTokenNavigationTarget = null;
     activateMarkdownTokenSource(targetToken, direction === "previous" ? "end" : "start");
     return true;
-}
-
-function isNavigableMarkdownToken(token: HTMLElement): boolean {
-    return (
-        token.classList.contains("markdown-link-token") ||
-        token.classList.contains("markdown-image-token") ||
-        token.classList.contains("markdown-format-token")
-    );
 }
 
 function handleEditorInput(event: Event): void {
@@ -537,7 +687,7 @@ function handleEditorInput(event: Event): void {
 
     if (isEditingMarkdownTokenSource()) {
         normalizeActiveMarkdownTokenSource(block);
-        markDocumentDirty();
+        markEditorDirty();
         return;
     }
 
@@ -545,7 +695,7 @@ function handleEditorInput(event: Event): void {
         renderBlockContent(block);
     }
 
-    markDocumentDirty();
+    markEditorDirty();
 }
 
 function isEditingMarkdownTokenSource(): boolean {
@@ -570,7 +720,7 @@ function moveCaretOutOfActiveMarkdownTokenSource(event: KeyboardEvent, block: HT
     const focusNode = selection?.focusNode;
     const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
     const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
-    const token = source?.closest<HTMLElement>(".markdown-token");
+    const token = source ? getMarkdownTokenForSource(source) : null;
 
     if (!selection?.isCollapsed || !focusNode || !source || token?.dataset.active !== "true") {
         return false;
@@ -629,7 +779,7 @@ function handleEditorPaste(event: ClipboardEvent): void {
 
     event.preventDefault();
     insertPastedText(block, text.replace(/\r\n?/g, "\n"));
-    markDocumentDirty();
+    markEditorDirty();
 }
 
 function splitBlock(block: HTMLElement): void {
@@ -649,18 +799,33 @@ function splitBlock(block: HTMLElement): void {
 
     const before = text.slice(0, offset);
     const after = text.slice(offset);
-    const nextType = headingTypes.has(currentType) || currentType === "code" ? "paragraph" : currentType;
-    const nextBlock = createBlock(nextType, after);
+    const nextType = readSplitContinuationType(currentType);
+    const nextBlock = createBlock(nextType, after, {
+        indent: isIndentableListBlockType(nextType) ? readBlockIndent(block) : 0,
+        listMarker: readBlockListMarker(block),
+        listNumber: nextType === "ordered-list" ? readNextListNumber(block) : undefined,
+        quoteLevel: nextType === "quote" ? readBlockQuoteLevel(block) : undefined,
+    });
 
     setBlockText(block, before);
     block.after(nextBlock);
-    setBlockIndent(nextBlock, nextType === "list" ? readBlockIndent(block) : 0);
     focusBlockAtOffset(nextBlock, 0);
 }
 
 function applyMarkdownShortcut(block: HTMLElement): boolean {
     const text = getBlockText(block);
-    const shortcut = markdownShortcuts.find((candidate) => text.startsWith(candidate.marker));
+    const referenceDefinition = parseMarkdownReferenceDefinition(text);
+    if (referenceDefinition) {
+        setBlockType(block, "reference");
+        setBlockText(block, text);
+        ensureEditableBlockAfter(block);
+        focusBlock(block);
+        return true;
+    }
+
+    const shortcut = markdownShortcuts.find((candidate) =>
+        candidate.exact ? text === candidate.marker : text.startsWith(candidate.marker),
+    );
 
     if (!shortcut) {
         return false;
@@ -668,8 +833,17 @@ function applyMarkdownShortcut(block: HTMLElement): boolean {
 
     setBlockType(block, shortcut.type);
     setBlockIndent(block, shortcut.indent ?? 0);
+    setBlockListMarker(block, shortcut.listMarker);
+    setBlockListNumber(block, shortcut.listNumber);
     setBlockText(block, text.slice(shortcut.marker.length));
     ensureEditableBlockAfter(block);
+
+    if (shortcut.type === "rule") {
+        const nextBlock = getSiblingBlock(block, "next");
+        focusBlockAtOffset(nextBlock ?? block, 0);
+        return true;
+    }
+
     focusBlock(block);
     return true;
 }
@@ -684,10 +858,13 @@ function createBlock(type: BlockType = "paragraph", text = "", options: Partial<
     }
 
     setBlockType(block, type);
-    setBlockText(block, text);
     setBlockIndent(block, options.indent ?? 0);
+    setBlockListMarker(block, options.listMarker);
+    setBlockListNumber(block, options.listNumber);
+    setBlockQuoteLevel(block, options.quoteLevel);
     setTodoChecked(block, options.checked ?? false);
     setCodeInfo(block, options.codeInfo ?? "");
+    setBlockText(block, text);
     return block;
 }
 
@@ -695,25 +872,44 @@ function setBlockType(block: HTMLElement, type: BlockType): void {
     block.dataset.type = type;
     getBlockContent(block).setAttribute("aria-label", `${blockLabels[type]} block`);
 
-    if (type !== "list") {
+    if (!isIndentableListBlockType(type)) {
         setBlockIndent(block, 0);
+    }
+
+    if (!usesBulletListMarker(type)) {
+        delete block.dataset.listMarker;
+    }
+
+    if (type !== "ordered-list") {
+        delete block.dataset.listNumber;
     }
 
     if (type !== "code") {
         delete block.dataset.codeInfo;
     }
+
+    if (type !== "quote") {
+        delete block.dataset.quoteLevel;
+    }
 }
 
 function setBlockText(block: HTMLElement, text: string): void {
     const content = getBlockContent(block);
+    const type = readBlockType(block.dataset.type);
 
-    if (readBlockType(block.dataset.type) === "code") {
+    if (isPlainTextBlockType(type)) {
         content.textContent = text;
         delete content.dataset.renderedMarkdown;
         return;
     }
 
-    const html = renderInlineMarkdown(text);
+    if (isAtomicBlockType(type)) {
+        content.textContent = "";
+        delete content.dataset.renderedMarkdown;
+        return;
+    }
+
+    const html = renderInlineMarkdown(text, markdownReferences);
 
     content.innerHTML = html;
     content.dataset.renderedMarkdown = html;
@@ -721,12 +917,41 @@ function setBlockText(block: HTMLElement, text: string): void {
 }
 
 function setBlockIndent(block: HTMLElement, indent: number): void {
-    if (indent > 0) {
+    if (isIndentableListBlockType(readBlockType(block.dataset.type)) && indent > 0) {
         block.dataset.indent = String(Math.min(indent, 3));
         return;
     }
 
     delete block.dataset.indent;
+}
+
+function setBlockListMarker(block: HTMLElement, marker: string | undefined): void {
+    const type = readBlockType(block.dataset.type);
+
+    if (usesBulletListMarker(type)) {
+        block.dataset.listMarker = marker && ["-", "*", "+"].includes(marker) ? marker : "-";
+        return;
+    }
+
+    delete block.dataset.listMarker;
+}
+
+function setBlockListNumber(block: HTMLElement, value: string | undefined): void {
+    if (readBlockType(block.dataset.type) === "ordered-list") {
+        block.dataset.listNumber = value && /^\d{1,9}$/.test(value) ? value : "1";
+        return;
+    }
+
+    delete block.dataset.listNumber;
+}
+
+function setBlockQuoteLevel(block: HTMLElement, level: number | undefined): void {
+    if (readBlockType(block.dataset.type) === "quote" && level && level > 1) {
+        block.dataset.quoteLevel = String(Math.min(level, 6));
+        return;
+    }
+
+    delete block.dataset.quoteLevel;
 }
 
 function setTodoChecked(block: HTMLElement, checked: boolean): void {
@@ -744,9 +969,14 @@ function setCodeInfo(block: HTMLElement, codeInfo: string): void {
 
 function getBlockText(block: HTMLElement): string {
     const content = getBlockContent(block);
+    const type = readBlockType(block.dataset.type);
 
-    if (readBlockType(block.dataset.type) === "code") {
+    if (isPlainTextBlockType(type)) {
         return content.textContent ?? "";
+    }
+
+    if (isAtomicBlockType(type)) {
+        return "";
     }
 
     return getMarkdownText(content);
@@ -755,6 +985,54 @@ function getBlockText(block: HTMLElement): string {
 function readBlockIndent(block: HTMLElement): number {
     const indent = Number(block.dataset.indent ?? 0);
     return Number.isFinite(indent) ? indent : 0;
+}
+
+function readBlockListMarker(block: HTMLElement): string | undefined {
+    const marker = block.dataset.listMarker;
+    return marker && ["-", "*", "+"].includes(marker) ? marker : undefined;
+}
+
+function readBlockListNumber(block: HTMLElement): string | undefined {
+    const number = block.dataset.listNumber;
+    return number && /^\d{1,9}$/.test(number) ? number : undefined;
+}
+
+function readNextListNumber(block: HTMLElement): string {
+    const number = Number(readBlockListNumber(block) ?? "1");
+    return Number.isFinite(number) ? String(number + 1) : "1";
+}
+
+function readBlockQuoteLevel(block: HTMLElement): number | undefined {
+    const level = Number(block.dataset.quoteLevel ?? 1);
+    return Number.isFinite(level) && level > 1 ? level : undefined;
+}
+
+function readSplitContinuationType(type: BlockType): BlockType {
+    return headingTypes.has(type) || isStandaloneBlockType(type) ? "paragraph" : type;
+}
+
+function isInlineMarkdownBlockType(type: BlockType): boolean {
+    return !isStandaloneBlockType(type);
+}
+
+function isStandaloneBlockType(type: BlockType): boolean {
+    return isPlainTextBlockType(type) || isAtomicBlockType(type);
+}
+
+function isPlainTextBlockType(type: BlockType): boolean {
+    return type === "code" || type === "reference";
+}
+
+function isAtomicBlockType(type: BlockType): boolean {
+    return type === "rule";
+}
+
+function isIndentableListBlockType(type: BlockType): boolean {
+    return type === "list" || type === "ordered-list" || type === "todo";
+}
+
+function usesBulletListMarker(type: BlockType): boolean {
+    return type === "list" || type === "todo";
 }
 
 function getBlockContent(block: HTMLElement): HTMLElement {
@@ -949,7 +1227,7 @@ function applyInlineFormatShortcut(block: HTMLElement, format: InlineFormat): bo
 }
 
 function insertInlineFormatPair(block: HTMLElement, marker: string): boolean {
-    if (readBlockType(block.dataset.type) === "code") {
+    if (!isInlineMarkdownBlockType(readBlockType(block.dataset.type))) {
         return false;
     }
 
@@ -970,7 +1248,7 @@ function toggleInlineFormatForSelection(selectedRange: SelectedBlockRange, marke
     let focusTarget: { block: HTMLElement; offset: number } | null = null;
 
     for (const block of selectedRange.blocks) {
-        if (readBlockType(block.dataset.type) === "code") {
+        if (!isInlineMarkdownBlockType(readBlockType(block.dataset.type))) {
             continue;
         }
 
@@ -1043,9 +1321,8 @@ function insertTextAtCaret(block: HTMLElement, text: string): void {
 
 function insertPastedText(block: HTMLElement, text: string): void {
     const selectedBlock = deleteSelectedContent() ?? block;
-    const lines = text.split("\n");
 
-    if (readBlockType(selectedBlock.dataset.type) === "code" || lines.length === 1) {
+    if (readBlockType(selectedBlock.dataset.type) === "code") {
         insertTextAtCaret(selectedBlock, text);
         return;
     }
@@ -1058,26 +1335,106 @@ function insertPastedText(block: HTMLElement, text: string): void {
         : currentText.length;
     const before = currentText.slice(0, offset);
     const after = currentText.slice(offset);
-    let currentBlock = selectedBlock;
+    const isWholeBlockPaste = before === "" && after === "";
 
-    setBlockText(selectedBlock, before + lines[0]);
-
-    for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
-        const line = lines[lineIndex];
-        const isLastLine = lineIndex === lines.length - 1;
-        const nextBlock = createBlock("paragraph", isLastLine ? line + after : line);
-
-        currentBlock.after(nextBlock);
-        currentBlock = nextBlock;
+    if (isWholeBlockPaste && shouldParsePastedMarkdown(text)) {
+        replaceBlockWithPastedMarkdown(selectedBlock, text);
+        return;
     }
 
-    focusBlockAtOffset(currentBlock, lines[lines.length - 1].length);
+    const lines = text.split("\n");
+
+    if (before === "" && lines.length > 1) {
+        replaceBlockWithPastedMarkdown(selectedBlock, text, after);
+        return;
+    }
+
+    if (lines.length === 1) {
+        if (before === "" && replaceSingleLineBlockStartWithPastedMarkdown(selectedBlock, text, after)) {
+            return;
+        }
+
+        setBlockText(selectedBlock, before + text + after);
+        focusBlockAtOffset(selectedBlock, before.length + text.length);
+        return;
+    }
+
+    setBlockText(selectedBlock, before + lines[0]);
+    insertParsedPastedBlocksAfter(selectedBlock, lines.slice(1).join("\n"), after);
+}
+
+function shouldParsePastedMarkdown(text: string): boolean {
+    return text.includes("\n") || parseMarkdownFragment(text).blocks.some((block) => block.type !== "paragraph" || block.text !== text);
+}
+
+function replaceSingleLineBlockStartWithPastedMarkdown(block: HTMLElement, text: string, after: string): boolean {
+    const combinedText = text + after;
+    const parsedBlocks = parseMarkdownFragment(combinedText).blocks;
+    const parsedBlock = parsedBlocks.length === 1 ? parsedBlocks[0] : null;
+
+    if (!parsedBlock || (parsedBlock.type === "paragraph" && parsedBlock.text === combinedText)) {
+        return false;
+    }
+
+    const nextBlock = createBlock(parsedBlock.type, parsedBlock.text, parsedBlock);
+
+    block.replaceWith(nextBlock);
+    syncFirstBlockPlaceholder();
+    focusBlockAtOffset(nextBlock, Math.max(0, getBlockText(nextBlock).length - after.length));
+    return true;
+}
+
+function replaceBlockWithPastedMarkdown(block: HTMLElement, text: string, after = ""): void {
+    const parsedBlocks = parseMarkdownFragment(text).blocks;
+    const focusTarget = appendTextAfterParsedPaste(parsedBlocks, after);
+    const nextBlocks = parsedBlocks.map((parsedBlock) => createBlock(parsedBlock.type, parsedBlock.text, parsedBlock));
+    const focusBlock = nextBlocks[focusTarget.blockIndex];
+
+    block.replaceWith(...nextBlocks);
+    syncFirstBlockPlaceholder();
+    focusBlockAtOffset(focusBlock, focusTarget.offset);
+}
+
+function insertParsedPastedBlocksAfter(block: HTMLElement, text: string, after: string): void {
+    const parsedBlocks = parseMarkdownFragment(text).blocks;
+    const focusTarget = appendTextAfterParsedPaste(parsedBlocks, after);
+    const nextBlocks = parsedBlocks.map((parsedBlock) => createBlock(parsedBlock.type, parsedBlock.text, parsedBlock));
+    const focusBlock = nextBlocks[focusTarget.blockIndex];
+
+    block.after(...nextBlocks);
+    syncFirstBlockPlaceholder();
+    focusBlockAtOffset(focusBlock, focusTarget.offset);
+}
+
+function appendTextAfterParsedPaste(
+    blocks: ParsedBlock[],
+    after: string,
+): { blockIndex: number; offset: number } {
+    const lastBlockIndex = Math.max(0, blocks.length - 1);
+    const lastBlock = blocks[lastBlockIndex];
+    const focusOffset = lastBlock.text.length;
+
+    if (!after) {
+        return { blockIndex: lastBlockIndex, offset: focusOffset };
+    }
+
+    if (canAppendTextToParsedPasteBlock(lastBlock)) {
+        lastBlock.text += after;
+        return { blockIndex: lastBlockIndex, offset: focusOffset };
+    }
+
+    blocks.push({ type: "paragraph", text: after });
+    return { blockIndex: blocks.length - 1, offset: 0 };
+}
+
+function canAppendTextToParsedPasteBlock(block: ParsedBlock): boolean {
+    return isInlineMarkdownBlockType(block.type);
 }
 
 function indentListBlocks(block: HTMLElement, delta: number): boolean {
     const selectedRange = getSelectedBlockRange();
     const blocks = selectedRange?.blocks ?? [block];
-    const listBlocks = blocks.filter((candidate) => readBlockType(candidate.dataset.type) === "list");
+    const listBlocks = blocks.filter((candidate) => isIndentableListBlockType(readBlockType(candidate.dataset.type)));
 
     if (listBlocks.length === 0) {
         return false;
@@ -1130,7 +1487,6 @@ function removeOrMergeBackward(block: HTMLElement): boolean {
 function clearBlockProperties(block: HTMLElement): void {
     setBlockType(block, "paragraph");
     setTodoChecked(block, false);
-    setCodeInfo(block, "");
 }
 
 function ensureEditableBlockAfter(block: HTMLElement): void {
@@ -1283,7 +1639,9 @@ function selectEditorContents(editor: HTMLElement): void {
 }
 
 function renderBlockContent(block: HTMLElement): void {
-    if (readBlockType(block.dataset.type) === "code") {
+    const type = readBlockType(block.dataset.type);
+
+    if (!isInlineMarkdownBlockType(type)) {
         return;
     }
 
@@ -1294,7 +1652,7 @@ function renderBlockContent(block: HTMLElement): void {
             ? getCaretOffset(content, selection.focusNode, selection.focusOffset)
             : getBlockText(block).length;
     const text = getBlockText(block);
-    const html = renderInlineMarkdown(text);
+    const html = renderInlineMarkdown(text, markdownReferences);
 
     if (content.dataset.renderedMarkdown === html) {
         return;
@@ -1320,7 +1678,7 @@ function suppressAdjacentFormatTokenActivation(block: HTMLElement, offset: numbe
 }
 
 function shouldResetEmptyBlock(type: BlockType): boolean {
-    return type === "list" || type === "todo";
+    return isIndentableListBlockType(type) || type === "quote" || type === "reference";
 }
 
 function isOpenFileShortcut(event: KeyboardEvent): boolean {

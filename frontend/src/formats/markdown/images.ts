@@ -50,6 +50,7 @@ function setImagePreviewSource(preview: HTMLElement, source: string, cacheKey: s
 
     const image = document.createElement("img");
     image.alt = preview.dataset.imageAlt ?? "";
+    image.title = preview.dataset.imageTitle ?? "";
     image.decoding = "async";
     image.draggable = false;
     image.loading = "lazy";
