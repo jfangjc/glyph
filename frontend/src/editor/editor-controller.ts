@@ -75,6 +75,8 @@ export function installEditorController(): void {
     editor.addEventListener("keydown", handleEditorKeydown);
     editor.addEventListener("mousedown", handleEditorMouseDown);
     editor.addEventListener("input", handleEditorInput);
+    editor.addEventListener("copy", handleEditorCopy);
+    editor.addEventListener("cut", handleEditorCut);
     editor.addEventListener("paste", handleEditorPaste);
     editor.addEventListener("change", handleEditorChange);
     editor.addEventListener("click", handleEditorClick);
@@ -1338,6 +1340,37 @@ function handleEditorPaste(event: ClipboardEvent): void {
     markEditorDirty();
 }
 
+function handleEditorCopy(event: ClipboardEvent): void {
+    const markdown = readSelectedMarkdown();
+
+    if (markdown === null || !event.clipboardData) {
+        return;
+    }
+
+    event.preventDefault();
+    writeMarkdownToClipboard(event.clipboardData, markdown);
+}
+
+function handleEditorCut(event: ClipboardEvent): void {
+    const markdown = readSelectedMarkdown();
+
+    if (markdown === null || !event.clipboardData) {
+        return;
+    }
+
+    event.preventDefault();
+    writeMarkdownToClipboard(event.clipboardData, markdown);
+
+    if (deleteSelectedContent()) {
+        markEditorDirty();
+    }
+}
+
+function writeMarkdownToClipboard(clipboardData: DataTransfer, markdown: string): void {
+    clipboardData.setData("text/plain", markdown);
+    clipboardData.setData("text/markdown", markdown);
+}
+
 function commitTransientBlock(block: HTMLElement): void {
     delete block.dataset.transient;
 }
@@ -1806,6 +1839,33 @@ function getBoundaryOffset(block: HTMLElement, container: Node, offset: number, 
     }
 
     return edge === "start" ? 0 : getBlockText(block).length;
+}
+
+function readSelectedMarkdown(): string | null {
+    const selectedRange = getSelectedBlockRange();
+    if (!selectedRange) {
+        return null;
+    }
+
+    const selectedBlocks = selectedRange.blocks.map((block) => readSelectedEditorBlock(block, selectedRange));
+    const markdown = serializeMarkdownDocument("", false, selectedBlocks);
+
+    return markdown.endsWith("\n") ? markdown.slice(0, -1) : markdown;
+}
+
+function readSelectedEditorBlock(block: HTMLElement, selectedRange: SelectedBlockRange): ParsedBlock {
+    const text = getBlockText(block);
+    const startOffset = block === selectedRange.startBlock ? selectedRange.startOffset : 0;
+    const endOffset = block === selectedRange.endBlock ? selectedRange.endOffset : text.length;
+
+    if (startOffset === 0 && endOffset === text.length) {
+        return readEditorBlock(block);
+    }
+
+    return {
+        type: "paragraph",
+        text: text.slice(startOffset, endOffset),
+    };
 }
 
 function deleteSelectedContent(): HTMLElement | null {
