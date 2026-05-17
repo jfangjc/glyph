@@ -3,6 +3,8 @@
     --glyph-font-title: var(--glyph-font-text);
     --glyph-font-code: ui-monospace, "Cascadia Mono", "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", "Noto Sans Mono", "Ubuntu Mono", monospace;
     --glyph-active-block-indicator: rgb(25 25 25 / 28%);
+    --glyph-hover-block-indicator: rgb(25 25 25 / 14%);
+    --glyph-editor-zoom: 1;
 }
 
 .block[data-type="heading-1"] .block-content {
@@ -246,6 +248,18 @@
     position: relative;
 }
 
+.markdown-token[data-active="true"]:not(.markdown-image-token) {
+    display: inline-grid;
+    position: relative;
+    vertical-align: baseline;
+}
+
+.markdown-token[data-active="true"]:not(.markdown-image-token) [data-markdown-ignore="true"] {
+    display: inline;
+    grid-area: 1 / 1;
+    visibility: hidden;
+}
+
 .markdown-link-token {
     display: inline;
 }
@@ -274,6 +288,10 @@
     text-underline-offset: 0.16em;
 }
 
+.block-editor[data-link-open-intent="true"] .markdown-link {
+    cursor: pointer;
+}
+
 .markdown-link:hover {
     color: #084f9b;
 }
@@ -295,6 +313,22 @@
 
 .markdown-token[data-active="true"] .markdown-token-source {
     display: inline;
+}
+
+.markdown-token[data-active="true"]:not(.markdown-image-token) .markdown-token-source {
+    position: absolute;
+    z-index: 2;
+    top: 50%;
+    left: 0;
+    display: inline;
+    max-width: min(70vw, 680px);
+    overflow: visible;
+    padding: 0 0.08em;
+    border-radius: 3px;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 5%);
+    transform: translateY(-50%);
+    white-space: pre;
 }
 
 .markdown-token[data-active="true"] .markdown-token-source,

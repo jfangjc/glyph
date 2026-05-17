@@ -1,7 +1,10 @@
 html {
     scrollbar-width: none;
-    overflow-x: auto;
     overflow: hidden;
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
+    overscroll-behavior: none;
+    touch-action: pan-y;
 }
 
 html::-webkit-scrollbar {
@@ -42,6 +45,9 @@ body {
     min-width: 320px;
     min-height: 100vh;
     background: #ffffff;
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
+    overscroll-behavior: none;
 }
 
 input {

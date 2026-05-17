@@ -30,7 +30,16 @@ export function installWindowControls(): void {
 }
 
 function isWindowsHost(): boolean {
-    return System.IsWindows();
+    return System.IsWindows() || isWindowsWebViewHost();
+}
+
+function isWindowsWebViewHost(): boolean {
+    const chromeHost = (window as Window & { chrome?: { webview?: { postMessage?: unknown } } }).chrome;
+
+    return Boolean(
+        chromeHost?.webview?.postMessage &&
+            (navigator.userAgent.includes("Windows") || navigator.platform.startsWith("Win")),
+    );
 }
 
 function handleWindowControlClick(event: MouseEvent): void {
@@ -58,7 +67,7 @@ function handleWindowControlClick(event: MouseEvent): void {
 }
 
 function scheduleSnapAssist(): void {
-    if (!System.IsWindows() || snapAssistTimer) {
+    if (!isWindowsHost() || snapAssistTimer) {
         return;
     }
 
@@ -78,7 +87,7 @@ function cancelSnapAssist(): void {
 }
 
 async function syncMaximiseButton(): Promise<void> {
-    if (!maximiseButton || !System.IsWindows()) {
+    if (!maximiseButton || !isWindowsHost()) {
         return;
     }
 

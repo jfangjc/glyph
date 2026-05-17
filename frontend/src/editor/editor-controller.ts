@@ -37,7 +37,13 @@ type SelectedBlockRange = {
     endOffset: number;
 };
 
+type PointerBlockTarget = {
+    block: HTMLElement;
+    offset: number;
+};
+
 type InlineFormat = "bold" | "italic";
+type ZoomShortcut = "in" | "out" | "reset";
 
 let suppressSelectionChange = false;
 let suppressedMarkdownTokenActivation: { block: HTMLElement; offset: number } | null = null;
@@ -47,6 +53,11 @@ let pendingVerticalLeadingTokenNavigationRequestId = 0;
 let pendingVerticalLeadingTokenNavigationTarget: { requestId: number } | null = null;
 let markdownReferences: MarkdownReferenceMap = {};
 let indicatedActiveBlock: HTMLElement | null = null;
+let gutterHoverBlock: HTMLElement | null = null;
+let gutterHoverTimer = 0;
+let pointerDownSelectionStart: { x: number; y: number } | null = null;
+let isPointerSelecting = false;
+let browserPreviewZoom = 1;
 
 export function installEditorController(): void {
     const surface = getElement<HTMLElement>("document-surface");
@@ -54,7 +65,14 @@ export function installEditorController(): void {
     const title = getElement<HTMLInputElement>("document-title");
 
     surface.addEventListener("mousedown", handleDocumentSurfaceMouseDown);
+    surface.addEventListener("mousemove", handleDocumentSurfaceMouseMove);
+    surface.addEventListener("mouseleave", clearGutterHoverBlock);
+    surface.addEventListener("mouseover", handleDocumentSurfaceMouseOver);
+    surface.addEventListener("mouseout", handleDocumentSurfaceMouseOut);
+    document.addEventListener("mousemove", handleDocumentMouseMove);
+    document.addEventListener("mouseup", handleDocumentMouseUp);
     editor.addEventListener("keydown", handleEditorKeydown);
+    editor.addEventListener("mousedown", handleEditorMouseDown);
     editor.addEventListener("input", handleEditorInput);
     editor.addEventListener("paste", handleEditorPaste);
     editor.addEventListener("change", handleEditorChange);
@@ -63,6 +81,8 @@ export function installEditorController(): void {
     title.addEventListener("focus", () => syncActiveBlockIndicator(null));
     document.addEventListener("selectionchange", handleSelectionChange);
     window.addEventListener("keydown", handleGlobalKeydown);
+    window.addEventListener("keyup", syncLinkOpenIntentFromKeyboard);
+    window.addEventListener("blur", clearLinkOpenIntent);
     window.addEventListener(documentStateChangedEvent, syncDocumentWindowTitle);
     bindDocumentActions({ loadDocument, serializeDocumentMarkdown });
     startDocumentAutosave();
@@ -72,6 +92,15 @@ export function installEditorController(): void {
 }
 
 function handleGlobalKeydown(event: KeyboardEvent): void {
+    syncLinkOpenIntentFromKeyboard(event);
+
+    const zoomShortcut = readZoomShortcut(event);
+    if (zoomShortcut) {
+        event.preventDefault();
+        void applyZoomShortcut(zoomShortcut);
+        return;
+    }
+
     if (!canUseDesktopFileSystem()) {
         return;
     }
@@ -86,6 +115,60 @@ function handleGlobalKeydown(event: KeyboardEvent): void {
         event.preventDefault();
         void saveDocumentFromEditor(event.shiftKey);
     }
+}
+
+function readZoomShortcut(event: KeyboardEvent): ZoomShortcut | null {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) {
+        return null;
+    }
+
+    if (event.key === "+" || event.key === "=" || event.code === "NumpadAdd") {
+        return "in";
+    }
+
+    if (event.key === "-" || event.key === "_" || event.code === "NumpadSubtract") {
+        return "out";
+    }
+
+    if (event.key === "0" || event.code === "Numpad0") {
+        return "reset";
+    }
+
+    return null;
+}
+
+async function applyZoomShortcut(shortcut: ZoomShortcut): Promise<void> {
+    if (canUseDesktopFileSystem()) {
+        try {
+            if (shortcut === "in") {
+                await Window.ZoomIn();
+                return;
+            }
+
+            if (shortcut === "out") {
+                await Window.ZoomOut();
+                return;
+            }
+
+            await Window.ZoomReset();
+            return;
+        } catch (error) {
+            console.error("Failed to apply window zoom:", error);
+        }
+    }
+
+    applyBrowserPreviewZoom(shortcut);
+}
+
+function applyBrowserPreviewZoom(shortcut: ZoomShortcut): void {
+    if (shortcut === "reset") {
+        browserPreviewZoom = 1;
+    } else {
+        browserPreviewZoom += shortcut === "in" ? 0.1 : -0.1;
+    }
+
+    browserPreviewZoom = clamp(browserPreviewZoom, 0.7, 1.6);
+    document.documentElement.style.setProperty("--glyph-editor-zoom", browserPreviewZoom.toFixed(2));
 }
 
 async function saveDocumentFromEditor(promptForPath = false): Promise<void> {
@@ -153,22 +236,99 @@ function handleTitleInput(): void {
 }
 
 function handleDocumentSurfaceMouseDown(event: MouseEvent): void {
+    if (isWindowChromeEvent(event)) {
+        return;
+    }
+
     if (event.button !== 0 || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
         return;
     }
+
+    pointerDownSelectionStart = { x: event.clientX, y: event.clientY };
+    setPointerSelecting(false);
 
     const target = event.target;
     if (!(target instanceof Element) || shouldLetBrowserHandlePointerTarget(target)) {
         return;
     }
 
-    const block = findPointerTargetBlock(target, event.clientX, event.clientY);
+    const pointerTarget = findPointerTargetBlock(target, event.clientX, event.clientY);
+    if (!pointerTarget) {
+        return;
+    }
+
+    event.preventDefault();
+    focusBlockAtOffset(pointerTarget.block, pointerTarget.offset, { scroll: "minimal" });
+}
+
+function handleEditorMouseDown(event: MouseEvent): void {
+    if (isWindowChromeEvent(event)) {
+        return;
+    }
+
+    if (event.button !== 0 || event.detail < 3 || event.defaultPrevented) {
+        return;
+    }
+
+    const block = findBlock(event.target);
     if (!block) {
         return;
     }
 
     event.preventDefault();
-    focusBlockAtOffset(block, getPointerCaretOffset(block, event.clientX, event.clientY));
+    selectBlockContents(block);
+    syncActiveBlockIndicator(block);
+}
+
+function handleDocumentMouseMove(event: MouseEvent): void {
+    if (isWindowChromeEvent(event)) {
+        return;
+    }
+
+    if (!pointerDownSelectionStart || event.buttons !== 1) {
+        return;
+    }
+
+    const deltaX = Math.abs(event.clientX - pointerDownSelectionStart.x);
+    const deltaY = Math.abs(event.clientY - pointerDownSelectionStart.y);
+    if (deltaX > 3 || deltaY > 3) {
+        setPointerSelecting(true);
+    }
+}
+
+function handleDocumentMouseUp(): void {
+    pointerDownSelectionStart = null;
+    window.requestAnimationFrame(() => {
+        const selection = document.getSelection();
+        setPointerSelecting(Boolean(selection && !selection.isCollapsed));
+    });
+}
+
+function handleDocumentSurfaceMouseMove(event: MouseEvent): void {
+    if (isWindowChromeEvent(event)) {
+        return;
+    }
+
+    syncLinkOpenIntentFromMouse(event);
+    scheduleGutterHover(event);
+}
+
+function handleDocumentSurfaceMouseOver(event: MouseEvent): void {
+    if (isWindowChromeEvent(event)) {
+        return;
+    }
+
+    syncLinkOpenIntentFromMouse(event);
+}
+
+function handleDocumentSurfaceMouseOut(event: MouseEvent): void {
+    if (!(event.relatedTarget instanceof Element) || !getElement<HTMLElement>("document-surface").contains(event.relatedTarget)) {
+        clearLinkOpenIntent();
+    }
+}
+
+function isWindowChromeEvent(event: MouseEvent): boolean {
+    return event.target instanceof Element && Boolean(event.target.closest(".windows-titlebar"));
 }
 
 function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
@@ -179,10 +339,13 @@ function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
     );
 }
 
-function findPointerTargetBlock(target: Element, clientX: number, clientY: number): HTMLElement | null {
+function findPointerTargetBlock(target: Element, clientX: number, clientY: number): PointerBlockTarget | null {
     const directBlock = findBlock(target);
     if (directBlock) {
-        return directBlock;
+        return {
+            block: directBlock,
+            offset: getPointerCaretOffset(directBlock, clientX, clientY),
+        };
     }
 
     const blocks = getEditorBlocks();
@@ -193,7 +356,7 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
     const firstBlock = blocks[0];
     const firstRect = firstBlock.getBoundingClientRect();
     if (clientY < firstRect.top) {
-        return firstBlock;
+        return { block: firstBlock, offset: 0 };
     }
 
     let previousBlock = firstBlock;
@@ -201,17 +364,27 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
         const rect = block.getBoundingClientRect();
 
         if (clientY >= rect.top && clientY <= rect.bottom) {
-            return block;
+            return {
+                block,
+                offset: getPointerCaretOffset(block, clientX, clientY),
+            };
         }
 
         if (clientY < rect.top) {
-            return previousBlock;
+            const previousRect = previousBlock.getBoundingClientRect();
+            const gapProgress = (clientY - previousRect.bottom) / Math.max(1, rect.top - previousRect.bottom);
+            if (gapProgress > 0.55) {
+                return { block, offset: 0 };
+            }
+
+            return { block: previousBlock, offset: getBlockText(previousBlock).length };
         }
 
         previousBlock = block;
     }
 
-    return ensurePointerTrailingParagraph();
+    const trailingBlock = ensurePointerTrailingParagraph();
+    return { block: trailingBlock, offset: 0 };
 }
 
 function ensurePointerTrailingParagraph(): HTMLElement {
@@ -241,18 +414,28 @@ function ensurePointerTrailingParagraph(): HTMLElement {
 
 function getPointerCaretOffset(block: HTMLElement, clientX: number, clientY: number): number {
     const content = getBlockContent(block);
-    const caretPosition = getCaretPositionFromPoint(clientX, clientY);
+    const rect = content.getBoundingClientRect();
+    const clampedX = clamp(clientX, rect.left + 1, rect.right - 1);
+    const clampedY = clamp(clientY, rect.top + 1, rect.bottom - 1);
+    const caretPosition = getCaretPositionFromPoint(clampedX, clampedY);
 
     if (caretPosition && (caretPosition.node === content || content.contains(caretPosition.node))) {
         return getCaretOffset(content, caretPosition.node, caretPosition.offset);
     }
 
-    const rect = content.getBoundingClientRect();
     if (clientY < rect.top || clientX <= rect.left) {
         return 0;
     }
 
     return getBlockText(block).length;
+}
+
+function clamp(value: number, min: number, max: number): number {
+    if (max < min) {
+        return min;
+    }
+
+    return Math.min(Math.max(value, min), max);
 }
 
 function getCaretPositionFromPoint(clientX: number, clientY: number): { node: Node; offset: number } | null {
@@ -273,6 +456,104 @@ function getCaretPositionFromPoint(clientX: number, clientY: number): { node: No
     return null;
 }
 
+function setPointerSelecting(selecting: boolean): void {
+    if (isPointerSelecting === selecting) {
+        return;
+    }
+
+    isPointerSelecting = selecting;
+    getElement<HTMLElement>("editor").dataset.selecting = selecting ? "true" : "false";
+
+    if (selecting) {
+        clearGutterHoverBlock();
+    }
+}
+
+function scheduleGutterHover(event: MouseEvent): void {
+    if (isPointerSelecting) {
+        clearGutterHoverBlock();
+        return;
+    }
+
+    const block = findGutterHoverBlock(event.clientX, event.clientY);
+    if (!block) {
+        clearGutterHoverBlock();
+        return;
+    }
+
+    if (gutterHoverBlock === block) {
+        return;
+    }
+
+    if (gutterHoverTimer) {
+        window.clearTimeout(gutterHoverTimer);
+    }
+
+    gutterHoverTimer = window.setTimeout(() => {
+        gutterHoverTimer = 0;
+        syncGutterHoverBlock(block);
+    }, 220);
+}
+
+function findGutterHoverBlock(clientX: number, clientY: number): HTMLElement | null {
+    for (const block of getEditorBlocks()) {
+        const blockRect = block.getBoundingClientRect();
+        if (clientY < blockRect.top || clientY > blockRect.bottom) {
+            continue;
+        }
+
+        const contentRect = getBlockContent(block).getBoundingClientRect();
+        if (clientX >= contentRect.left - 34 && clientX <= contentRect.left - 4) {
+            return block;
+        }
+    }
+
+    return null;
+}
+
+function syncGutterHoverBlock(block: HTMLElement | null): void {
+    const nextBlock = block?.isConnected ? block : null;
+    if (gutterHoverBlock === nextBlock) {
+        return;
+    }
+
+    clearGutterHoverBlock();
+    gutterHoverBlock = nextBlock;
+
+    if (gutterHoverBlock) {
+        gutterHoverBlock.dataset.gutterHover = "true";
+    }
+}
+
+function clearGutterHoverBlock(): void {
+    if (gutterHoverTimer) {
+        window.clearTimeout(gutterHoverTimer);
+        gutterHoverTimer = 0;
+    }
+
+    if (!gutterHoverBlock) {
+        return;
+    }
+
+    delete gutterHoverBlock.dataset.gutterHover;
+    gutterHoverBlock = null;
+}
+
+function syncLinkOpenIntentFromKeyboard(event: KeyboardEvent): void {
+    getElement<HTMLElement>("editor").dataset.linkOpenIntent = event.ctrlKey || event.metaKey ? "true" : "false";
+}
+
+function syncLinkOpenIntentFromMouse(event: MouseEvent): void {
+    const target = event.target;
+    const hasLinkIntent = target instanceof Element && Boolean(target.closest("a.markdown-link")) && (event.ctrlKey || event.metaKey);
+
+    getElement<HTMLElement>("editor").dataset.linkOpenIntent = hasLinkIntent ? "true" : "false";
+}
+
+function clearLinkOpenIntent(): void {
+    getElement<HTMLElement>("editor").dataset.linkOpenIntent = "false";
+}
+
 function handleEditorChange(event: Event): void {
     const target = event.target;
     if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
@@ -284,6 +565,11 @@ function handleEditorChange(event: Event): void {
 function handleEditorClick(event: MouseEvent): void {
     const target = event.target;
     if (!(target instanceof Element)) {
+        return;
+    }
+
+    const selection = document.getSelection();
+    if ((selection && !selection.isCollapsed) || event.detail > 1) {
         return;
     }
 
@@ -343,6 +629,13 @@ function handleSelectionChange(): void {
     const selection = document.getSelection();
     const focusNode = selection?.focusNode;
     syncActiveBlockIndicator(findBlock(focusNode ?? null));
+
+    if (selection && !selection.isCollapsed) {
+        pendingHorizontalNavigationTarget = null;
+        pendingVerticalLeadingTokenNavigationTarget = null;
+        setPointerSelecting(true);
+        return;
+    }
 
     const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
     const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
@@ -1333,7 +1626,7 @@ function focusBlock(block: HTMLElement): void {
     focusBlockAtOffset(block, getBlockText(block).length);
 }
 
-function focusBlockAtOffset(block: HTMLElement, offset: number): void {
+function focusBlockAtOffset(block: HTMLElement, offset: number, options: { scroll?: "comfortable" | "minimal" | "none" } = {}): void {
     const editor = getElement<HTMLElement>("editor");
     const content = getBlockContent(block);
     const selection = document.getSelection();
@@ -1347,7 +1640,9 @@ function focusBlockAtOffset(block: HTMLElement, offset: number): void {
     selection?.removeAllRanges();
     selection?.addRange(range);
     syncActiveBlockIndicator(block);
-    scrollBlockIntoComfortableView(block);
+    if (options.scroll !== "none") {
+        scrollBlockIntoComfortableView(block, options.scroll ?? "comfortable");
+    }
 }
 
 function syncActiveBlockIndicator(block: HTMLElement | null): void {
@@ -1368,7 +1663,7 @@ function syncActiveBlockIndicator(block: HTMLElement | null): void {
     }
 }
 
-function scrollBlockIntoComfortableView(block: HTMLElement): void {
+function scrollBlockIntoComfortableView(block: HTMLElement, mode: "comfortable" | "minimal"): void {
     window.requestAnimationFrame(() => {
         if (!block.isConnected) {
             return;
@@ -1381,8 +1676,8 @@ function scrollBlockIntoComfortableView(block: HTMLElement): void {
 
         const blockRect = block.getBoundingClientRect();
         const scrollerRect = scroller.getBoundingClientRect();
-        const topInset = Math.min(96, scrollerRect.height * 0.2);
-        const bottomInset = Math.min(160, scrollerRect.height * 0.28);
+        const topInset = mode === "comfortable" ? Math.min(64, scrollerRect.height * 0.12) : 18;
+        const bottomInset = mode === "comfortable" ? Math.min(112, scrollerRect.height * 0.2) : 36;
         const minimumTop = scrollerRect.top + topInset;
         const maximumBottom = scrollerRect.bottom - bottomInset;
 
@@ -1931,6 +2226,18 @@ function isCaretAtBlockEdge(block: HTMLElement, edge: "start" | "end"): boolean 
 
     const offset = getCaretOffset(content, selection.focusNode, selection.focusOffset);
     return edge === "start" ? offset === 0 : offset === getBlockText(block).length;
+}
+
+function selectBlockContents(block: HTMLElement): void {
+    const content = getBlockContent(block);
+    const selection = document.getSelection();
+    const range = document.createRange();
+
+    range.setStart(content, 0);
+    range.setEnd(content, content.childNodes.length);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    setPointerSelecting(true);
 }
 
 function selectEditorContents(editor: HTMLElement): void {

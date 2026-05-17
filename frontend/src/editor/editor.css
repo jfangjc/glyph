@@ -3,7 +3,10 @@
     height: 100vh;
     width: 100vw;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
+    overscroll-behavior: none;
     scroll-padding: 72px 0 120px;
     -ms-overflow-style: none;
     scrollbar-width: none;
@@ -14,11 +17,12 @@
 }
 
 .document-surface {
-    width: min(800px, 100%);
+    width: min(60vw, 1120px);
     min-height: 100vh;
     margin: 0 auto;
     padding: 72px 48px 120px 48px;
     cursor: text;
+    zoom: var(--glyph-editor-zoom, 1);
 }
 
 .document-title {
@@ -45,6 +49,8 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
+    min-height: 24px;
+    position: relative;
 }
 
 .todo-checkbox {
@@ -75,22 +81,48 @@
     pointer-events: none;
 }
 
-.block[data-active-block="true"] > .block-content::after {
+.block::after {
     content: "";
     position: absolute;
     top: 0.2rem;
-    left: -22px;
+    left: -34px;
     width: 3px;
     height: calc(100% - 0.4rem);
     min-height: 1rem;
     max-height: 2.5rem;
     border-radius: 999px;
-    background: var(--glyph-active-block-indicator);
+    background: transparent;
+    opacity: 0;
     pointer-events: none;
+    transform: scaleY(0.55);
+    transform-origin: center;
+    transition:
+        opacity 70ms ease,
+        transform 80ms ease,
+        background-color 80ms ease;
+}
+
+.block[data-active-block="true"]::after {
+    background: var(--glyph-active-block-indicator);
+    opacity: 1;
+    transform: scaleY(1);
+}
+
+.block[data-gutter-hover="true"]:not([data-active-block="true"])::after {
+    background: var(--glyph-hover-block-indicator);
+    opacity: 1;
+    transform: scaleY(0.7);
+}
+
+@media (max-width: 1060px) {
+    .document-surface {
+        width: 100%;
+    }
 }
 
 @media (max-width: 640px) {
     .document-surface {
+        width: 100%;
         padding: 56px 24px 96px;
     }
 
@@ -98,7 +130,7 @@
         font-size: 2.2rem;
     }
 
-    .block[data-active-block="true"] > .block-content::after {
-        left: -14px;
+    .block::after {
+        left: -20px;
     }
 }
