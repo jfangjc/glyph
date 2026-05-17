@@ -1,4 +1,4 @@
-import { Browser } from "@wailsio/runtime";
+import { Browser, Window } from "@wailsio/runtime";
 import {
     findAdjacentInactiveMarkdownToken,
     findMarkdownTokenAtCaret,
@@ -14,8 +14,19 @@ import { findFirstInlineToken, renderInlineMarkdown } from "../formats/markdown/
 import { parseMarkdownReferenceDefinition, type MarkdownReferenceMap } from "../formats/markdown/references";
 import { markdownShortcuts } from "../formats/markdown/shortcuts";
 import type { DocumentFile } from "../bridge/types";
-import { bindDocumentActions, openDocument, startDocumentAutosave } from "../documents/document-actions";
-import { documentState, markDocumentDirty } from "../documents/document-state";
+import {
+    bindDocumentActions,
+    canUseDesktopFileSystem,
+    openDocument,
+    saveCurrentDocument,
+    startDocumentAutosave,
+} from "../documents/document-actions";
+import {
+    documentState,
+    documentStateChangedEvent,
+    markDocumentDirty,
+    notifyDocumentStateChanged,
+} from "../documents/document-state";
 import { blockLabels, headingTypes, readBlockType, type BlockType, type ParsedBlock } from "./block-model";
 
 type SelectedBlockRange = {
@@ -35,32 +46,105 @@ let pendingHorizontalNavigationRequestId = 0;
 let pendingVerticalLeadingTokenNavigationRequestId = 0;
 let pendingVerticalLeadingTokenNavigationTarget: { requestId: number } | null = null;
 let markdownReferences: MarkdownReferenceMap = {};
+let indicatedActiveBlock: HTMLElement | null = null;
 
 export function installEditorController(): void {
+    const surface = getElement<HTMLElement>("document-surface");
     const editor = getElement<HTMLElement>("editor");
     const title = getElement<HTMLInputElement>("document-title");
 
+    surface.addEventListener("mousedown", handleDocumentSurfaceMouseDown);
     editor.addEventListener("keydown", handleEditorKeydown);
     editor.addEventListener("input", handleEditorInput);
     editor.addEventListener("paste", handleEditorPaste);
     editor.addEventListener("change", handleEditorChange);
     editor.addEventListener("click", handleEditorClick);
     title.addEventListener("input", handleTitleInput);
+    title.addEventListener("focus", () => syncActiveBlockIndicator(null));
     document.addEventListener("selectionchange", handleSelectionChange);
     window.addEventListener("keydown", handleGlobalKeydown);
+    window.addEventListener(documentStateChangedEvent, syncDocumentWindowTitle);
     bindDocumentActions({ loadDocument, serializeDocumentMarkdown });
     startDocumentAutosave();
 
     syncFirstBlockPlaceholder();
+    syncDocumentWindowTitle();
 }
 
 function handleGlobalKeydown(event: KeyboardEvent): void {
-    if (!isOpenFileShortcut(event)) {
+    if (!canUseDesktopFileSystem()) {
         return;
     }
 
-    event.preventDefault();
-    void openDocument();
+    if (isOpenFileShortcut(event)) {
+        event.preventDefault();
+        void openDocument();
+        return;
+    }
+
+    if (isSaveFileShortcut(event)) {
+        event.preventDefault();
+        void saveDocumentFromEditor(event.shiftKey);
+    }
+}
+
+async function saveDocumentFromEditor(promptForPath = false): Promise<void> {
+    await saveCurrentDocument({
+        promptForPath: promptForPath || !documentState.activeFilePath,
+        suggestedFileName: getSuggestedFileName(),
+    });
+}
+
+function syncDocumentWindowTitle(): void {
+    const fileName = documentState.activeFilePath
+        ? fileNameFromPath(documentState.activeFilePath)
+        : getSuggestedFileName();
+    const status = readDocumentStatusLabel(canUseDesktopFileSystem());
+    const title = status ? `${fileName} - ${status} - Glyph` : `${fileName} - Glyph`;
+
+    document.title = title;
+
+    if (canUseDesktopFileSystem()) {
+        void Window.SetTitle(title).catch((error) => console.error("Failed to update window title:", error));
+    }
+}
+
+function readDocumentStatusLabel(canUseFiles: boolean): string {
+    if (!canUseFiles) {
+        return documentState.hasUnsavedChanges ? "Unsaved preview" : "";
+    }
+
+    if (documentState.isSavingDocument) {
+        return "Saving...";
+    }
+
+    if (documentState.isOpeningDocument) {
+        return "Opening...";
+    }
+
+    if (documentState.hasUnsavedChanges) {
+        return "Unsaved";
+    }
+
+    return documentState.activeFilePath ? "" : "Not saved";
+}
+
+function getSuggestedFileName(): string {
+    const title = getElement<HTMLInputElement>("document-title").value.trim();
+    const baseName = title || fileNameFromPath(documentState.activeFilePath ?? "") || "Untitled";
+    const safeName = baseName
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+        .replace(/\s+/g, " ")
+        .replace(/[. ]+$/g, "")
+        .slice(0, 80)
+        .trim();
+
+    return safeName ? safeName : "Untitled";
+}
+
+function fileNameFromPath(path: string): string {
+    const normalized = path.replace(/\\/g, "/");
+    return normalized.slice(normalized.lastIndexOf("/") + 1) || path || "Untitled";
 }
 
 function handleTitleInput(): void {
@@ -68,9 +152,131 @@ function handleTitleInput(): void {
     markDocumentDirty();
 }
 
+function handleDocumentSurfaceMouseDown(event: MouseEvent): void {
+    if (event.button !== 0 || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return;
+    }
+
+    const target = event.target;
+    if (!(target instanceof Element) || shouldLetBrowserHandlePointerTarget(target)) {
+        return;
+    }
+
+    const block = findPointerTargetBlock(target, event.clientX, event.clientY);
+    if (!block) {
+        return;
+    }
+
+    event.preventDefault();
+    focusBlockAtOffset(block, getPointerCaretOffset(block, event.clientX, event.clientY));
+}
+
+function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
+    return Boolean(
+        target.closest(
+            "#document-title, .block-content, .todo-checkbox, button, input, textarea, select, [contenteditable='false']",
+        ),
+    );
+}
+
+function findPointerTargetBlock(target: Element, clientX: number, clientY: number): HTMLElement | null {
+    const directBlock = findBlock(target);
+    if (directBlock) {
+        return directBlock;
+    }
+
+    const blocks = getEditorBlocks();
+    if (blocks.length === 0) {
+        return null;
+    }
+
+    const firstBlock = blocks[0];
+    const firstRect = firstBlock.getBoundingClientRect();
+    if (clientY < firstRect.top) {
+        return firstBlock;
+    }
+
+    let previousBlock = firstBlock;
+    for (const block of blocks) {
+        const rect = block.getBoundingClientRect();
+
+        if (clientY >= rect.top && clientY <= rect.bottom) {
+            return block;
+        }
+
+        if (clientY < rect.top) {
+            return previousBlock;
+        }
+
+        previousBlock = block;
+    }
+
+    return ensurePointerTrailingParagraph();
+}
+
+function ensurePointerTrailingParagraph(): HTMLElement {
+    const blocks = getEditorBlocks();
+    const lastBlock = blocks[blocks.length - 1];
+
+    if (
+        lastBlock &&
+        readBlockType(lastBlock.dataset.type) === "paragraph" &&
+        getBlockText(lastBlock) === ""
+    ) {
+        return lastBlock;
+    }
+
+    const nextBlock = createBlock("paragraph");
+    nextBlock.dataset.transient = "true";
+
+    if (lastBlock) {
+        lastBlock.after(nextBlock);
+    } else {
+        getElement<HTMLElement>("editor").append(nextBlock);
+    }
+
+    syncFirstBlockPlaceholder();
+    return nextBlock;
+}
+
+function getPointerCaretOffset(block: HTMLElement, clientX: number, clientY: number): number {
+    const content = getBlockContent(block);
+    const caretPosition = getCaretPositionFromPoint(clientX, clientY);
+
+    if (caretPosition && (caretPosition.node === content || content.contains(caretPosition.node))) {
+        return getCaretOffset(content, caretPosition.node, caretPosition.offset);
+    }
+
+    const rect = content.getBoundingClientRect();
+    if (clientY < rect.top || clientX <= rect.left) {
+        return 0;
+    }
+
+    return getBlockText(block).length;
+}
+
+function getCaretPositionFromPoint(clientX: number, clientY: number): { node: Node; offset: number } | null {
+    const documentWithCaretPosition = document as Document & {
+        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const position = documentWithCaretPosition.caretPositionFromPoint?.(clientX, clientY);
+    if (position) {
+        return { node: position.offsetNode, offset: position.offset };
+    }
+
+    const range = documentWithCaretPosition.caretRangeFromPoint?.(clientX, clientY);
+    if (range) {
+        return { node: range.startContainer, offset: range.startOffset };
+    }
+
+    return null;
+}
+
 function handleEditorChange(event: Event): void {
     const target = event.target;
     if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
+        syncActiveBlockIndicator(findBlock(target));
         markDocumentDirty();
     }
 }
@@ -136,6 +342,8 @@ function handleSelectionChange(): void {
 
     const selection = document.getSelection();
     const focusNode = selection?.focusNode;
+    syncActiveBlockIndicator(findBlock(focusNode ?? null));
+
     const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
     const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
     const sourceToken = source ? getMarkdownTokenForSource(source) : null;
@@ -301,7 +509,7 @@ function focusMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "e
         return;
     }
 
-    const position = getTextPosition(source, edge === "start" ? 0 : source.textContent?.length ?? 0);
+    const position = getTextPosition(source, edge === "start" ? 0 : (source.textContent?.length ?? 0));
 
     range.setStart(position.node, position.offset);
     range.collapse(true);
@@ -365,7 +573,10 @@ function clearActiveMarkdownToken(
 }
 
 function hasActiveMarkdownTokenSourceEdits(token: HTMLElement): boolean {
-    return token.dataset.sourceBeforeActivation !== undefined && getMarkdownText(token) !== token.dataset.sourceBeforeActivation;
+    return (
+        token.dataset.sourceBeforeActivation !== undefined &&
+        getMarkdownText(token) !== token.dataset.sourceBeforeActivation
+    );
 }
 
 function isEditableMarkdownToken(token: HTMLElement): boolean {
@@ -373,9 +584,12 @@ function isEditableMarkdownToken(token: HTMLElement): boolean {
 }
 
 function getMarkdownTokenSource(token: HTMLElement): HTMLElement | null {
-    return Array.from(token.children).find(
-        (child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains("markdown-token-source"),
-    ) ?? null;
+    return (
+        Array.from(token.children).find(
+            (child): child is HTMLElement =>
+                child instanceof HTMLElement && child.classList.contains("markdown-token-source"),
+        ) ?? null
+    );
 }
 
 function getMarkdownTokenForSource(source: HTMLElement): HTMLElement | null {
@@ -403,11 +617,12 @@ function loadDocument(documentFile: DocumentFile): void {
     replaceEditorBlocks(parsedDocument.blocks);
     documentState.lastSavedMarkdown = serializeDocumentMarkdown();
     documentState.hasUnsavedChanges = false;
+    notifyDocumentStateChanged();
 }
 
 function serializeDocumentMarkdown(): string {
     const title = getElement<HTMLInputElement>("document-title").value;
-    return serializeMarkdownDocument(title, documentState.usesTitle, getEditorBlocks().map(readEditorBlock));
+    return serializeMarkdownDocument(title, documentState.usesTitle, getSerializableEditorBlocks().map(readEditorBlock));
 }
 
 function markEditorDirty(): void {
@@ -476,6 +691,25 @@ function readEditorBlock(block: HTMLElement): ParsedBlock {
     };
 }
 
+function getSerializableEditorBlocks(): HTMLElement[] {
+    const blocks = getEditorBlocks();
+    let endIndex = blocks.length;
+
+    while (endIndex > 1 && isEmptyTransientParagraph(blocks[endIndex - 1])) {
+        endIndex -= 1;
+    }
+
+    return blocks.slice(0, endIndex);
+}
+
+function isEmptyTransientParagraph(block: HTMLElement): boolean {
+    return (
+        block.dataset.transient === "true" &&
+        readBlockType(block.dataset.type) === "paragraph" &&
+        getBlockText(block) === ""
+    );
+}
+
 function replaceEditorBlocks(blocks: ParsedBlock[]): void {
     const editor = getElement<HTMLElement>("editor");
     const nextBlocks = blocks.map((block) => createBlock(block.type, block.text, block));
@@ -491,8 +725,6 @@ function syncFirstBlockPlaceholder(): void {
     if (!firstBlock) {
         return;
     }
-
-    getBlockContent(firstBlock).dataset.placeholder = "Start writing";
 
     for (const block of remainingBlocks) {
         delete getBlockContent(block).dataset.placeholder;
@@ -541,13 +773,20 @@ function handleEditorKeydown(event: KeyboardEvent): void {
 
     if (event.key === "Enter") {
         event.preventDefault();
-        if (readBlockType(block.dataset.type) === "code" && !event.ctrlKey && !event.metaKey) {
-            replaceSelectionWithText(block, "\n");
+        const targetBlock = deleteSelectedContent() ?? block;
+
+        if (startCodeBlockFromFence(targetBlock)) {
             markEditorDirty();
             return;
         }
 
-        splitBlock(deleteSelectedContent() ?? block);
+        if (readBlockType(targetBlock.dataset.type) === "code" && !event.ctrlKey && !event.metaKey) {
+            replaceSelectionWithText(targetBlock, "\n");
+            markEditorDirty();
+            return;
+        }
+
+        splitBlock(targetBlock);
         markEditorDirty();
         return;
     }
@@ -685,6 +924,8 @@ function handleEditorInput(event: Event): void {
         return;
     }
 
+    commitTransientBlock(block);
+
     if (isEditingMarkdownTokenSource()) {
         normalizeActiveMarkdownTokenSource(block);
         markEditorDirty();
@@ -778,8 +1019,13 @@ function handleEditorPaste(event: ClipboardEvent): void {
     }
 
     event.preventDefault();
+    commitTransientBlock(block);
     insertPastedText(block, text.replace(/\r\n?/g, "\n"));
     markEditorDirty();
+}
+
+function commitTransientBlock(block: HTMLElement): void {
+    delete block.dataset.transient;
 }
 
 function splitBlock(block: HTMLElement): void {
@@ -810,6 +1056,24 @@ function splitBlock(block: HTMLElement): void {
     setBlockText(block, before);
     block.after(nextBlock);
     focusBlockAtOffset(nextBlock, 0);
+}
+
+function startCodeBlockFromFence(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "paragraph" || !isCaretAtBlockEdge(block, "end")) {
+        return false;
+    }
+
+    const match = getBlockText(block).match(/^(`{3,}|~{3,})(.*)$/);
+    if (!match) {
+        return false;
+    }
+
+    setBlockType(block, "code");
+    setCodeInfo(block, match[2].trim());
+    setBlockText(block, "");
+    ensureEditableBlockAfter(block);
+    focusBlockAtOffset(block, 0);
+    return true;
 }
 
 function applyMarkdownShortcut(block: HTMLElement): boolean {
@@ -896,6 +1160,10 @@ function setBlockType(block: HTMLElement, type: BlockType): void {
 function setBlockText(block: HTMLElement, text: string): void {
     const content = getBlockContent(block);
     const type = readBlockType(block.dataset.type);
+
+    if (text !== "") {
+        delete block.dataset.transient;
+    }
 
     if (isPlainTextBlockType(type)) {
         content.textContent = text;
@@ -1078,6 +1346,55 @@ function focusBlockAtOffset(block: HTMLElement, offset: number): void {
     range.collapse(true);
     selection?.removeAllRanges();
     selection?.addRange(range);
+    syncActiveBlockIndicator(block);
+    scrollBlockIntoComfortableView(block);
+}
+
+function syncActiveBlockIndicator(block: HTMLElement | null): void {
+    const nextBlock = block?.isConnected ? block : null;
+
+    if (indicatedActiveBlock === nextBlock) {
+        return;
+    }
+
+    if (indicatedActiveBlock) {
+        delete indicatedActiveBlock.dataset.activeBlock;
+    }
+
+    indicatedActiveBlock = nextBlock;
+
+    if (indicatedActiveBlock) {
+        indicatedActiveBlock.dataset.activeBlock = "true";
+    }
+}
+
+function scrollBlockIntoComfortableView(block: HTMLElement): void {
+    window.requestAnimationFrame(() => {
+        if (!block.isConnected) {
+            return;
+        }
+
+        const scroller = document.querySelector<HTMLElement>(".editor-shell");
+        if (!scroller) {
+            return;
+        }
+
+        const blockRect = block.getBoundingClientRect();
+        const scrollerRect = scroller.getBoundingClientRect();
+        const topInset = Math.min(96, scrollerRect.height * 0.2);
+        const bottomInset = Math.min(160, scrollerRect.height * 0.28);
+        const minimumTop = scrollerRect.top + topInset;
+        const maximumBottom = scrollerRect.bottom - bottomInset;
+
+        if (blockRect.bottom > maximumBottom) {
+            scroller.scrollTop += blockRect.bottom - maximumBottom;
+            return;
+        }
+
+        if (blockRect.top < minimumTop) {
+            scroller.scrollTop -= minimumTop - blockRect.top;
+        }
+    });
 }
 
 function getCaretOffset(root: HTMLElement, anchorNode: Node, anchorOffset: number): number {
@@ -1166,12 +1483,7 @@ function findBlockFromBoundary(container: Node, offset: number, edge: "start" | 
     return blocks[offset - 1] ?? blocks[0] ?? null;
 }
 
-function getBoundaryOffset(
-    block: HTMLElement,
-    container: Node,
-    offset: number,
-    edge: "start" | "end",
-): number {
+function getBoundaryOffset(block: HTMLElement, container: Node, offset: number, edge: "start" | "end"): number {
     const content = getBlockContent(block);
     if (container === content || content.contains(container)) {
         return getCaretOffset(content, container, offset);
@@ -1364,7 +1676,10 @@ function insertPastedText(block: HTMLElement, text: string): void {
 }
 
 function shouldParsePastedMarkdown(text: string): boolean {
-    return text.includes("\n") || parseMarkdownFragment(text).blocks.some((block) => block.type !== "paragraph" || block.text !== text);
+    return (
+        text.includes("\n") ||
+        parseMarkdownFragment(text).blocks.some((block) => block.type !== "paragraph" || block.text !== text)
+    );
 }
 
 function replaceSingleLineBlockStartWithPastedMarkdown(block: HTMLElement, text: string, after: string): boolean {
@@ -1406,10 +1721,7 @@ function insertParsedPastedBlocksAfter(block: HTMLElement, text: string, after: 
     focusBlockAtOffset(focusBlock, focusTarget.offset);
 }
 
-function appendTextAfterParsedPaste(
-    blocks: ParsedBlock[],
-    after: string,
-): { blockIndex: number; offset: number } {
+function appendTextAfterParsedPaste(blocks: ParsedBlock[], after: string): { blockIndex: number; offset: number } {
     const lastBlockIndex = Math.max(0, blocks.length - 1);
     const lastBlock = blocks[lastBlockIndex];
     const focusOffset = lastBlock.text.length;
@@ -1522,7 +1834,8 @@ function getSiblingBlock(block: HTMLElement, direction: "previous" | "next"): HT
 function getOnlyInactiveImageToken(block: HTMLElement): HTMLElement | null {
     const content = getBlockContent(block);
     const tokens = Array.from(content.children).filter(
-        (child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains("markdown-image-token"),
+        (child): child is HTMLElement =>
+            child instanceof HTMLElement && child.classList.contains("markdown-image-token"),
     );
     const token = tokens.length === 1 ? tokens[0] : null;
 
@@ -1562,8 +1875,7 @@ function findVerticalMarkdownImageToken(block: HTMLElement, direction: "previous
         }
 
         const tokenRect = token.getBoundingClientRect();
-        const distance =
-            direction === "previous" ? caretRect.top - tokenRect.bottom : tokenRect.top - caretRect.bottom;
+        const distance = direction === "previous" ? caretRect.top - tokenRect.bottom : tokenRect.top - caretRect.bottom;
 
         if (distance < -1 || distance > maximumDistance) {
             continue;
@@ -1573,7 +1885,11 @@ function findVerticalMarkdownImageToken(block: HTMLElement, direction: "previous
         const tokenX = tokenRect.left + tokenRect.width / 2;
         const horizontalDistance = Math.abs(caretX - tokenX);
 
-        if (!best || distance < best.distance || (distance === best.distance && horizontalDistance < best.horizontalDistance)) {
+        if (
+            !best ||
+            distance < best.distance ||
+            (distance === best.distance && horizontalDistance < best.horizontalDistance)
+        ) {
             best = { token, distance, horizontalDistance };
         }
     }
@@ -1683,6 +1999,10 @@ function shouldResetEmptyBlock(type: BlockType): boolean {
 
 function isOpenFileShortcut(event: KeyboardEvent): boolean {
     return event.key.toLowerCase() === "o" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+}
+
+function isSaveFileShortcut(event: KeyboardEvent): boolean {
+    return event.key.toLowerCase() === "s" && (event.ctrlKey || event.metaKey) && !event.altKey;
 }
 
 function isSelectAllShortcut(event: KeyboardEvent): boolean {

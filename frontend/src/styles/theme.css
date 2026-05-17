@@ -1,3 +1,10 @@
+:root {
+    --glyph-font-text: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+    --glyph-font-title: var(--glyph-font-text);
+    --glyph-font-code: ui-monospace, "Cascadia Mono", "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", "Noto Sans Mono", "Ubuntu Mono", monospace;
+    --glyph-active-block-indicator: rgb(25 25 25 / 28%);
+}
+
 .block[data-type="heading-1"] .block-content {
     font-size: 1.75rem;
     font-weight: 700;
@@ -99,6 +106,12 @@
     grid-column: 2;
 }
 
+.block[data-type="todo"]:has(.todo-checkbox:checked) .block-content {
+    color: #777777;
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+}
+
 .block[data-type="list"][data-indent="1"] {
     margin-left: 1.5rem;
 }
@@ -159,10 +172,30 @@
     border-radius: 6px;
     padding: 10px 12px;
     background: #f6f6f6;
-    font-family: Consolas, "SFMono-Regular", monospace;
+    font-family: var(--glyph-font-code);
     font-size: 0.9rem;
     line-height: 1.55;
     tab-size: 4;
+}
+
+.block[data-type="code"][data-code-info] {
+    position: relative;
+}
+
+.block[data-type="code"][data-code-info]::after {
+    content: attr(data-code-info);
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    color: #767676;
+    font-size: 0.72rem;
+    line-height: 1;
+    pointer-events: none;
+    user-select: none;
+}
+
+.block[data-type="code"][data-code-info] .block-content {
+    padding-top: 26px;
 }
 
 .block[data-type="rule"] {
@@ -188,7 +221,7 @@
 
 .block[data-type="reference"] .block-content {
     color: #6b6b6b;
-    font-family: Consolas, "SFMono-Regular", monospace;
+    font-family: var(--glyph-font-code);
     font-size: 0.9rem;
 }
 
@@ -197,7 +230,7 @@
     padding: 0 0.25em;
     background: #eeeeee;
     color: #222222;
-    font-family: Consolas, "SFMono-Regular", monospace;
+    font-family: var(--glyph-font-code);
     font-size: 0.92em;
 }
 
@@ -225,13 +258,17 @@
     display: inline;
 }
 
+.markdown-code-token .markdown-token-source {
+    font-family: var(--glyph-font-code);
+}
+
 .markdown-escape {
     display: inline;
 }
 
 .markdown-link {
     color: #0a66c2;
-    cursor: pointer;
+    cursor: text;
     text-decoration: underline;
     text-decoration-thickness: 1px;
     text-underline-offset: 0.16em;
@@ -303,6 +340,7 @@
     border: 1px solid #d8d8d8;
     border-radius: 6px;
     background: #f8f8f8;
+    cursor: default;
 }
 
 .markdown-image-preview::before {

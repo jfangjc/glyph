@@ -24,6 +24,19 @@ export async function chooseDocumentToOpen(): Promise<string | null> {
     return selection || null;
 }
 
+export async function chooseDocumentToSave(filename: string): Promise<string | null> {
+    const selection = await Dialogs.SaveFile({
+        Title: "Save file",
+        ButtonText: "Save",
+        Filename: filename,
+        CanCreateDirectories: true,
+        AllowsOtherFiletypes: true,
+        Filters: textFileFilters,
+    });
+
+    return selection || null;
+}
+
 export function readDocument(path: string): Promise<DocumentFile> {
     return Call.ByName("glyph/internal/documents.Service.ReadDocument", path) as Promise<DocumentFile>;
 }

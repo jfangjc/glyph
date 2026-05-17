@@ -1,10 +1,15 @@
-import { chooseDocumentToOpen, readDocument, saveDocument } from "../bridge/documents";
+import { chooseDocumentToOpen, chooseDocumentToSave, readDocument, saveDocument } from "../bridge/documents";
 import type { DocumentFile } from "../bridge/types";
-import { documentState } from "./document-state";
+import { documentState, notifyDocumentStateChanged } from "./document-state";
 
 type DocumentActionHost = {
     loadDocument: (documentFile: DocumentFile) => void;
     serializeDocumentMarkdown: () => string;
+};
+
+type SaveDocumentOptions = {
+    promptForPath?: boolean;
+    suggestedFileName?: string;
 };
 
 const autoSaveIntervalMs = 30_000;
@@ -14,21 +19,32 @@ let host: DocumentActionHost | null = null;
 export function bindDocumentActions(nextHost: DocumentActionHost): void {
     host = nextHost;
     documentState.lastSavedMarkdown = nextHost.serializeDocumentMarkdown();
+    notifyDocumentStateChanged();
 }
 
 export function startDocumentAutosave(): number {
     return window.setInterval(() => void saveCurrentDocument(), autoSaveIntervalMs);
 }
 
+export function canUseDesktopFileSystem(): boolean {
+    return Boolean((window as Window & { _wails?: { environment?: unknown } })._wails?.environment);
+}
+
 export async function openDocument(): Promise<void> {
-    if (documentState.isOpeningDocument) {
+    if (documentState.isOpeningDocument || !canUseDesktopFileSystem()) {
         return;
     }
 
     documentState.isOpeningDocument = true;
+    notifyDocumentStateChanged();
 
     try {
-        if (documentState.activeFilePath && documentState.hasUnsavedChanges && !(await saveCurrentDocument())) {
+        if (
+            documentState.hasUnsavedChanges &&
+            !(await saveCurrentDocument({
+                promptForPath: !documentState.activeFilePath,
+            }))
+        ) {
             return;
         }
 
@@ -42,43 +58,63 @@ export async function openDocument(): Promise<void> {
         console.error("Failed to open file:", error);
     } finally {
         documentState.isOpeningDocument = false;
+        notifyDocumentStateChanged();
     }
 }
 
-export async function saveCurrentDocument(): Promise<boolean> {
-    if (!documentState.activeFilePath || !documentState.hasUnsavedChanges) {
+export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Promise<boolean> {
+    if (!canUseDesktopFileSystem()) {
+        return false;
+    }
+
+    if (!documentState.activeFilePath && !options.promptForPath) {
+        return true;
+    }
+
+    if (documentState.activeFilePath && !documentState.hasUnsavedChanges && !options.promptForPath) {
         return true;
     }
 
     if (documentState.isSavingDocument) {
         documentState.saveAgainAfterCurrent = true;
+        notifyDocumentStateChanged();
         return false;
     }
 
-    const path = documentState.activeFilePath;
+    const previousPath = documentState.activeFilePath;
+    const path = await resolveSavePath(options);
+    if (!path) {
+        return false;
+    }
+
     const content = getHost().serializeDocumentMarkdown();
 
-    if (content === documentState.lastSavedMarkdown) {
+    if (content === documentState.lastSavedMarkdown && !options.promptForPath) {
         documentState.hasUnsavedChanges = false;
+        notifyDocumentStateChanged();
         return true;
     }
 
     documentState.isSavingDocument = true;
+    notifyDocumentStateChanged();
     let saved = false;
 
     try {
         await saveDocument(path, content);
 
-        if (documentState.activeFilePath === path) {
+        if (documentState.activeFilePath === previousPath || options.promptForPath) {
+            documentState.activeFilePath = path;
             documentState.lastSavedMarkdown = content;
             documentState.hasUnsavedChanges = getHost().serializeDocumentMarkdown() !== documentState.lastSavedMarkdown;
         }
 
         saved = !documentState.hasUnsavedChanges;
     } catch (error) {
-        console.error("Failed to autosave file:", error);
+        documentState.hasUnsavedChanges = true;
+        console.error("Failed to save file:", error);
     } finally {
         documentState.isSavingDocument = false;
+        notifyDocumentStateChanged();
 
         if (documentState.saveAgainAfterCurrent) {
             documentState.saveAgainAfterCurrent = false;
@@ -87,6 +123,43 @@ export async function saveCurrentDocument(): Promise<boolean> {
     }
 
     return saved;
+}
+
+async function resolveSavePath(options: SaveDocumentOptions): Promise<string | null> {
+    if (!options.promptForPath && documentState.activeFilePath) {
+        return documentState.activeFilePath;
+    }
+
+    const selectedPath = await chooseDocumentToSave(
+        normalizeSuggestedFileName(
+            options.suggestedFileName ?? fileNameFromPath(documentState.activeFilePath) ?? "Untitled.md",
+        ),
+    );
+
+    if (!selectedPath) {
+        return null;
+    }
+
+    return selectedPath;
+}
+
+function normalizeSuggestedFileName(value: string): string {
+    const trimmed = value.trim() || "Untitled";
+
+    if (/[\\/]$/.test(trimmed)) {
+        return "Untitled.md";
+    }
+
+    return /\.[^\\/.\s]+$/.test(trimmed) ? trimmed : `${trimmed}.md`;
+}
+
+function fileNameFromPath(path: string | null): string | null {
+    if (!path) {
+        return null;
+    }
+
+    const normalized = path.replace(/\\/g, "/");
+    return normalized.slice(normalized.lastIndexOf("/") + 1) || null;
 }
 
 function getHost(): DocumentActionHost {

@@ -40,5 +40,4 @@ export const markdownShortcuts: MarkdownShortcut[] = [
     { marker: "---", type: "rule", exact: true },
     { marker: "***", type: "rule", exact: true },
     { marker: "___", type: "rule", exact: true },
-    { marker: "```", type: "code" },
 ];

@@ -4,6 +4,7 @@
     width: 100vw;
     overflow-y: auto;
     overscroll-behavior: contain;
+    scroll-padding: 72px 0 120px;
     -ms-overflow-style: none;
     scrollbar-width: none;
 }
@@ -17,6 +18,7 @@
     min-height: 100vh;
     margin: 0 auto;
     padding: 72px 48px 120px 48px;
+    cursor: text;
 }
 
 .document-title {
@@ -25,6 +27,7 @@
     outline: 0;
     background: transparent;
     color: #191919;
+    font-family: var(--glyph-font-title, var(--glyph-font-text));
     font-size: 2.75rem;
     font-weight: 700;
     line-height: 1.15;
@@ -33,7 +36,8 @@
 .block-editor {
     display: grid;
     gap: 0;
-    margin-top: 18px;
+    margin-top: 20px;
+    cursor: text;
     outline: 0;
 }
 
@@ -47,6 +51,7 @@
     display: none;
     width: 1rem;
     height: 1rem;
+    cursor: pointer;
 }
 
 .block[data-type="todo"] .todo-checkbox {
@@ -54,8 +59,10 @@
 }
 
 .block-content {
+    position: relative;
     width: 100%;
     min-height: 24px;
+    cursor: text;
     outline: 0;
     padding: 0;
     white-space: pre-wrap;
@@ -66,4 +73,32 @@
     color: #9a9a9a;
     content: attr(data-placeholder);
     pointer-events: none;
+}
+
+.block[data-active-block="true"] > .block-content::after {
+    content: "";
+    position: absolute;
+    top: 0.2rem;
+    left: -22px;
+    width: 3px;
+    height: calc(100% - 0.4rem);
+    min-height: 1rem;
+    max-height: 2.5rem;
+    border-radius: 999px;
+    background: var(--glyph-active-block-indicator);
+    pointer-events: none;
+}
+
+@media (max-width: 640px) {
+    .document-surface {
+        padding: 56px 24px 96px;
+    }
+
+    .document-title {
+        font-size: 2.2rem;
+    }
+
+    .block[data-active-block="true"] > .block-content::after {
+        left: -14px;
+    }
 }

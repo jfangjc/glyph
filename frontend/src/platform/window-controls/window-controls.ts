@@ -30,7 +30,7 @@ export function installWindowControls(): void {
 }
 
 function isWindowsHost(): boolean {
-    return System.IsWindows() || navigator.userAgent.includes("Windows") || navigator.platform.startsWith("Win");
+    return System.IsWindows();
 }
 
 function handleWindowControlClick(event: MouseEvent): void {
