@@ -57,6 +57,7 @@ let gutterHoverBlock: HTMLElement | null = null;
 let gutterHoverTimer = 0;
 let pointerDownSelectionStart: { x: number; y: number } | null = null;
 let isPointerSelecting = false;
+let isComposingText = false;
 let browserPreviewZoom = 1;
 
 export function installEditorController(): void {
@@ -77,6 +78,8 @@ export function installEditorController(): void {
     editor.addEventListener("paste", handleEditorPaste);
     editor.addEventListener("change", handleEditorChange);
     editor.addEventListener("click", handleEditorClick);
+    editor.addEventListener("compositionstart", handleEditorCompositionStart);
+    editor.addEventListener("compositionend", handleEditorCompositionEnd);
     title.addEventListener("input", handleTitleInput);
     title.addEventListener("focus", () => syncActiveBlockIndicator(null));
     document.addEventListener("selectionchange", handleSelectionChange);
@@ -1027,6 +1030,10 @@ function syncFirstBlockPlaceholder(): void {
 function handleEditorKeydown(event: KeyboardEvent): void {
     const editor = getElement<HTMLElement>("editor");
 
+    if (isCompositionEvent(event)) {
+        return;
+    }
+
     if (isSelectAllShortcut(event)) {
         event.preventDefault();
         selectEditorContents(editor);
@@ -1211,6 +1218,15 @@ function trackVerticalMarkdownImageNavigation(event: KeyboardEvent, block: HTMLE
     return true;
 }
 
+function handleEditorCompositionStart(): void {
+    isComposingText = true;
+}
+
+function handleEditorCompositionEnd(event: CompositionEvent): void {
+    isComposingText = false;
+    handleEditorInput(event);
+}
+
 function handleEditorInput(event: Event): void {
     const block = getActiveBlock(event.target);
     if (!block) {
@@ -1218,6 +1234,11 @@ function handleEditorInput(event: Event): void {
     }
 
     commitTransientBlock(block);
+
+    if (isCompositionEvent(event)) {
+        markDocumentDirty();
+        return;
+    }
 
     if (isEditingMarkdownTokenSource()) {
         normalizeActiveMarkdownTokenSource(block);
@@ -2335,6 +2356,16 @@ function readInlineFormatShortcut(event: KeyboardEvent): InlineFormat | null {
 
 function isPlainTextKey(event: KeyboardEvent): boolean {
     return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
+function isCompositionEvent(event: Event): boolean {
+    return (
+        isComposingText ||
+        (typeof InputEvent !== "undefined" && event instanceof InputEvent && event.isComposing) ||
+        (typeof KeyboardEvent !== "undefined" &&
+            event instanceof KeyboardEvent &&
+            (event.isComposing || event.key === "Process"))
+    );
 }
 
 function getElement<TElement extends HTMLElement>(id: string): TElement {

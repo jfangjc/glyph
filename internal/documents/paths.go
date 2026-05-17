@@ -61,7 +61,7 @@ func normalizeLocalPath(path string) (string, error) {
 		return "", fmt.Errorf("unsupported local image URL scheme: %s", parsedURL.Scheme)
 	}
 
-	if runtime.GOOS == "windows" && parsedURL.Host != "" {
+	if runtime.GOOS == "windows" && parsedURL.Host != "" && !strings.EqualFold(parsedURL.Host, "localhost") {
 		return `\\` + parsedURL.Host + filepath.FromSlash(parsedURL.Path), nil
 	}
 
