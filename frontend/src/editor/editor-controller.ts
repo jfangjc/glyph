@@ -42,8 +42,26 @@ type PointerBlockTarget = {
     offset: number;
 };
 
+type BlockMarkdownSource = {
+    prefix?: string;
+    suffix?: string;
+    atomic?: string;
+};
+
+type BlockMarkdownSourcePosition = "prefix" | "suffix" | "atomic";
+
 type InlineFormat = "bold" | "italic";
 type ZoomShortcut = "in" | "out" | "reset";
+
+const caretSpacerCharacter = String.fromCharCode(8203);
+
+const htmlEscapes: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+};
 
 let suppressSelectionChange = false;
 let suppressedMarkdownTokenActivation: { block: HTMLElement; offset: number } | null = null;
@@ -53,6 +71,8 @@ let pendingVerticalLeadingTokenNavigationRequestId = 0;
 let pendingVerticalLeadingTokenNavigationTarget: { requestId: number } | null = null;
 let markdownReferences: MarkdownReferenceMap = {};
 let indicatedActiveBlock: HTMLElement | null = null;
+let markdownSourceRevealBlocks: HTMLElement[] = [];
+let activeBlockMarkdownSource: { block: HTMLElement; rawBeforeActivation: string } | null = null;
 let gutterHoverBlock: HTMLElement | null = null;
 let gutterHoverTimer = 0;
 let pointerDownSelectionStart: { x: number; y: number } | null = null;
@@ -74,6 +94,7 @@ export function installEditorController(): void {
     document.addEventListener("mouseup", handleDocumentMouseUp);
     editor.addEventListener("keydown", handleEditorKeydown);
     editor.addEventListener("mousedown", handleEditorMouseDown);
+    editor.addEventListener("beforeinput", handleEditorBeforeInput);
     editor.addEventListener("input", handleEditorInput);
     editor.addEventListener("copy", handleEditorCopy);
     editor.addEventListener("cut", handleEditorCut);
@@ -83,7 +104,10 @@ export function installEditorController(): void {
     editor.addEventListener("compositionstart", handleEditorCompositionStart);
     editor.addEventListener("compositionend", handleEditorCompositionEnd);
     title.addEventListener("input", handleTitleInput);
-    title.addEventListener("focus", () => syncActiveBlockIndicator(null));
+    title.addEventListener("focus", () => {
+        syncActiveBlockIndicator(null);
+        syncBlockMarkdownSourceReveal(null);
+    });
     document.addEventListener("selectionchange", handleSelectionChange);
     window.addEventListener("keydown", handleGlobalKeydown);
     window.addEventListener("keyup", syncLinkOpenIntentFromKeyboard);
@@ -562,7 +586,13 @@ function clearLinkOpenIntent(): void {
 function handleEditorChange(event: Event): void {
     const target = event.target;
     if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
-        syncActiveBlockIndicator(findBlock(target));
+        const block = findBlock(target);
+        if (block) {
+            setBlockText(block, getBlockText(block));
+        }
+
+        syncActiveBlockIndicator(block);
+        syncBlockMarkdownSourceReveal(block);
         markDocumentDirty();
     }
 }
@@ -633,14 +663,19 @@ function handleSelectionChange(): void {
 
     const selection = document.getSelection();
     const focusNode = selection?.focusNode;
-    syncActiveBlockIndicator(findBlock(focusNode ?? null));
+    const focusBlock = findBlock(focusNode ?? null);
+    syncActiveBlockIndicator(focusBlock);
+    syncActiveBlockMarkdownSource(focusBlock);
 
     if (selection && !selection.isCollapsed) {
+        syncBlockMarkdownSourceReveal(null);
         pendingHorizontalNavigationTarget = null;
         pendingVerticalLeadingTokenNavigationTarget = null;
         setPointerSelecting(true);
         return;
     }
+
+    syncBlockMarkdownSourceReveal(focusBlock);
 
     const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
     const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
@@ -919,6 +954,7 @@ function loadDocument(documentFile: DocumentFile): void {
 }
 
 function serializeDocumentMarkdown(): string {
+    commitActiveBlockMarkdownSource();
     const title = getElement<HTMLInputElement>("document-title").value;
     return serializeMarkdownDocument(title, documentState.usesTitle, getSerializableEditorBlocks().map(readEditorBlock));
 }
@@ -982,10 +1018,12 @@ function readEditorBlock(block: HTMLElement): ParsedBlock {
         text: getBlockText(block),
         indent: readBlockIndent(block),
         checked: type === "todo" ? getTodoCheckbox(block).checked : undefined,
+        codeFence: readBlockCodeFence(block),
         codeInfo: block.dataset.codeInfo,
         listMarker: readBlockListMarker(block),
         listNumber: readBlockListNumber(block),
         quoteLevel: readBlockQuoteLevel(block),
+        ruleMarker: readBlockRuleMarker(block),
     };
 }
 
@@ -1047,6 +1085,10 @@ function handleEditorKeydown(event: KeyboardEvent): void {
         return;
     }
 
+    if (handleBlockMarkdownSourceKeydown(event)) {
+        return;
+    }
+
     const inlineFormat = readInlineFormatShortcut(event);
     if (inlineFormat) {
         event.preventDefault();
@@ -1061,6 +1103,9 @@ function handleEditorKeydown(event: KeyboardEvent): void {
         return;
     }
 
+    if (trackVerticalBlockSourceNavigation(event, block)) {
+        return;
+    }
     trackHorizontalMarkdownNavigation(event);
     trackVerticalLeadingTokenNavigation(event, block);
     if (trackVerticalMarkdownImageNavigation(event, block)) {
@@ -1078,6 +1123,11 @@ function handleEditorKeydown(event: KeyboardEvent): void {
         const targetBlock = deleteSelectedContent() ?? block;
 
         if (startCodeBlockFromFence(targetBlock)) {
+            markEditorDirty();
+            return;
+        }
+
+        if (moveCaretAfterCodeBlockSourceAtSelection(targetBlock)) {
             markEditorDirty();
             return;
         }
@@ -1100,6 +1150,11 @@ function handleEditorKeydown(event: KeyboardEvent): void {
             return;
         }
 
+        if (moveCaretIntoCodeBlockSourceAtBoundary(event, block)) {
+            event.preventDefault();
+            return;
+        }
+
         if (event.key === "Backspace" && removeOrMergeBackward(block)) {
             event.preventDefault();
             markEditorDirty();
@@ -1118,6 +1173,250 @@ function handleEditorKeydown(event: KeyboardEvent): void {
         replaceSelectionWithText(block, event.key);
         markEditorDirty();
     }
+}
+
+function handleEditorBeforeInput(event: InputEvent): void {
+    const source = getFocusedBlockMarkdownSource();
+    if (!source || source.textContent !== "" || event.inputType !== "insertText" || !event.data) {
+        return;
+    }
+
+    event.preventDefault();
+    source.textContent = event.data;
+    focusPlainTextElement(source, event.data.length);
+    markEditorDirty();
+}
+
+function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean {
+    const source = getFocusedBlockMarkdownSource();
+    if (!source) {
+        return false;
+    }
+
+    pendingHorizontalNavigationTarget = null;
+    pendingVerticalLeadingTokenNavigationTarget = null;
+
+    if (
+        (event.key === "Backspace" && isCaretAtPlainTextEdge(source, "start")) ||
+        (event.key === "Delete" && isCaretAtPlainTextEdge(source, "end"))
+    ) {
+        event.preventDefault();
+        return true;
+    }
+
+    if (deleteLastBlockMarkdownSourceCharacter(event, source)) {
+        event.preventDefault();
+        markEditorDirty();
+        return true;
+    }
+
+    if (event.key === "Enter" && moveCaretAfterCodeBlockSource(source)) {
+        event.preventDefault();
+        markEditorDirty();
+        return true;
+    }
+
+    if (event.key === "Enter" && splitAfterBlockMarkdownSource(source)) {
+        event.preventDefault();
+        markEditorDirty();
+        return true;
+    }
+
+    if (event.key === "Enter" || readInlineFormatShortcut(event)) {
+        event.preventDefault();
+    }
+
+    return true;
+}
+
+function deleteLastBlockMarkdownSourceCharacter(event: KeyboardEvent, source: HTMLElement): boolean {
+    if (event.key !== "Backspace" && event.key !== "Delete") {
+        return false;
+    }
+
+    const text = source.textContent ?? "";
+    if (text.length !== 1) {
+        return false;
+    }
+
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    if (!selection?.isCollapsed || !focusNode || (focusNode !== source && !source.contains(focusNode))) {
+        return false;
+    }
+
+    const offset = getPlainTextBoundaryOffset(source, focusNode, selection.focusOffset);
+    const isDeletingCharacter =
+        (event.key === "Backspace" && offset === text.length) || (event.key === "Delete" && offset === 0);
+    if (!isDeletingCharacter) {
+        return false;
+    }
+
+    source.textContent = "";
+    focusPlainTextElement(source, 0);
+    return true;
+}
+
+function moveCaretIntoCodeBlockSourceAtBoundary(event: KeyboardEvent, block: HTMLElement): boolean {
+    if (
+        readBlockType(block.dataset.type) !== "code" ||
+        block.dataset.markdownSourceActive !== "true" ||
+        (event.key !== "Backspace" && event.key !== "Delete")
+    ) {
+        return false;
+    }
+
+    if (event.key === "Backspace" && isCaretAtBlockEdge(block, "start")) {
+        return focusBlockMarkdownSource(block, "prefix", "end");
+    }
+
+    if (event.key === "Delete" && isCaretAtBlockEdge(block, "end")) {
+        return focusBlockMarkdownSource(block, "suffix", "start");
+    }
+
+    return false;
+}
+
+function focusBlockMarkdownSource(
+    block: HTMLElement,
+    position: BlockMarkdownSourcePosition,
+    edge: "start" | "end",
+): boolean {
+    const source = getBlockContent(block).querySelector<HTMLElement>(`.markdown-block-source-${position}`);
+    if (!source) {
+        return false;
+    }
+
+    focusPlainTextElement(source, edge === "start" ? 0 : (source.textContent ?? "").length);
+    return true;
+}
+
+function focusPlainTextElement(element: HTMLElement, offset: number): void {
+    const selection = document.getSelection();
+    const range = document.createRange();
+    const text = element.firstChild ?? element.appendChild(document.createTextNode(""));
+
+    range.setStart(text, Math.min(Math.max(0, offset), text.textContent?.length ?? 0));
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
+function splitAfterBlockMarkdownSource(source: HTMLElement): boolean {
+    const block = findBlock(source);
+    if (!block || readBlockType(block.dataset.type) === "code") {
+        return false;
+    }
+
+    commitActiveBlockMarkdownSource(null);
+
+    const type = readBlockType(block.dataset.type);
+    if (type === "code") {
+        focusBlockAtOffset(block, 0, { scroll: "none" });
+        return true;
+    }
+
+    if (type === "rule") {
+        ensureEditableBlockAfter(block);
+        focusBlockAtOffset(getSiblingBlock(block, "next") ?? block, 0);
+        return true;
+    }
+
+    focusBlockAtOffset(block, getBlockText(block).length, { scroll: "none" });
+    splitBlock(block);
+    return true;
+}
+
+function moveCaretAfterCodeBlockSource(source: HTMLElement): boolean {
+    const block = findBlock(source);
+    if (
+        !block ||
+        readBlockType(block.dataset.type) !== "code" ||
+        !source.classList.contains("markdown-block-source-suffix") ||
+        !isCaretAtPlainTextEdge(source, "end")
+    ) {
+        return false;
+    }
+
+    commitActiveBlockMarkdownSource(null);
+    ensureEditableBlockAfter(block);
+    focusBlockAtOffset(getSiblingBlock(block, "next") ?? block, 0);
+    return true;
+}
+
+function moveCaretAfterCodeBlockSourceAtSelection(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "code" || !isCaretAfterCodeBlockSuffixSource(block)) {
+        return false;
+    }
+
+    commitActiveBlockMarkdownSource(null);
+    ensureEditableBlockAfter(block);
+    focusBlockAtOffset(getSiblingBlock(block, "next") ?? block, 0);
+    return true;
+}
+
+function isCaretAfterCodeBlockSuffixSource(block: HTMLElement): boolean {
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const content = getBlockContent(block);
+    const suffix = content.querySelector<HTMLElement>(".markdown-block-source-suffix");
+
+    if (!selection?.isCollapsed || !focusNode || !suffix) {
+        return false;
+    }
+
+    if (getFocusedBlockMarkdownSource() === suffix) {
+        return isCaretAtPlainTextEdge(suffix, "end");
+    }
+
+    if (focusNode !== content) {
+        return false;
+    }
+
+    const suffixIndex = Array.from(content.childNodes).findIndex((child) => child === suffix);
+    return suffixIndex >= 0 && selection.focusOffset > suffixIndex;
+}
+
+function isCaretAtPlainTextEdge(element: HTMLElement, edge: "start" | "end"): boolean {
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    if (!selection?.isCollapsed || !focusNode || (focusNode !== element && !element.contains(focusNode))) {
+        return false;
+    }
+
+    const offset = getPlainTextBoundaryOffset(element, focusNode, selection.focusOffset);
+    return edge === "start" ? offset === 0 : offset === (element.textContent ?? "").length;
+}
+
+function trackVerticalBlockSourceNavigation(event: KeyboardEvent, block: HTMLElement): boolean {
+    if (
+        (event.key !== "ArrowUp" && event.key !== "ArrowDown") ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+    ) {
+        return false;
+    }
+
+    const direction = event.key === "ArrowUp" ? "previous" : "next";
+    const edge = direction === "previous" ? "start" : "end";
+    if (!isCaretAtBlockEdge(block, edge)) {
+        return false;
+    }
+
+    const target = getSiblingBlock(block, direction);
+    if (target && hasBlockMarkdownSource(readBlockType(target.dataset.type))) {
+        syncBlockMarkdownSourceReveal(target);
+
+        if (direction === "previous" && getBlockText(block) === "") {
+            event.preventDefault();
+            focusBlockAtOffset(target, getBlockText(target).length, { scroll: "minimal" });
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function trackHorizontalMarkdownNavigation(event: KeyboardEvent): void {
@@ -1242,8 +1541,18 @@ function handleEditorInput(event: Event): void {
         return;
     }
 
+    if (getFocusedBlockMarkdownSource()) {
+        markEditorDirty();
+        return;
+    }
+
     if (isEditingMarkdownTokenSource()) {
         normalizeActiveMarkdownTokenSource(block);
+        markEditorDirty();
+        return;
+    }
+
+    if (rerenderPlainTextBlockMarkdownSource(block)) {
         markEditorDirty();
         return;
     }
@@ -1324,6 +1633,184 @@ function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
 
     setBlockText(block, markdown);
     focusBlockAtOffset(block, Math.min(offset, getBlockText(block).length));
+}
+
+function syncActiveBlockMarkdownSource(focusBlock: HTMLElement | null): void {
+    const source = getFocusedBlockMarkdownSource();
+    const sourceBlock = source ? findBlock(source) : null;
+
+    if (source && sourceBlock) {
+        if (activeBlockMarkdownSource?.block !== sourceBlock) {
+            activeBlockMarkdownSource = {
+                block: sourceBlock,
+                rawBeforeActivation: getBlockRawMarkdown(sourceBlock),
+            };
+        }
+        return;
+    }
+
+    commitActiveBlockMarkdownSource(focusBlock);
+}
+
+function commitActiveBlockMarkdownSource(focusBlock: HTMLElement | null = findBlock(document.getSelection()?.focusNode ?? null)): void {
+    const active = activeBlockMarkdownSource;
+    activeBlockMarkdownSource = null;
+
+    if (!active?.block.isConnected) {
+        return;
+    }
+
+    const rawMarkdown = getBlockRawMarkdown(active.block);
+    if (rawMarkdown === active.rawBeforeActivation) {
+        return;
+    }
+
+    applyRawMarkdownToBlock(active.block, rawMarkdown, focusBlock);
+}
+
+function applyRawMarkdownToBlock(block: HTMLElement, rawMarkdown: string, focusBlock: HTMLElement | null): void {
+    const parsedBlock = parseEditedRawMarkdownBlock(block, rawMarkdown);
+    const selection = document.getSelection();
+    const shouldRestoreFocus = focusBlock === block && selection?.focusNode && !getFocusedBlockMarkdownSource();
+    const focusOffset = shouldRestoreFocus
+        ? getCaretOffset(getBlockContent(block), selection.focusNode, selection.focusOffset)
+        : null;
+
+    applyBlockProperties(block, parsedBlock);
+    setBlockText(block, parsedBlock.text);
+
+    if (focusOffset !== null) {
+        focusBlockAtOffset(block, Math.min(focusOffset, parsedBlock.text.length), { scroll: "none" });
+    }
+}
+
+function parseEditedRawMarkdownBlock(block: HTMLElement, rawMarkdown: string): ParsedBlock {
+    if (readBlockType(block.dataset.type) === "code") {
+        const codeSource = readCodeBlockSourceParts(block);
+        if (codeSource && !isValidCodeBlockSource(codeSource)) {
+            return {
+                type: "paragraph",
+                text: serializeInvalidCodeBlockSource(codeSource),
+            };
+        }
+    }
+
+    const parsedBlocks = parseMarkdownFragment(rawMarkdown).blocks;
+    return parsedBlocks.length === 1 ? parsedBlocks[0] : { type: "paragraph", text: rawMarkdown };
+}
+
+function getFocusedBlockMarkdownSource(): HTMLElement | null {
+    const focusNode = document.getSelection()?.focusNode;
+    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+
+    return focusElement?.closest<HTMLElement>(".markdown-block-source") ?? null;
+}
+
+function getBlockRawMarkdown(block: HTMLElement): string {
+    if (readBlockType(block.dataset.type) === "code") {
+        return getCodeBlockRawMarkdown(block);
+    }
+
+    let text = "";
+
+    for (const child of Array.from(getBlockContent(block).childNodes)) {
+        text += isBlockMarkdownSource(child) ? child.textContent ?? "" : getMarkdownText(child);
+    }
+
+    return text;
+}
+
+function getCodeBlockRawMarkdown(block: HTMLElement): string {
+    const source = readCodeBlockSourceParts(block);
+
+    return source ? `${source.prefix}\n${source.text}\n${source.suffix}` : getMarkdownText(getBlockContent(block));
+}
+
+function readCodeBlockSourceParts(block: HTMLElement): { prefix: string; text: string; suffix: string } | null {
+    const content = getBlockContent(block);
+    const prefix = content.querySelector<HTMLElement>(".markdown-block-source-prefix");
+    const body = content.querySelector<HTMLElement>(".markdown-code-block-body");
+    const suffix = content.querySelector<HTMLElement>(".markdown-block-source-suffix");
+
+    if (!prefix || !body || !suffix) {
+        return null;
+    }
+
+    return {
+        prefix: prefix.textContent ?? "",
+        text: getMarkdownText(body),
+        suffix: suffix.textContent ?? "",
+    };
+}
+
+function isValidCodeBlockSource(source: { prefix: string; suffix: string }): boolean {
+    const opening = source.prefix.trim().match(/^(`{3,}|~{3,})(.*)$/);
+    if (!opening) {
+        return false;
+    }
+
+    const marker = opening[1];
+    const closing = source.suffix.trim();
+    const markerCharacter = marker[0];
+
+    return (
+        closing.length >= marker.length &&
+        closing.split("").every((character) => character === markerCharacter)
+    );
+}
+
+function serializeInvalidCodeBlockSource(source: { prefix: string; text: string; suffix: string }): string {
+    const lines = [source.prefix, source.text];
+    if (source.suffix !== "") {
+        lines.push(source.suffix);
+    }
+
+    return lines.join("\n");
+}
+
+function getPlainTextBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
+    if (current === anchorNode) {
+        if (current.nodeType === Node.TEXT_NODE) {
+            return (current.textContent ?? "").slice(0, anchorOffset).length;
+        }
+
+        return Array.from(current.childNodes)
+            .slice(0, Math.max(0, anchorOffset))
+            .reduce((offset, child) => offset + (child.textContent ?? "").length, 0);
+    }
+
+    let offset = 0;
+    for (const child of Array.from(current.childNodes)) {
+        if (child === anchorNode || child.contains(anchorNode)) {
+            return offset + getPlainTextBoundaryOffset(child, anchorNode, anchorOffset);
+        }
+
+        offset += (child.textContent ?? "").length;
+    }
+
+    return offset;
+}
+
+function isBlockMarkdownSource(node: Node): node is HTMLElement {
+    return node instanceof HTMLElement && node.classList.contains("markdown-block-source");
+}
+
+function rerenderPlainTextBlockMarkdownSource(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "code") {
+        return false;
+    }
+
+    const content = getBlockContent(block);
+    const selection = document.getSelection();
+    const offset =
+        selection?.focusNode && (selection.focusNode === content || content.contains(selection.focusNode))
+            ? getCaretOffset(content, selection.focusNode, selection.focusOffset)
+            : getBlockText(block).length;
+    const text = getBlockText(block);
+
+    setBlockText(block, text);
+    focusBlockAtOffset(block, Math.min(offset, text.length), { scroll: "none" });
+    return true;
 }
 
 function handleEditorPaste(event: ClipboardEvent): void {
@@ -1468,15 +1955,21 @@ function createBlock(type: BlockType = "paragraph", text = "", options: Partial<
         throw new Error("Block template is missing [data-block]");
     }
 
-    setBlockType(block, type);
+    applyBlockProperties(block, { ...options, type });
+    setBlockText(block, text);
+    return block;
+}
+
+function applyBlockProperties(block: HTMLElement, options: Partial<ParsedBlock> & { type: BlockType }): void {
+    setBlockType(block, options.type);
     setBlockIndent(block, options.indent ?? 0);
     setBlockListMarker(block, options.listMarker);
     setBlockListNumber(block, options.listNumber);
     setBlockQuoteLevel(block, options.quoteLevel);
     setTodoChecked(block, options.checked ?? false);
+    setCodeFence(block, options.codeFence);
     setCodeInfo(block, options.codeInfo ?? "");
-    setBlockText(block, text);
-    return block;
+    setRuleMarker(block, options.ruleMarker);
 }
 
 function setBlockType(block: HTMLElement, type: BlockType): void {
@@ -1496,7 +1989,12 @@ function setBlockType(block: HTMLElement, type: BlockType): void {
     }
 
     if (type !== "code") {
+        delete block.dataset.codeFence;
         delete block.dataset.codeInfo;
+    }
+
+    if (type !== "rule") {
+        delete block.dataset.ruleMarker;
     }
 
     if (type !== "quote") {
@@ -1507,28 +2005,139 @@ function setBlockType(block: HTMLElement, type: BlockType): void {
 function setBlockText(block: HTMLElement, text: string): void {
     const content = getBlockContent(block);
     const type = readBlockType(block.dataset.type);
+    const source = readBlockMarkdownSource(block, type, text);
 
     if (text !== "") {
         delete block.dataset.transient;
     }
 
+    if (type === "code") {
+        renderCodeBlockContent(content, text, source);
+        delete content.dataset.renderedMarkdown;
+        return;
+    }
+
     if (isPlainTextBlockType(type)) {
-        content.textContent = text;
+        renderPlainTextBlockContent(content, text, source);
         delete content.dataset.renderedMarkdown;
         return;
     }
 
     if (isAtomicBlockType(type)) {
-        content.textContent = "";
+        renderAtomicBlockContent(content, source);
         delete content.dataset.renderedMarkdown;
         return;
     }
 
-    const html = renderInlineMarkdown(text, markdownReferences);
+    const html =
+        renderBlockMarkdownSourceHtml(source.prefix, "prefix") +
+        renderInlineMarkdown(text, markdownReferences) +
+        renderBlockMarkdownSourceHtml(source.suffix, "suffix");
 
     content.innerHTML = html;
     content.dataset.renderedMarkdown = html;
     hydrateMarkdownImagePreviews(content, documentState.activeFilePath);
+}
+
+function renderPlainTextBlockContent(content: HTMLElement, text: string, source: BlockMarkdownSource): void {
+    content.replaceChildren();
+    appendBlockMarkdownSourceElement(content, source.prefix, "prefix");
+    content.append(document.createTextNode(text));
+    appendBlockMarkdownSourceElement(content, source.suffix, "suffix");
+}
+
+function renderCodeBlockContent(content: HTMLElement, text: string, source: BlockMarkdownSource): void {
+    content.replaceChildren();
+    appendBlockMarkdownSourceElement(content, source.prefix, "prefix");
+    appendCodeBlockBodyElement(content, text);
+    appendBlockMarkdownSourceElement(content, source.suffix, "suffix");
+}
+
+function appendCodeBlockBodyElement(content: HTMLElement, text: string): void {
+    const body = document.createElement("span");
+    body.className = "markdown-code-block-body";
+    body.append(document.createTextNode(renderCodeBlockBodyText(text)));
+    content.append(body);
+}
+
+function renderCodeBlockBodyText(text: string): string {
+    return text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
+}
+
+function renderAtomicBlockContent(content: HTMLElement, source: BlockMarkdownSource): void {
+    content.replaceChildren();
+    appendBlockMarkdownSourceElement(content, source.atomic ?? source.prefix, "atomic");
+}
+
+function appendBlockMarkdownSourceElement(
+    content: HTMLElement,
+    value: string | undefined,
+    position: BlockMarkdownSourcePosition,
+): void {
+    if (!value) {
+        return;
+    }
+
+    const source = document.createElement("span");
+    source.className = `markdown-block-source markdown-block-source-${position}`;
+    source.dataset.markdownIgnore = "true";
+    source.spellcheck = false;
+    source.textContent = value;
+    content.append(source);
+}
+
+function renderBlockMarkdownSourceHtml(value: string | undefined, position: BlockMarkdownSourcePosition): string {
+    if (!value) {
+        return "";
+    }
+
+    return `<span class="markdown-block-source markdown-block-source-${position}" data-markdown-ignore="true" spellcheck="false">${escapeHtml(value)}</span>`;
+}
+
+function readBlockMarkdownSource(block: HTMLElement, type: BlockType, text: string): BlockMarkdownSource {
+    if (headingTypes.has(type)) {
+        return { prefix: `${"#".repeat(readHeadingLevel(type))} ` };
+    }
+
+    if (type === "list") {
+        return { prefix: `${readBlockListMarker(block) ?? "-"} ` };
+    }
+
+    if (type === "ordered-list") {
+        return { prefix: `${readBlockListNumber(block) ?? "1"}. ` };
+    }
+
+    if (type === "todo") {
+        return { prefix: `${readBlockListMarker(block) ?? "-"} [${getTodoCheckbox(block).checked ? "x" : " "}] ` };
+    }
+
+    if (type === "quote") {
+        const marker = ">".repeat(Math.max(1, readBlockQuoteLevel(block) ?? 1));
+        return { prefix: `${marker} ` };
+    }
+
+    if (type === "code") {
+        const fence = createCodeFence(text, readBlockCodeFence(block));
+        const codeInfo = block.dataset.codeInfo ? ` ${block.dataset.codeInfo}` : "";
+        return {
+            prefix: `${fence}${codeInfo}`,
+            suffix: fence,
+        };
+    }
+
+    if (type === "rule") {
+        return { atomic: readBlockRuleMarker(block) ?? "---" };
+    }
+
+    return {};
+}
+
+function hasBlockMarkdownSource(type: BlockType): boolean {
+    return headingTypes.has(type) || ["list", "ordered-list", "todo", "quote", "code", "rule"].includes(type);
+}
+
+function readHeadingLevel(type: BlockType): number {
+    return Number(type.slice("heading-".length)) || 1;
 }
 
 function setBlockIndent(block: HTMLElement, indent: number): void {
@@ -1573,6 +2182,15 @@ function setTodoChecked(block: HTMLElement, checked: boolean): void {
     getTodoCheckbox(block).checked = checked;
 }
 
+function setCodeFence(block: HTMLElement, codeFence: string | undefined): void {
+    if (readBlockType(block.dataset.type) === "code" && codeFence && /^(`{3,}|~{3,})$/.test(codeFence)) {
+        block.dataset.codeFence = codeFence;
+        return;
+    }
+
+    delete block.dataset.codeFence;
+}
+
 function setCodeInfo(block: HTMLElement, codeInfo: string): void {
     if (readBlockType(block.dataset.type) === "code" && codeInfo) {
         block.dataset.codeInfo = codeInfo;
@@ -1582,12 +2200,21 @@ function setCodeInfo(block: HTMLElement, codeInfo: string): void {
     delete block.dataset.codeInfo;
 }
 
+function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void {
+    if (readBlockType(block.dataset.type) === "rule" && ruleMarker && /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker)) {
+        block.dataset.ruleMarker = ruleMarker;
+        return;
+    }
+
+    delete block.dataset.ruleMarker;
+}
+
 function getBlockText(block: HTMLElement): string {
     const content = getBlockContent(block);
     const type = readBlockType(block.dataset.type);
 
     if (isPlainTextBlockType(type)) {
-        return content.textContent ?? "";
+        return getMarkdownText(content);
     }
 
     if (isAtomicBlockType(type)) {
@@ -1612,6 +2239,11 @@ function readBlockListNumber(block: HTMLElement): string | undefined {
     return number && /^\d{1,9}$/.test(number) ? number : undefined;
 }
 
+function readBlockCodeFence(block: HTMLElement): string | undefined {
+    const codeFence = block.dataset.codeFence;
+    return codeFence && /^(`{3,}|~{3,})$/.test(codeFence) ? codeFence : undefined;
+}
+
 function readNextListNumber(block: HTMLElement): string {
     const number = Number(readBlockListNumber(block) ?? "1");
     return Number.isFinite(number) ? String(number + 1) : "1";
@@ -1620,6 +2252,11 @@ function readNextListNumber(block: HTMLElement): string {
 function readBlockQuoteLevel(block: HTMLElement): number | undefined {
     const level = Number(block.dataset.quoteLevel ?? 1);
     return Number.isFinite(level) && level > 1 ? level : undefined;
+}
+
+function readBlockRuleMarker(block: HTMLElement): string | undefined {
+    const ruleMarker = block.dataset.ruleMarker;
+    return ruleMarker && /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker) ? ruleMarker : undefined;
 }
 
 function readSplitContinuationType(type: BlockType): BlockType {
@@ -1694,6 +2331,7 @@ function focusBlockAtOffset(block: HTMLElement, offset: number, options: { scrol
     selection?.removeAllRanges();
     selection?.addRange(range);
     syncActiveBlockIndicator(block);
+    syncBlockMarkdownSourceReveal(block);
     if (options.scroll !== "none") {
         scrollBlockIntoComfortableView(block, options.scroll ?? "comfortable");
     }
@@ -1714,6 +2352,33 @@ function syncActiveBlockIndicator(block: HTMLElement | null): void {
 
     if (indicatedActiveBlock) {
         indicatedActiveBlock.dataset.activeBlock = "true";
+    }
+}
+
+function syncBlockMarkdownSourceReveal(block: HTMLElement | null): void {
+    const nextBlocks = new Set<HTMLElement>();
+    const activeBlock = block?.isConnected ? block : null;
+
+    if (activeBlock) {
+        addBlockMarkdownSourceRevealTarget(nextBlocks, activeBlock);
+    }
+
+    for (const revealedBlock of markdownSourceRevealBlocks) {
+        if (!nextBlocks.has(revealedBlock)) {
+            delete revealedBlock.dataset.markdownSourceActive;
+        }
+    }
+
+    for (const revealedBlock of Array.from(nextBlocks)) {
+        revealedBlock.dataset.markdownSourceActive = "true";
+    }
+
+    markdownSourceRevealBlocks = Array.from(nextBlocks);
+}
+
+function addBlockMarkdownSourceRevealTarget(targets: Set<HTMLElement>, block: HTMLElement | null): void {
+    if (block?.isConnected && hasBlockMarkdownSource(readBlockType(block.dataset.type))) {
+        targets.add(block);
     }
 }
 
@@ -2356,7 +3021,11 @@ function renderBlockContent(block: HTMLElement): void {
             ? getCaretOffset(content, selection.focusNode, selection.focusOffset)
             : getBlockText(block).length;
     const text = getBlockText(block);
-    const html = renderInlineMarkdown(text, markdownReferences);
+    const source = readBlockMarkdownSource(block, type, text);
+    const html =
+        renderBlockMarkdownSourceHtml(source.prefix, "prefix") +
+        renderInlineMarkdown(text, markdownReferences) +
+        renderBlockMarkdownSourceHtml(source.suffix, "suffix");
 
     if (content.dataset.renderedMarkdown === html) {
         return;
@@ -2426,6 +3095,29 @@ function isCompositionEvent(event: Event): boolean {
             event instanceof KeyboardEvent &&
             (event.isComposing || event.key === "Process"))
     );
+}
+
+function createCodeFence(text: string, preferredFence?: string): string {
+    if (preferredFence && /^(`{3,}|~{3,})$/.test(preferredFence) && isCodeFenceSafe(text, preferredFence)) {
+        return preferredFence;
+    }
+
+    const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
+    return "`".repeat(Math.max(3, longestRun + 1));
+}
+
+function isCodeFenceSafe(text: string, fence: string): boolean {
+    const fenceCharacter = fence[0];
+    const closingFence = fenceCharacter.repeat(fence.length);
+
+    return !text.split("\n").some((line) => {
+        const trimmed = line.trim();
+        return trimmed.startsWith(closingFence) && trimmed.split("").every((character) => character === fenceCharacter);
+    });
+}
+
+function escapeHtml(value: string): string {
+    return value.replace(/[&<>"']/g, (character) => htmlEscapes[character]);
 }
 
 function getElement<TElement extends HTMLElement>(id: string): TElement {

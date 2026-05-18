@@ -19,10 +19,12 @@ export type ParsedBlock = {
     text: string;
     indent?: number;
     checked?: boolean;
+    codeFence?: string;
     codeInfo?: string;
     listMarker?: string;
     listNumber?: string;
     quoteLevel?: number;
+    ruleMarker?: string;
 };
 
 export type ParsedDocument = {

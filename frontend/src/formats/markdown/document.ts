@@ -72,7 +72,7 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
                 index += 1;
             }
 
-            blocks.push({ type: "code", text: codeLines.join("\n"), codeInfo: fence.info });
+            blocks.push({ type: "code", text: codeLines.join("\n"), codeFence: fence.marker, codeInfo: fence.info });
             continue;
         }
 
@@ -111,8 +111,9 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
             continue;
         }
 
-        if (isHorizontalRule(line)) {
-            blocks.push({ type: "rule", text: "" });
+        const horizontalRule = readHorizontalRuleMarker(line);
+        if (horizontalRule) {
+            blocks.push({ type: "rule", text: "", ruleMarker: horizontalRule });
             continue;
         }
 
@@ -204,15 +205,15 @@ function serializeMarkdownBlock(block: ParsedBlock): string {
     }
 
     if (block.type === "code") {
-        const fence = createCodeFence(block.text);
+        const fence = createCodeFence(block.text, block.codeFence);
         const codeInfo = block.codeInfo ? ` ${block.codeInfo}` : "";
-        const code = block.text.endsWith("\n") ? block.text : `${block.text}\n`;
+        const code = `${block.text}\n`;
 
         return `${fence}${codeInfo}\n${code}${fence}`;
     }
 
     if (block.type === "rule") {
-        return "---";
+        return block.ruleMarker ?? "---";
     }
 
     return block.text;
@@ -286,9 +287,15 @@ function isSetextHeadingUnderline(line: string | undefined, marker: "=" | "-"): 
 }
 
 function isHorizontalRule(line: string): boolean {
+    return readHorizontalRuleMarker(line) !== null;
+}
+
+function readHorizontalRuleMarker(line: string): string | null {
     const trimmed = line.trim();
 
-    return /^(\*\s*){3,}$/.test(trimmed) || /^(-\s*){3,}$/.test(trimmed) || /^(_\s*){3,}$/.test(trimmed);
+    return /^(\*\s*){3,}$/.test(trimmed) || /^(-\s*){3,}$/.test(trimmed) || /^(_\s*){3,}$/.test(trimmed)
+        ? trimmed
+        : null;
 }
 
 function isIndentedCodeLine(line: string, previousBlock: ParsedBlock | null): boolean {
@@ -396,10 +403,23 @@ function isClosingCodeFence(line: string, fence: string): boolean {
     return trimmed.startsWith(fenceCharacter.repeat(fence.length)) && trimmed.split("").every((char) => char === fenceCharacter);
 }
 
-function createCodeFence(text: string): string {
-    const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
+function createCodeFence(text: string, preferredFence?: string): string {
+    if (preferredFence && /^(`{3,}|~{3,})$/.test(preferredFence) && isCodeFenceSafe(text, preferredFence)) {
+        return preferredFence;
+    }
 
+    const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
     return "`".repeat(Math.max(3, longestRun + 1));
+}
+
+function isCodeFenceSafe(text: string, fence: string): boolean {
+    const fenceCharacter = fence[0];
+    const closingFence = fenceCharacter.repeat(fence.length);
+
+    return !text.split("\n").some((line) => {
+        const trimmed = line.trim();
+        return trimmed.startsWith(closingFence) && trimmed.split("").every((character) => character === fenceCharacter);
+    });
 }
 
 function titleFromFileName(fileName: string): string {

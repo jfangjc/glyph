@@ -68,6 +68,10 @@
     width: var(--list-dot-size);
 }
 
+.block[data-markdown-source-active="true"][data-type="list"]::before {
+    opacity: 0;
+}
+
 .block[data-type="list"] .block-content {
     grid-column: 2;
 }
@@ -89,6 +93,10 @@
     user-select: none;
 }
 
+.block[data-markdown-source-active="true"][data-type="ordered-list"]::before {
+    opacity: 0;
+}
+
 .block[data-type="ordered-list"] .block-content {
     grid-column: 2;
 }
@@ -102,6 +110,11 @@
     grid-column: 1;
     justify-self: center;
     margin: 0.18em 0 0;
+}
+
+.block[data-markdown-source-active="true"][data-type="todo"] .todo-checkbox {
+    pointer-events: none;
+    visibility: hidden;
 }
 
 .block[data-type="todo"] .block-content {
@@ -196,8 +209,16 @@
     user-select: none;
 }
 
+.block[data-markdown-source-active="true"][data-type="code"][data-code-info]::after {
+    display: none;
+}
+
 .block[data-type="code"][data-code-info] .block-content {
     padding-top: 26px;
+}
+
+.block[data-markdown-source-active="true"][data-type="code"][data-code-info] .block-content {
+    padding-top: 10px;
 }
 
 .block[data-type="rule"] {
@@ -219,6 +240,10 @@
     position: absolute;
     right: 0;
     top: 50%;
+}
+
+.block[data-markdown-source-active="true"][data-type="rule"] .block-content::before {
+    display: none;
 }
 
 .block[data-type="reference"] .block-content {
@@ -273,6 +298,37 @@
 }
 
 .markdown-code-token .markdown-token-source {
+    font-family: var(--glyph-font-code);
+}
+
+.markdown-block-source {
+    display: none;
+    color: #767676;
+    font: inherit;
+    white-space: pre;
+}
+
+.block[data-markdown-source-active="true"] .markdown-block-source {
+    display: inline;
+    user-select: text;
+}
+
+.block[data-markdown-source-active="true"][data-type="code"] .markdown-block-source {
+    display: block;
+}
+
+.markdown-code-block-body {
+    display: block;
+    min-height: 1lh;
+    white-space: pre-wrap;
+}
+
+.markdown-block-source:focus {
+    outline: 0;
+}
+
+.block[data-type="code"] .markdown-block-source,
+.block[data-type="reference"] .markdown-block-source {
     font-family: var(--glyph-font-code);
 }
 

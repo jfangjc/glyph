@@ -104,14 +104,14 @@ export function findMarkdownTokenAtCaret(
         return { token: containingToken, edge: offset <= 0 ? "start" : "end" };
     }
 
-    const nextToken = findAdjacentInactiveMarkdownToken(node, offset, "next");
-    if (nextToken && isTokenMatch(nextToken)) {
-        return { token: nextToken, edge: "start" };
-    }
-
     const previousToken = findAdjacentInactiveMarkdownToken(node, offset, "previous");
     if (previousToken && isTokenMatch(previousToken)) {
         return { token: previousToken, edge: "end" };
+    }
+
+    const nextToken = findAdjacentInactiveMarkdownToken(node, offset, "next");
+    if (nextToken && isTokenMatch(nextToken)) {
+        return { token: nextToken, edge: "start" };
     }
 
     return null;
