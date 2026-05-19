@@ -193,11 +193,7 @@
     tab-size: 4;
 }
 
-.block[data-type="code"][data-code-info] {
-    position: relative;
-}
-
-.block[data-type="code"][data-code-info]::after {
+.block[data-type="code"][data-code-info] .block-content::after {
     content: attr(data-code-info);
     position: absolute;
     top: 6px;
@@ -209,7 +205,7 @@
     user-select: none;
 }
 
-.block[data-markdown-source-active="true"][data-type="code"][data-code-info]::after {
+.block[data-markdown-source-active="true"][data-type="code"][data-code-info] .block-content::after {
     display: none;
 }
 

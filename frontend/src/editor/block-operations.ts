@@ -21,6 +21,7 @@ import {
     setBlockIndent,
     setBlockListMarker,
     setBlockListNumber,
+    setCodeFence,
     setBlockText,
     setBlockType,
     setCodeInfo,
@@ -31,6 +32,7 @@ import { readBlockType, type ParsedBlock } from "./block-model";
 import {
     focusBlock,
     focusBlockAtOffset,
+    focusPlainTextElement,
     getCaretOffset,
     getCollapsedSelectionRect,
     getCurrentBlockOffset,
@@ -91,6 +93,71 @@ export function startCodeBlockFromFence(block: HTMLElement): boolean {
     return true;
 }
 
+export function completeCodeBlockFromFencedParagraph(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "paragraph") {
+        return false;
+    }
+
+    const completedCodeBlock = readCompletedCodeFenceBlock(getBlockText(block));
+    if (!completedCodeBlock) {
+        return false;
+    }
+
+    const offset = getCurrentBlockOffset(block);
+
+    setBlockType(block, "code");
+    setCodeFence(block, completedCodeBlock.codeFence);
+    setCodeInfo(block, completedCodeBlock.codeInfo ?? "");
+    setBlockText(block, completedCodeBlock.text);
+    focusCompletedCodeBlock(block, completedCodeBlock, offset);
+    removeEmptyTransientBlockAfter(block);
+    return true;
+}
+
+export function insertLineBreakInOpenCodeFenceParagraph(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "paragraph") {
+        return false;
+    }
+
+    const text = getBlockText(block);
+    if (!isOpenCodeFenceParagraph(text)) {
+        return false;
+    }
+
+    insertTextAtCaret(block, "\n");
+    return true;
+}
+
+export function removeTrailingLineBreakInOpenCodeFenceParagraph(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "paragraph") {
+        return false;
+    }
+
+    const text = getBlockText(block);
+    if (!text.endsWith("\n") || !isOpenCodeFenceParagraph(text) || getCurrentBlockOffset(block) !== text.length) {
+        return false;
+    }
+
+    setBlockText(block, text.slice(0, -1));
+    focusBlockAtOffset(block, text.length - 1, { scroll: "none" });
+    return true;
+}
+
+export function removeTrailingLineBreakInCodeBlock(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "code") {
+        return false;
+    }
+
+    const text = getBlockText(block);
+    if (!text.endsWith("\n") || getCurrentBlockOffset(block) !== text.length) {
+        return false;
+    }
+
+    setBlockText(block, text.slice(0, -1));
+    focusBlockAtOffset(block, text.length - 1, { scroll: "none" });
+    return true;
+}
+
 export function applyMarkdownShortcut(block: HTMLElement): boolean {
     const text = getBlockText(block);
     const referenceDefinition = parseMarkdownReferenceDefinition(text);
@@ -125,6 +192,87 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
 
     focusBlock(block);
     return true;
+}
+
+function isOpenCodeFenceParagraph(rawMarkdown: string): boolean {
+    const lines = rawMarkdown.replace(/\r\n?/g, "\n").split("\n");
+    const opening = lines[0]?.trim().match(/^(`{3,}|~{3,})(.*)$/);
+    return Boolean(opening && !isClosingFenceLine(lines[lines.length - 1], opening[1]));
+}
+
+type CompletedCodeFenceBlock = ParsedBlock & {
+    type: "code";
+    openingLineLength: number;
+    closingLineStart: number;
+    closingLineLength: number;
+};
+
+function readCompletedCodeFenceBlock(rawMarkdown: string): CompletedCodeFenceBlock | null {
+    const lines = rawMarkdown.replace(/\r\n?/g, "\n").split("\n");
+    const opening = lines[0]?.trim().match(/^(`{3,}|~{3,})(.*)$/);
+    if (!opening || lines.length < 2) {
+        return null;
+    }
+
+    const closingLineIndex = lines.length - 1;
+    if (!isClosingFenceLine(lines[closingLineIndex], opening[1])) {
+        return null;
+    }
+
+    return {
+        type: "code",
+        text: lines.slice(1, closingLineIndex).join("\n"),
+        codeFence: opening[1],
+        codeInfo: opening[2].trim(),
+        openingLineLength: lines[0].length,
+        closingLineStart: lines.slice(0, closingLineIndex).join("\n").length + 1,
+        closingLineLength: lines[closingLineIndex].length,
+    };
+}
+
+function focusCompletedCodeBlock(block: HTMLElement, completedCodeBlock: CompletedCodeFenceBlock, rawOffset: number): void {
+    if (rawOffset >= completedCodeBlock.closingLineStart) {
+        block.dataset.markdownSourceActive = "true";
+        const suffix = getBlockContent(block).querySelector<HTMLElement>(".markdown-block-source-suffix");
+        if (suffix) {
+            focusPlainTextElement(
+                suffix,
+                Math.min(rawOffset - completedCodeBlock.closingLineStart, completedCodeBlock.closingLineLength),
+            );
+            return;
+        }
+    }
+
+    delete block.dataset.markdownSourceActive;
+    focusBlockAtOffset(
+        block,
+        Math.min(readCodeBodyFocusOffset(completedCodeBlock, rawOffset), completedCodeBlock.text.length),
+    );
+}
+
+function readCodeBodyFocusOffset(block: CompletedCodeFenceBlock, rawOffset: number): number {
+    return Math.max(0, rawOffset - block.openingLineLength - 1);
+}
+
+function removeEmptyTransientBlockAfter(block: HTMLElement): void {
+    const next = getSiblingBlock(block, "next");
+    if (
+        next?.dataset.transient === "true" &&
+        readBlockType(next.dataset.type) === "paragraph" &&
+        getBlockText(next) === ""
+    ) {
+        next.remove();
+    }
+}
+
+function isClosingFenceLine(line: string, openingFence: string): boolean {
+    const trimmed = line.trim();
+    const fenceCharacter = openingFence[0];
+
+    return (
+        trimmed.length >= openingFence.length &&
+        trimmed.split("").every((character) => character === fenceCharacter)
+    );
 }
 
 export function insertPastedText(block: HTMLElement, text: string): void {

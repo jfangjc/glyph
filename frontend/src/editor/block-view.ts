@@ -103,7 +103,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
         return;
     }
 
-    if (isPlainTextBlockType(type)) {
+    if (isPlainTextBlockType(type) || isOpenFencedCodeParagraph(type, text)) {
         renderPlainTextBlockContent(content, text, source);
         delete content.dataset.renderedMarkdown;
         return;
@@ -124,13 +124,18 @@ export function setBlockText(block: HTMLElement, text: string): void {
 
 export function rerenderInlineBlockContent(block: HTMLElement, offset: number): number | null {
     const type = readBlockType(block.dataset.type);
+    const text = getBlockText(block);
 
     if (!isInlineMarkdownBlockType(type)) {
         return null;
     }
 
+    if (isOpenFencedCodeParagraph(type, text)) {
+        setBlockText(block, text);
+        return Math.min(offset, text.length);
+    }
+
     const content = getBlockContent(block);
-    const text = getBlockText(block);
     const html = renderBlockInnerHtml(block, type, text, readBlockMarkdownSource(block, type, text));
 
     if (content.dataset.renderedMarkdown === html) {
@@ -160,7 +165,7 @@ function renderBlockInnerHtml(
 function renderPlainTextBlockContent(content: HTMLElement, text: string, source: BlockMarkdownSource): void {
     content.replaceChildren();
     appendBlockMarkdownSourceElement(content, source.prefix, "prefix");
-    content.append(document.createTextNode(text));
+    content.append(document.createTextNode(renderPlainTextContentText(text)));
     appendBlockMarkdownSourceElement(content, source.suffix, "suffix");
 }
 
@@ -174,11 +179,16 @@ function renderCodeBlockContent(content: HTMLElement, text: string, source: Bloc
 function appendCodeBlockBodyElement(content: HTMLElement, text: string): void {
     const body = document.createElement("span");
     body.className = "markdown-code-block-body";
+    body.spellcheck = false;
     body.append(document.createTextNode(renderCodeBlockBodyText(text)));
     content.append(body);
 }
 
 function renderCodeBlockBodyText(text: string): string {
+    return text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
+}
+
+function renderPlainTextContentText(text: string): string {
     return text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
 }
 
@@ -250,6 +260,14 @@ export function readBlockMarkdownSource(block: HTMLElement, type: BlockType, tex
     return {};
 }
 
+function isOpenFencedCodeParagraph(type: BlockType, text: string): boolean {
+    if (type !== "paragraph" || !text.includes("\n")) {
+        return false;
+    }
+
+    return Boolean(text.split("\n")[0]?.trim().match(/^(`{3,}|~{3,})(.*)$/));
+}
+
 export function hasBlockMarkdownSource(type: BlockType): boolean {
     return headingTypes.has(type) || ["list", "ordered-list", "todo", "quote", "code", "rule"].includes(type);
 }
@@ -310,12 +328,16 @@ export function setCodeFence(block: HTMLElement, codeFence: string | undefined):
 }
 
 export function setCodeInfo(block: HTMLElement, codeInfo: string): void {
+    const content = getBlockContent(block);
+
     if (readBlockType(block.dataset.type) === "code" && codeInfo) {
         block.dataset.codeInfo = codeInfo;
+        content.dataset.codeInfo = codeInfo;
         return;
     }
 
     delete block.dataset.codeInfo;
+    delete content.dataset.codeInfo;
 }
 
 export function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void {
@@ -482,8 +504,11 @@ export function getSiblingBlock(block: HTMLElement, direction: "previous" | "nex
 }
 
 export function clearBlockProperties(block: HTMLElement): void {
+    const text = getBlockText(block);
+
     setBlockType(block, "paragraph");
     setTodoChecked(block, false);
+    setBlockText(block, text);
 }
 
 export function ensureEditableBlockAfter(block: HTMLElement): void {
@@ -491,7 +516,9 @@ export function ensureEditableBlockAfter(block: HTMLElement): void {
         return;
     }
 
-    block.after(createBlock("paragraph"));
+    const nextBlock = createBlock("paragraph");
+    nextBlock.dataset.transient = "true";
+    block.after(nextBlock);
 }
 
 export function commitTransientBlock(block: HTMLElement): void {

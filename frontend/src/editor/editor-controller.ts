@@ -17,10 +17,14 @@ import {
 } from "../documents/document-state";
 import {
     applyMarkdownShortcut,
+    completeCodeBlockFromFencedParagraph,
     indentListBlocks,
+    insertLineBreakInOpenCodeFenceParagraph,
     insertPastedText,
     mergeForward,
     removeOrMergeBackward,
+    removeTrailingLineBreakInCodeBlock,
+    removeTrailingLineBreakInOpenCodeFenceParagraph,
     splitBlock,
     startCodeBlockFromFence,
 } from "./block-operations";
@@ -29,7 +33,6 @@ import {
     configureBlockView,
     createBlock,
     findBlock,
-    getBlockContent,
     getBlockText,
     getEditorBlocks,
     getSerializableEditorBlocks,
@@ -46,7 +49,7 @@ import {
     focusBlockAtOffset,
     focusPlainTextElement,
     getActiveBlock,
-    getCaretOffset,
+    getCurrentBlockOffset,
     getSelectedBlockRange,
     selectEditorContents,
 } from "./caret";
@@ -83,6 +86,7 @@ import {
 import {
     activateMarkdownTokenAtCaret,
     configureMarkdownTokenController,
+    getFocusedMarkdownTokenSource,
     handleEditorClick,
     handleSelectionChange,
     moveCaretOutOfActiveMarkdownTokenSource,
@@ -93,6 +97,7 @@ import {
     trackVerticalMarkdownImageNavigation,
 } from "./markdown-token-controller";
 import {
+    applyFocusedBlockMarkdownSourceInput,
     commitActiveBlockMarkdownSource,
     configureMarkdownSourceController,
     getFocusedBlockMarkdownSource,
@@ -372,10 +377,7 @@ function readMarkdownReferences(): MarkdownReferenceMap {
 function rerenderInlineMarkdownBlocks(): void {
     const selection = document.getSelection();
     const activeBlock = findBlock(selection?.focusNode ?? null);
-    const activeOffset =
-        activeBlock && selection?.focusNode
-            ? getCaretOffset(getBlockContent(activeBlock), selection.focusNode, selection.focusOffset)
-            : null;
+    const activeOffset = activeBlock ? getCurrentBlockOffset(activeBlock) : null;
 
     for (const block of getEditorBlocks()) {
         if (isInlineMarkdownBlockType(readBlockType(block.dataset.type))) {
@@ -468,6 +470,11 @@ function handleEditorKeydown(event: KeyboardEvent): void {
             return;
         }
 
+        if (insertLineBreakInOpenCodeFenceParagraph(targetBlock)) {
+            markEditorDirty();
+            return;
+        }
+
         splitBlock(targetBlock);
         markEditorDirty();
         return;
@@ -482,6 +489,18 @@ function handleEditorKeydown(event: KeyboardEvent): void {
 
         if (moveCaretIntoCodeBlockSourceAtBoundary(event, block)) {
             event.preventDefault();
+            return;
+        }
+
+        if (event.key === "Backspace" && removeTrailingLineBreakInCodeBlock(block)) {
+            event.preventDefault();
+            markEditorDirty();
+            return;
+        }
+
+        if (event.key === "Backspace" && removeTrailingLineBreakInOpenCodeFenceParagraph(block)) {
+            event.preventDefault();
+            markEditorDirty();
             return;
         }
 
@@ -507,13 +526,29 @@ function handleEditorKeydown(event: KeyboardEvent): void {
 
 function handleEditorBeforeInput(event: InputEvent): void {
     const source = getFocusedBlockMarkdownSource();
-    if (!source || source.textContent !== "" || event.inputType !== "insertText" || !event.data) {
+    if (source && source.textContent === "" && event.inputType === "insertText" && event.data) {
+        event.preventDefault();
+        source.textContent = event.data;
+        focusPlainTextElement(source, event.data.length);
+        applyFocusedBlockMarkdownSourceInput(source);
+        markEditorDirty();
+        return;
+    }
+
+    const block = getActiveBlock(event.target);
+    if (!block || event.inputType !== "insertText" || !event.data || readBlockType(block.dataset.type) !== "paragraph") {
+        return;
+    }
+
+    const text = getBlockText(block);
+    if (!text.endsWith("\n") || getCurrentBlockOffset(block) !== text.length) {
         return;
     }
 
     event.preventDefault();
-    source.textContent = event.data;
-    focusPlainTextElement(source, event.data.length);
+    setBlockText(block, text + event.data);
+    focusBlockAtOffset(block, text.length + event.data.length, { scroll: "none" });
+    completeFencedParagraph(block);
     markEditorDirty();
 }
 
@@ -539,12 +574,14 @@ function handleEditorInput(event: Event): void {
         return;
     }
 
-    if (getFocusedBlockMarkdownSource()) {
+    const blockMarkdownSource = getFocusedBlockMarkdownSource();
+    if (blockMarkdownSource) {
+        applyFocusedBlockMarkdownSourceInput(blockMarkdownSource);
         markEditorDirty();
         return;
     }
 
-    if (isEditingMarkdownTokenSource()) {
+    if (getFocusedMarkdownTokenSource()) {
         normalizeActiveMarkdownTokenSource(block);
         markEditorDirty();
         return;
@@ -555,18 +592,11 @@ function handleEditorInput(event: Event): void {
         return;
     }
 
-    if (!applyMarkdownShortcut(block)) {
+    if (!completeFencedParagraph(block) && !applyMarkdownShortcut(block)) {
         renderBlockContent(block);
     }
 
     markEditorDirty();
-}
-
-function isEditingMarkdownTokenSource(): boolean {
-    const focusNode = document.getSelection()?.focusNode;
-    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
-
-    return Boolean(focusElement?.closest(".markdown-token-source"));
 }
 
 function handleEditorPaste(event: ClipboardEvent): void {
@@ -654,19 +684,27 @@ function syncBlockMarkdownSourceReveal(block: HTMLElement | null): void {
 }
 
 function addBlockMarkdownSourceRevealTarget(targets: Set<HTMLElement>, block: HTMLElement | null): void {
-    if (block?.isConnected && hasBlockMarkdownSource(readBlockType(block.dataset.type))) {
+    if (!block?.isConnected) {
+        return;
+    }
+
+    const type = readBlockType(block.dataset.type);
+    if (hasBlockMarkdownSource(type)) {
         targets.add(block);
     }
 }
 
+function completeFencedParagraph(block: HTMLElement): boolean {
+    if (!completeCodeBlockFromFencedParagraph(block)) {
+        return false;
+    }
+
+    syncBlockMarkdownSourceReveal(block);
+    return true;
+}
+
 function renderBlockContent(block: HTMLElement): void {
-    const content = getBlockContent(block);
-    const selection = document.getSelection();
-    const offset =
-        selection?.focusNode && (selection.focusNode === content || content.contains(selection.focusNode))
-            ? getCaretOffset(content, selection.focusNode, selection.focusOffset)
-            : getBlockText(block).length;
-    const focusOffset = rerenderInlineBlockContent(block, offset);
+    const focusOffset = rerenderInlineBlockContent(block, getCurrentBlockOffset(block));
 
     if (focusOffset === null) {
         return;

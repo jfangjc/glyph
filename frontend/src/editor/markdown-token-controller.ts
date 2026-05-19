@@ -109,8 +109,7 @@ export function handleSelectionChange(): void {
 
     hooks.syncBlockMarkdownSourceReveal?.(focusBlock);
 
-    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
-    const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
+    const source = getFocusedMarkdownTokenSource();
     const sourceToken = source ? getMarkdownTokenForSource(source) : null;
 
     if (sourceToken) {
@@ -140,6 +139,13 @@ export function handleSelectionChange(): void {
 export function clearPendingMarkdownTokenNavigation(): void {
     pendingHorizontalNavigationTarget = null;
     pendingVerticalLeadingTokenNavigationTarget = null;
+}
+
+export function getFocusedMarkdownTokenSource(): HTMLElement | null {
+    const focusNode = document.getSelection()?.focusNode;
+    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+
+    return focusElement?.closest<HTMLElement>(".markdown-token-source") ?? null;
 }
 
 export function setActiveMarkdownToken(token: HTMLElement): void {
@@ -366,8 +372,7 @@ export function moveCaretOutOfActiveMarkdownTokenSource(event: KeyboardEvent, bl
 
     const selection = document.getSelection();
     const focusNode = selection?.focusNode;
-    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
-    const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
+    const source = getFocusedMarkdownTokenSource();
     const token = source ? getMarkdownTokenForSource(source) : null;
 
     if (!selection?.isCollapsed || !focusNode || !source || token?.dataset.active !== "true") {
@@ -392,25 +397,18 @@ export function moveCaretOutOfActiveMarkdownTokenSource(event: KeyboardEvent, bl
 export function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
     const selection = document.getSelection();
     const focusNode = selection?.focusNode;
-    const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
-    const source = focusElement?.closest<HTMLElement>(".markdown-token-source");
+    const source = getFocusedMarkdownTokenSource();
 
     if (!selection?.isCollapsed || !focusNode || !source) {
         return;
     }
 
-    if (source.closest(".markdown-format-token")) {
-        return;
-    }
-
     const text = getMarkdownText(source);
-    const tokenMatch = findFirstInlineToken(text);
-    if (!tokenMatch || (tokenMatch.start === 0 && tokenMatch.token.raw.length === text.length)) {
+    if (isCompleteInlineTokenSource(text)) {
         return;
     }
 
-    const content = getBlockContent(block);
-    const offset = getCaretOffset(content, focusNode, selection.focusOffset);
+    const offset = getCurrentBlockOffset(block);
     const markdown = getBlockText(block);
 
     setBlockText(block, markdown);
@@ -422,7 +420,14 @@ export function suppressAdjacentFormatTokenActivation(block: HTMLElement, offset
     const tokenPosition = findMarkdownTokenAtCaret(position.node, position.offset, isFormatMarkdownToken);
 
     if (tokenPosition) {
-        suppressedMarkdownTokenActivation = { block, offset };
+        const suppression = { block, offset };
+
+        suppressedMarkdownTokenActivation = suppression;
+        window.requestAnimationFrame(() => {
+            if (suppressedMarkdownTokenActivation === suppression) {
+                suppressedMarkdownTokenActivation = null;
+            }
+        });
     }
 }
 
@@ -458,6 +463,11 @@ function shouldSuppressMarkdownTokenActivation(selection: Selection): boolean {
 
     suppressedMarkdownTokenActivation = null;
     return false;
+}
+
+function isCompleteInlineTokenSource(text: string): boolean {
+    const tokenMatch = findFirstInlineToken(text);
+    return Boolean(tokenMatch && tokenMatch.start === 0 && tokenMatch.token.raw.length === text.length);
 }
 
 function revealPendingHorizontalNavigationTarget(): boolean {
