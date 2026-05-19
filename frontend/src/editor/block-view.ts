@@ -1,0 +1,511 @@
+import {
+    getMarkdownText,
+} from "../formats/markdown/dom";
+import { hydrateMarkdownImagePreviews } from "../formats/markdown/images";
+import { renderInlineMarkdown } from "../formats/markdown/inline";
+import type { MarkdownReferenceMap } from "../formats/markdown/references";
+import { blockLabels, headingTypes, readBlockType, type BlockType, type ParsedBlock } from "./block-model";
+import { getElement } from "./dom-utils";
+import { createCodeFence, escapeHtml } from "./text-utils";
+
+type BlockMarkdownSource = {
+    prefix?: string;
+    suffix?: string;
+    atomic?: string;
+};
+
+export type BlockMarkdownSourcePosition = "prefix" | "suffix" | "atomic";
+
+type BlockRenderContext = {
+    markdownReferences: MarkdownReferenceMap;
+    activeFilePath: string | null;
+};
+
+const caretSpacerCharacter = String.fromCharCode(8203);
+
+let renderContext: BlockRenderContext = {
+    markdownReferences: {},
+    activeFilePath: null,
+};
+
+export function configureBlockView(context: Partial<BlockRenderContext>): void {
+    renderContext = { ...renderContext, ...context };
+}
+
+export function createBlock(type: BlockType = "paragraph", text = "", options: Partial<ParsedBlock> = {}): HTMLElement {
+    const blockTemplate = getElement<HTMLTemplateElement>("block-template");
+    const fragment = blockTemplate.content.cloneNode(true) as DocumentFragment;
+    const block = fragment.querySelector<HTMLElement>("[data-block]");
+
+    if (!block) {
+        throw new Error("Block template is missing [data-block]");
+    }
+
+    applyBlockProperties(block, { ...options, type });
+    setBlockText(block, text);
+    return block;
+}
+
+export function applyBlockProperties(block: HTMLElement, options: Partial<ParsedBlock> & { type: BlockType }): void {
+    setBlockType(block, options.type);
+    setBlockIndent(block, options.indent ?? 0);
+    setBlockListMarker(block, options.listMarker);
+    setBlockListNumber(block, options.listNumber);
+    setBlockQuoteLevel(block, options.quoteLevel);
+    setTodoChecked(block, options.checked ?? false);
+    setCodeFence(block, options.codeFence);
+    setCodeInfo(block, options.codeInfo ?? "");
+    setRuleMarker(block, options.ruleMarker);
+}
+
+export function setBlockType(block: HTMLElement, type: BlockType): void {
+    block.dataset.type = type;
+    getBlockContent(block).setAttribute("aria-label", `${blockLabels[type]} block`);
+
+    if (!isIndentableListBlockType(type)) {
+        setBlockIndent(block, 0);
+    }
+
+    if (!usesBulletListMarker(type)) {
+        delete block.dataset.listMarker;
+    }
+
+    if (type !== "ordered-list") {
+        delete block.dataset.listNumber;
+    }
+
+    if (type !== "code") {
+        delete block.dataset.codeFence;
+        delete block.dataset.codeInfo;
+    }
+
+    if (type !== "rule") {
+        delete block.dataset.ruleMarker;
+    }
+
+    if (type !== "quote") {
+        delete block.dataset.quoteLevel;
+    }
+}
+
+export function setBlockText(block: HTMLElement, text: string): void {
+    const content = getBlockContent(block);
+    const type = readBlockType(block.dataset.type);
+    const source = readBlockMarkdownSource(block, type, text);
+
+    if (text !== "") {
+        delete block.dataset.transient;
+    }
+
+    if (type === "code") {
+        renderCodeBlockContent(content, text, source);
+        delete content.dataset.renderedMarkdown;
+        return;
+    }
+
+    if (isPlainTextBlockType(type)) {
+        renderPlainTextBlockContent(content, text, source);
+        delete content.dataset.renderedMarkdown;
+        return;
+    }
+
+    if (isAtomicBlockType(type)) {
+        renderAtomicBlockContent(content, source);
+        delete content.dataset.renderedMarkdown;
+        return;
+    }
+
+    const html = renderBlockInnerHtml(block, type, text, source);
+
+    content.innerHTML = html;
+    content.dataset.renderedMarkdown = html;
+    hydrateMarkdownImagePreviews(content, renderContext.activeFilePath);
+}
+
+export function rerenderInlineBlockContent(block: HTMLElement, offset: number): number | null {
+    const type = readBlockType(block.dataset.type);
+
+    if (!isInlineMarkdownBlockType(type)) {
+        return null;
+    }
+
+    const content = getBlockContent(block);
+    const text = getBlockText(block);
+    const html = renderBlockInnerHtml(block, type, text, readBlockMarkdownSource(block, type, text));
+
+    if (content.dataset.renderedMarkdown === html) {
+        return null;
+    }
+
+    content.innerHTML = html;
+    content.dataset.renderedMarkdown = html;
+    hydrateMarkdownImagePreviews(content, renderContext.activeFilePath);
+
+    return Math.min(offset, getBlockText(block).length);
+}
+
+function renderBlockInnerHtml(
+    block: HTMLElement,
+    type: BlockType,
+    text: string,
+    source: BlockMarkdownSource,
+): string {
+    return (
+        renderBlockMarkdownSourceHtml(source.prefix, "prefix") +
+        renderInlineMarkdown(text, renderContext.markdownReferences) +
+        renderBlockMarkdownSourceHtml(source.suffix, "suffix")
+    );
+}
+
+function renderPlainTextBlockContent(content: HTMLElement, text: string, source: BlockMarkdownSource): void {
+    content.replaceChildren();
+    appendBlockMarkdownSourceElement(content, source.prefix, "prefix");
+    content.append(document.createTextNode(text));
+    appendBlockMarkdownSourceElement(content, source.suffix, "suffix");
+}
+
+function renderCodeBlockContent(content: HTMLElement, text: string, source: BlockMarkdownSource): void {
+    content.replaceChildren();
+    appendBlockMarkdownSourceElement(content, source.prefix, "prefix");
+    appendCodeBlockBodyElement(content, text);
+    appendBlockMarkdownSourceElement(content, source.suffix, "suffix");
+}
+
+function appendCodeBlockBodyElement(content: HTMLElement, text: string): void {
+    const body = document.createElement("span");
+    body.className = "markdown-code-block-body";
+    body.append(document.createTextNode(renderCodeBlockBodyText(text)));
+    content.append(body);
+}
+
+function renderCodeBlockBodyText(text: string): string {
+    return text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
+}
+
+function renderAtomicBlockContent(content: HTMLElement, source: BlockMarkdownSource): void {
+    content.replaceChildren();
+    appendBlockMarkdownSourceElement(content, source.atomic ?? source.prefix, "atomic");
+}
+
+function appendBlockMarkdownSourceElement(
+    content: HTMLElement,
+    value: string | undefined,
+    position: BlockMarkdownSourcePosition,
+): void {
+    if (!value) {
+        return;
+    }
+
+    const source = document.createElement("span");
+    source.className = `markdown-block-source markdown-block-source-${position}`;
+    source.dataset.markdownIgnore = "true";
+    source.spellcheck = false;
+    source.textContent = value;
+    content.append(source);
+}
+
+export function renderBlockMarkdownSourceHtml(value: string | undefined, position: BlockMarkdownSourcePosition): string {
+    if (!value) {
+        return "";
+    }
+
+    return `<span class="markdown-block-source markdown-block-source-${position}" data-markdown-ignore="true" spellcheck="false">${escapeHtml(value)}</span>`;
+}
+
+export function readBlockMarkdownSource(block: HTMLElement, type: BlockType, text: string): BlockMarkdownSource {
+    if (headingTypes.has(type)) {
+        return { prefix: `${"#".repeat(readHeadingLevel(type))} ` };
+    }
+
+    if (type === "list") {
+        return { prefix: `${readBlockListMarker(block) ?? "-"} ` };
+    }
+
+    if (type === "ordered-list") {
+        return { prefix: `${readBlockListNumber(block) ?? "1"}. ` };
+    }
+
+    if (type === "todo") {
+        return { prefix: `${readBlockListMarker(block) ?? "-"} [${getTodoCheckbox(block).checked ? "x" : " "}] ` };
+    }
+
+    if (type === "quote") {
+        const marker = ">".repeat(Math.max(1, readBlockQuoteLevel(block) ?? 1));
+        return { prefix: `${marker} ` };
+    }
+
+    if (type === "code") {
+        const fence = createCodeFence(text, readBlockCodeFence(block));
+        const codeInfo = block.dataset.codeInfo ? ` ${block.dataset.codeInfo}` : "";
+        return {
+            prefix: `${fence}${codeInfo}`,
+            suffix: fence,
+        };
+    }
+
+    if (type === "rule") {
+        return { atomic: readBlockRuleMarker(block) ?? "---" };
+    }
+
+    return {};
+}
+
+export function hasBlockMarkdownSource(type: BlockType): boolean {
+    return headingTypes.has(type) || ["list", "ordered-list", "todo", "quote", "code", "rule"].includes(type);
+}
+
+export function readHeadingLevel(type: BlockType): number {
+    return Number(type.slice("heading-".length)) || 1;
+}
+
+export function setBlockIndent(block: HTMLElement, indent: number): void {
+    if (isIndentableListBlockType(readBlockType(block.dataset.type)) && indent > 0) {
+        block.dataset.indent = String(Math.min(indent, 3));
+        return;
+    }
+
+    delete block.dataset.indent;
+}
+
+export function setBlockListMarker(block: HTMLElement, marker: string | undefined): void {
+    const type = readBlockType(block.dataset.type);
+
+    if (usesBulletListMarker(type)) {
+        block.dataset.listMarker = marker && ["-", "*", "+"].includes(marker) ? marker : "-";
+        return;
+    }
+
+    delete block.dataset.listMarker;
+}
+
+export function setBlockListNumber(block: HTMLElement, value: string | undefined): void {
+    if (readBlockType(block.dataset.type) === "ordered-list") {
+        block.dataset.listNumber = value && /^\d{1,9}$/.test(value) ? value : "1";
+        return;
+    }
+
+    delete block.dataset.listNumber;
+}
+
+export function setBlockQuoteLevel(block: HTMLElement, level: number | undefined): void {
+    if (readBlockType(block.dataset.type) === "quote" && level && level > 1) {
+        block.dataset.quoteLevel = String(Math.min(level, 6));
+        return;
+    }
+
+    delete block.dataset.quoteLevel;
+}
+
+export function setTodoChecked(block: HTMLElement, checked: boolean): void {
+    getTodoCheckbox(block).checked = checked;
+}
+
+export function setCodeFence(block: HTMLElement, codeFence: string | undefined): void {
+    if (readBlockType(block.dataset.type) === "code" && codeFence && /^(`{3,}|~{3,})$/.test(codeFence)) {
+        block.dataset.codeFence = codeFence;
+        return;
+    }
+
+    delete block.dataset.codeFence;
+}
+
+export function setCodeInfo(block: HTMLElement, codeInfo: string): void {
+    if (readBlockType(block.dataset.type) === "code" && codeInfo) {
+        block.dataset.codeInfo = codeInfo;
+        return;
+    }
+
+    delete block.dataset.codeInfo;
+}
+
+export function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void {
+    if (readBlockType(block.dataset.type) === "rule" && ruleMarker && /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker)) {
+        block.dataset.ruleMarker = ruleMarker;
+        return;
+    }
+
+    delete block.dataset.ruleMarker;
+}
+
+export function getBlockText(block: HTMLElement): string {
+    const content = getBlockContent(block);
+    const type = readBlockType(block.dataset.type);
+
+    if (isPlainTextBlockType(type)) {
+        return getMarkdownText(content);
+    }
+
+    if (isAtomicBlockType(type)) {
+        return "";
+    }
+
+    return getMarkdownText(content);
+}
+
+export function readBlockIndent(block: HTMLElement): number {
+    const indent = Number(block.dataset.indent ?? 0);
+    return Number.isFinite(indent) ? indent : 0;
+}
+
+export function readBlockListMarker(block: HTMLElement): string | undefined {
+    const marker = block.dataset.listMarker;
+    return marker && ["-", "*", "+"].includes(marker) ? marker : undefined;
+}
+
+export function readBlockListNumber(block: HTMLElement): string | undefined {
+    const number = block.dataset.listNumber;
+    return number && /^\d{1,9}$/.test(number) ? number : undefined;
+}
+
+export function readBlockCodeFence(block: HTMLElement): string | undefined {
+    const codeFence = block.dataset.codeFence;
+    return codeFence && /^(`{3,}|~{3,})$/.test(codeFence) ? codeFence : undefined;
+}
+
+export function readNextListNumber(block: HTMLElement): string {
+    const number = Number(readBlockListNumber(block) ?? "1");
+    return Number.isFinite(number) ? String(number + 1) : "1";
+}
+
+export function readBlockQuoteLevel(block: HTMLElement): number | undefined {
+    const level = Number(block.dataset.quoteLevel ?? 1);
+    return Number.isFinite(level) && level > 1 ? level : undefined;
+}
+
+export function readBlockRuleMarker(block: HTMLElement): string | undefined {
+    const ruleMarker = block.dataset.ruleMarker;
+    return ruleMarker && /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker) ? ruleMarker : undefined;
+}
+
+export function readEditorBlock(block: HTMLElement): ParsedBlock {
+    const type = readBlockType(block.dataset.type);
+
+    return {
+        type,
+        text: getBlockText(block),
+        indent: readBlockIndent(block),
+        checked: type === "todo" ? getTodoCheckbox(block).checked : undefined,
+        codeFence: readBlockCodeFence(block),
+        codeInfo: block.dataset.codeInfo,
+        listMarker: readBlockListMarker(block),
+        listNumber: readBlockListNumber(block),
+        quoteLevel: readBlockQuoteLevel(block),
+        ruleMarker: readBlockRuleMarker(block),
+    };
+}
+
+export function getSerializableEditorBlocks(): HTMLElement[] {
+    const blocks = getEditorBlocks();
+    let endIndex = blocks.length;
+
+    while (endIndex > 1 && isEmptyTransientParagraph(blocks[endIndex - 1])) {
+        endIndex -= 1;
+    }
+
+    return blocks.slice(0, endIndex);
+}
+
+function isEmptyTransientParagraph(block: HTMLElement): boolean {
+    return (
+        block.dataset.transient === "true" &&
+        readBlockType(block.dataset.type) === "paragraph" &&
+        getBlockText(block) === ""
+    );
+}
+
+export function readSplitContinuationType(type: BlockType): BlockType {
+    return headingTypes.has(type) || isStandaloneBlockType(type) ? "paragraph" : type;
+}
+
+export function isInlineMarkdownBlockType(type: BlockType): boolean {
+    return !isStandaloneBlockType(type);
+}
+
+export function isStandaloneBlockType(type: BlockType): boolean {
+    return isPlainTextBlockType(type) || isAtomicBlockType(type);
+}
+
+export function isPlainTextBlockType(type: BlockType): boolean {
+    return type === "code" || type === "reference";
+}
+
+export function isAtomicBlockType(type: BlockType): boolean {
+    return type === "rule";
+}
+
+export function isIndentableListBlockType(type: BlockType): boolean {
+    return type === "list" || type === "ordered-list" || type === "todo";
+}
+
+export function usesBulletListMarker(type: BlockType): boolean {
+    return type === "list" || type === "todo";
+}
+
+export function shouldResetEmptyBlock(type: BlockType): boolean {
+    return isIndentableListBlockType(type) || type === "quote" || type === "reference";
+}
+
+export function getBlockContent(block: HTMLElement): HTMLElement {
+    const content = block.querySelector<HTMLElement>(".block-content");
+    if (!content) {
+        throw new Error("Block is missing .block-content");
+    }
+    return content;
+}
+
+export function getTodoCheckbox(block: HTMLElement): HTMLInputElement {
+    const checkbox = block.querySelector<HTMLInputElement>(".todo-checkbox");
+    if (!checkbox) {
+        throw new Error("Block is missing .todo-checkbox");
+    }
+
+    return checkbox;
+}
+
+export function findBlock(target: EventTarget | Node | null): HTMLElement | null {
+    if (!(target instanceof Node)) {
+        return null;
+    }
+
+    const element = target instanceof Element ? target : target.parentElement;
+    return element?.closest("[data-block]") as HTMLElement | null;
+}
+
+export function getEditorBlocks(): HTMLElement[] {
+    const editor = getElement<HTMLElement>("editor");
+    return Array.from(editor.querySelectorAll<HTMLElement>("[data-block]"));
+}
+
+export function getSiblingBlock(block: HTMLElement, direction: "previous" | "next"): HTMLElement | null {
+    const sibling = direction === "previous" ? block.previousElementSibling : block.nextElementSibling;
+    return sibling instanceof HTMLElement && sibling.matches("[data-block]") ? sibling : null;
+}
+
+export function clearBlockProperties(block: HTMLElement): void {
+    setBlockType(block, "paragraph");
+    setTodoChecked(block, false);
+}
+
+export function ensureEditableBlockAfter(block: HTMLElement): void {
+    if (getSiblingBlock(block, "next")) {
+        return;
+    }
+
+    block.after(createBlock("paragraph"));
+}
+
+export function commitTransientBlock(block: HTMLElement): void {
+    delete block.dataset.transient;
+}
+
+export function syncFirstBlockPlaceholder(): void {
+    const [firstBlock, ...remainingBlocks] = getEditorBlocks();
+
+    if (!firstBlock) {
+        return;
+    }
+
+    for (const block of remainingBlocks) {
+        delete getBlockContent(block).dataset.placeholder;
+    }
+}
