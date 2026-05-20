@@ -1,8 +1,7 @@
-import { serializeMarkdownDocument } from "../formats/markdown/document";
 import {
     getBlockContent,
     getBlockText,
-    isInlineMarkdownBlockType,
+    isRichTextBlockType,
     readEditorBlock,
     setBlockText,
     setBlockType,
@@ -14,18 +13,19 @@ import {
     getSelectedBlockRange,
     type SelectedBlockRange,
 } from "./caret";
+import type { ParsedBlock } from "./block-model";
 import type { InlineFormat } from "./keyboard-shortcuts";
 
-export function readSelectedMarkdown(): string | null {
+export function readSelectedContent(serializeBlocks: (blocks: ParsedBlock[]) => string): string | null {
     const selectedRange = getSelectedBlockRange();
     if (!selectedRange) {
         return null;
     }
 
     const selectedBlocks = selectedRange.blocks.map((block) => readSelectedEditorBlock(block, selectedRange));
-    const markdown = serializeMarkdownDocument("", false, selectedBlocks);
+    const content = serializeBlocks(selectedBlocks);
 
-    return markdown.endsWith("\n") ? markdown.slice(0, -1) : markdown;
+    return content.endsWith("\n") ? content.slice(0, -1) : content;
 }
 
 export function deleteSelectedContent(): HTMLElement | null {
@@ -86,7 +86,7 @@ export function insertTextAtCaret(block: HTMLElement, text: string): void {
     focusBlockAtOffset(block, offset + text.length);
 }
 
-function readSelectedEditorBlock(block: HTMLElement, selectedRange: SelectedBlockRange) {
+function readSelectedEditorBlock(block: HTMLElement, selectedRange: SelectedBlockRange): ParsedBlock {
     const text = getBlockText(block);
     const startOffset = block === selectedRange.startBlock ? selectedRange.startOffset : 0;
     const endOffset = block === selectedRange.endBlock ? selectedRange.endOffset : text.length;
@@ -102,7 +102,7 @@ function readSelectedEditorBlock(block: HTMLElement, selectedRange: SelectedBloc
 }
 
 function insertInlineFormatPair(block: HTMLElement, marker: string): boolean {
-    if (!isInlineMarkdownBlockType(readBlockType(block.dataset.type))) {
+    if (!isRichTextBlockType(readBlockType(block.dataset.type))) {
         return false;
     }
 
@@ -123,7 +123,7 @@ function toggleInlineFormatForSelection(selectedRange: SelectedBlockRange, marke
     let focusTarget: { block: HTMLElement; offset: number } | null = null;
 
     for (const block of selectedRange.blocks) {
-        if (!isInlineMarkdownBlockType(readBlockType(block.dataset.type))) {
+        if (!isRichTextBlockType(readBlockType(block.dataset.type))) {
             continue;
         }
 

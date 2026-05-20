@@ -1,9 +1,9 @@
 import {
-    findMarkdownTextPosition,
-    getMarkdownBoundaryOffset,
-    getMarkdownLengthBeforeChild,
-    getMarkdownText,
-} from "../formats/markdown/dom";
+    findRenderedContentTextPosition,
+    getRenderedContentBoundaryOffset,
+    getRenderedContentLengthBeforeChild,
+    getRenderedContentText,
+} from "./rendered-content-dom";
 import {
     findBlock,
     getBlockContent,
@@ -89,14 +89,14 @@ export function getCaretPositionFromPoint(clientX: number, clientY: number): { n
 
 export function getCaretOffset(root: HTMLElement, anchorNode: Node, anchorOffset: number): number {
     if (anchorNode === root) {
-        return getMarkdownLengthBeforeChild(root, anchorOffset);
+        return getRenderedContentLengthBeforeChild(root, anchorOffset);
     }
 
     if (!root.contains(anchorNode)) {
-        return getMarkdownText(root).length;
+        return getRenderedContentText(root).length;
     }
 
-    return getMarkdownBoundaryOffset(root, anchorNode, anchorOffset);
+    return getRenderedContentBoundaryOffset(root, anchorNode, anchorOffset);
 }
 
 export function getCurrentBlockOffset(block: HTMLElement): number {
@@ -111,7 +111,7 @@ export function getCurrentBlockOffset(block: HTMLElement): number {
 }
 
 export function getTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } {
-    const position = findMarkdownTextPosition(root, Math.max(0, offset));
+    const position = findRenderedContentTextPosition(root, Math.max(0, offset));
 
     if (position) {
         return position;

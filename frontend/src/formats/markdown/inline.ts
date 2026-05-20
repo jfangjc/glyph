@@ -109,13 +109,13 @@ export function renderInlineMarkdown(text: string, references: MarkdownReference
         }
 
         if (text[index] === "\\" && text[index + 1] === "\n") {
-            html += '<br data-markdown-raw="\\&#10;">';
+            html += '<br data-source-raw="\\&#10;">';
             index += 2;
             continue;
         }
 
         if (text[index] === "\n") {
-            html += '<br data-markdown-raw="&#10;">';
+            html += '<br data-source-raw="&#10;">';
             index += 1;
             continue;
         }
@@ -390,11 +390,11 @@ function renderInlineCodeToken(token: InlineCodeToken): string {
     const raw = escapeHtml(token.raw);
     const code = escapeHtml(token.code);
 
-    return `<span class="markdown-token markdown-code-token"><code contenteditable="false" data-markdown-ignore="true">${code}</code><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-code-token"><code contenteditable="false" data-source-ignore="true">${code}</code><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderEscapedCharacter(token: EscapedCharacterToken): string {
-    return `<span class="markdown-escape" data-markdown-raw="${escapeHtml(token.raw)}">${escapeHtml(token.character)}</span>`;
+    return `<span class="markdown-escape" data-source-raw="${escapeHtml(token.raw)}">${escapeHtml(token.character)}</span>`;
 }
 
 function renderEmphasisToken(token: EmphasisToken, references: MarkdownReferenceMap, depth: number): string {
@@ -402,14 +402,14 @@ function renderEmphasisToken(token: EmphasisToken, references: MarkdownReference
     const label = renderInlineMarkdown(token.label, references, depth);
 
     if (token.strong && token.emphasis) {
-        return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-markdown-ignore="true"><em class="markdown-emphasis">${label}</em></strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+        return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true"><em class="markdown-emphasis">${label}</em></strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
     }
 
     if (token.strong) {
-        return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-markdown-ignore="true">${label}</strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+        return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true">${label}</strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
     }
 
-    return `<span class="markdown-token markdown-format-token"><em class="markdown-emphasis" contenteditable="false" data-markdown-ignore="true">${label}</em><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-format-token"><em class="markdown-emphasis" contenteditable="false" data-source-ignore="true">${label}</em><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderImageToken(token: InlineToken): string {
@@ -418,7 +418,7 @@ function renderImageToken(token: InlineToken): string {
     const raw = escapeHtml(token.raw);
     const title = token.title ? ` data-image-title="${escapeHtml(token.title)}"` : "";
 
-    return `<span class="markdown-token markdown-image-token"><span class="markdown-image-preview" contenteditable="false" data-markdown-ignore="true" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>`;
+    return `<span class="markdown-token markdown-image-token"><span class="markdown-image-preview" contenteditable="false" data-source-ignore="true" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>`;
 }
 
 function renderLinkToken(token: InlineToken, references: MarkdownReferenceMap, depth: number): string {
@@ -426,8 +426,8 @@ function renderLinkToken(token: InlineToken, references: MarkdownReferenceMap, d
     const title = token.title ? ` title="${escapeHtml(token.title)}"` : "";
     const labelHtml = renderInlineMarkdown(token.label, references, depth);
     const label = href
-        ? `<a class="markdown-link" contenteditable="false" data-markdown-ignore="true" tabindex="-1" href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"${title} rel="noreferrer">${labelHtml}</a>`
-        : `<span class="markdown-link markdown-link-label" contenteditable="false" data-markdown-ignore="true"${title}>${labelHtml}</span>`;
+        ? `<a class="markdown-link" contenteditable="false" data-source-ignore="true" tabindex="-1" href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"${title} rel="noreferrer">${labelHtml}</a>`
+        : `<span class="markdown-link markdown-link-label" contenteditable="false" data-source-ignore="true"${title}>${labelHtml}</span>`;
     const raw = escapeHtml(token.raw);
 
     return `<span class="markdown-token markdown-link-token">${label}<span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
@@ -448,7 +448,7 @@ function renderRawLink(label: string, destination: string, raw: string): string 
     }
 
     const escapedHref = escapeHtml(href);
-    return `<span class="markdown-token markdown-link-token markdown-url-token"><a class="markdown-link" contenteditable="false" data-markdown-ignore="true" tabindex="-1" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a><span class="markdown-token-source" spellcheck="false">${escapeHtml(raw)}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-link-token markdown-url-token"><a class="markdown-link" contenteditable="false" data-source-ignore="true" tabindex="-1" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a><span class="markdown-token-source" spellcheck="false">${escapeHtml(raw)}</span></span>&#8203;`;
 }
 
 function readBareUrl(text: string, index: number): string | null {

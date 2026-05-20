@@ -1,9 +1,7 @@
-export type MarkdownReference = {
-    destination: string;
-    title?: string;
-};
+import type { DocumentReference, DocumentReferenceMap } from "../types";
 
-export type MarkdownReferenceMap = Record<string, MarkdownReference>;
+export type MarkdownReference = DocumentReference;
+export type MarkdownReferenceMap = DocumentReferenceMap;
 
 export function normalizeReferenceLabel(label: string): string {
     return label.trim().replace(/\s+/g, " ").toLowerCase();

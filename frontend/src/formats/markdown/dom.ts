@@ -1,72 +1,11 @@
-export type MarkdownTokenEdge = "start" | "end";
+import {
+    getRenderedContentBoundaryOffset,
+    getRenderedContentText,
+    stripCaretSpacers,
+    type RenderedContentTokenEdge,
+} from "../../editor/rendered-content-dom";
 
-const caretSpacerCharacter = String.fromCharCode(8203);
-
-export function getMarkdownText(node: Node): string {
-    if (shouldIgnoreMarkdownNode(node)) {
-        return "";
-    }
-
-    const renderedMarkdown = readRenderedMarkdown(node);
-    if (renderedMarkdown !== null) {
-        return renderedMarkdown;
-    }
-
-    if (node.nodeType === Node.TEXT_NODE) {
-        return stripCaretSpacers(node.textContent ?? "");
-    }
-
-    return getMarkdownChildText(node);
-}
-
-export function getMarkdownBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
-    if (shouldIgnoreMarkdownNode(current)) {
-        return 0;
-    }
-
-    const renderedMarkdown = readRenderedMarkdown(current);
-    if (renderedMarkdown !== null) {
-        return current === anchorNode && anchorOffset <= 0 ? 0 : renderedMarkdown.length;
-    }
-
-    if (current === anchorNode) {
-        if (current.nodeType === Node.TEXT_NODE) {
-            return stripCaretSpacers((current.textContent ?? "").slice(0, anchorOffset)).length;
-        }
-
-        return getMarkdownLengthBeforeChild(current, anchorOffset);
-    }
-
-    let offset = 0;
-    for (const child of Array.from(current.childNodes)) {
-        if (child === anchorNode || child.contains(anchorNode)) {
-            return offset + getMarkdownBoundaryOffset(child, anchorNode, anchorOffset);
-        }
-
-        offset += getMarkdownText(child).length;
-    }
-
-    return offset;
-}
-
-export function getMarkdownLengthBeforeChild(node: Node, childOffset: number): number {
-    return Array.from(node.childNodes)
-        .slice(0, Math.max(0, childOffset))
-        .reduce((length, child) => length + getMarkdownText(child).length, 0);
-}
-
-export function findMarkdownTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } | null {
-    const remaining = { value: offset };
-
-    for (const child of Array.from(root.childNodes)) {
-        const position = findMarkdownTextPositionInNode(child, remaining);
-        if (position) {
-            return position;
-        }
-    }
-
-    return null;
-}
+export type MarkdownTokenEdge = RenderedContentTokenEdge;
 
 export function findAdjacentInactiveMarkdownToken(
     node: Node,
@@ -117,72 +56,12 @@ export function findMarkdownTokenAtCaret(
     return null;
 }
 
-function findMarkdownTextPositionInNode(
-    node: Node,
-    remaining: { value: number },
-): { node: Node; offset: number } | null {
-    if (shouldIgnoreMarkdownNode(node)) {
-        return null;
-    }
-
-    const renderedMarkdown = readRenderedMarkdown(node);
-    if (renderedMarkdown !== null) {
-        if (remaining.value <= renderedMarkdown.length) {
-            return getAtomicNodePosition(node, remaining.value >= renderedMarkdown.length);
-        }
-
-        remaining.value -= renderedMarkdown.length;
-        return null;
-    }
-
-    if (isInactiveMarkdownToken(node)) {
-        const length = getMarkdownText(node).length;
-        if (remaining.value <= length) {
-            return getAtomicNodePosition(node, remaining.value >= length);
-        }
-
-        remaining.value -= length;
-        return null;
-    }
-
-    if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent ?? "";
-        const length = stripCaretSpacers(text).length;
-        if (remaining.value <= length) {
-            return { node, offset: getDomTextOffsetForMarkdownOffset(text, remaining.value) };
-        }
-
-        remaining.value -= length;
-        return null;
-    }
-
-    for (const child of Array.from(node.childNodes)) {
-        const position = findMarkdownTextPositionInNode(child, remaining);
-        if (position) {
-            return position;
-        }
-    }
-
-    return null;
+export function getMarkdownBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
+    return getRenderedContentBoundaryOffset(current, anchorNode, anchorOffset);
 }
 
-function getMarkdownChildText(node: Node): string {
-    let text = "";
-    for (const child of Array.from(node.childNodes)) {
-        text += getMarkdownText(child);
-    }
-
-    return text;
-}
-
-function getAtomicNodePosition(node: Node, after: boolean): { node: Node; offset: number } {
-    const parent = node.parentNode;
-    if (!parent) {
-        return { node, offset: 0 };
-    }
-
-    const childIndex = Array.from(parent.childNodes).findIndex((child) => child === node);
-    return { node: parent, offset: Math.max(0, childIndex) + (after ? 1 : 0) };
+export function getMarkdownText(node: Node): string {
+    return getRenderedContentText(node);
 }
 
 function findContainingInactiveMarkdownToken(node: Node): HTMLElement | null {
@@ -220,42 +99,4 @@ function getSelectionBoundary(
 
 function isCaretSpacerOnly(text: string): boolean {
     return text !== "" && stripCaretSpacers(text) === "";
-}
-
-function stripCaretSpacers(text: string): string {
-    return text.split(caretSpacerCharacter).join("");
-}
-
-function getDomTextOffsetForMarkdownOffset(text: string, offset: number): number {
-    let markdownOffset = 0;
-
-    for (let index = 0; index < text.length; index += 1) {
-        if (text[index] === caretSpacerCharacter) {
-            continue;
-        }
-
-        if (markdownOffset >= offset) {
-            return index;
-        }
-
-        markdownOffset += 1;
-    }
-
-    return text.length;
-}
-
-function readRenderedMarkdown(node: Node): string | null {
-    if (!(node instanceof HTMLElement)) {
-        return null;
-    }
-
-    return node.dataset.markdownRaw ?? null;
-}
-
-function shouldIgnoreMarkdownNode(node: Node): boolean {
-    return node instanceof HTMLElement && node.dataset.markdownIgnore === "true";
-}
-
-function isInactiveMarkdownToken(node: Node): boolean {
-    return node instanceof HTMLElement && node.classList.contains("markdown-token") && node.dataset.active !== "true";
 }

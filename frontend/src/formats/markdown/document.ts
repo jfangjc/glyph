@@ -1,15 +1,33 @@
 import { headingTypes, type BlockType, type ParsedBlock, type ParsedDocument } from "../../editor/block-model";
+import { titleFromFileName } from "../file-names";
+import type { DocumentFileLike, DocumentFormat } from "../types";
+import { hasMarkdownBlockSource, readMarkdownBlockSource } from "./block-source";
+import { createCodeFence } from "./code-fence";
+import { hydrateMarkdownImagePreviews } from "./images";
+import { renderInlineMarkdown } from "./inline";
 import {
     parseMarkdownReferenceDefinition,
     type MarkdownReferenceMap,
 } from "./references";
 
-type MarkdownDocumentFile = {
-    name: string;
-    content: string;
+export const markdownDocumentFormat: DocumentFormat = {
+    id: "markdown",
+    label: "Markdown",
+    extensions: ["md", "markdown"],
+    defaultExtension: "md",
+    defaultFileName: "Untitled.md",
+    supportsTitle: true,
+    parseDocument: parseMarkdownDocument,
+    parseFragment: parseMarkdownFragment,
+    serializeDocument: serializeMarkdownDocument,
+    readReferences: readMarkdownReferences,
+    hasBlockSource: hasMarkdownBlockSource,
+    readBlockSource: readMarkdownBlockSource,
+    renderInline: renderInlineMarkdown,
+    hydrateRenderedContent: hydrateMarkdownImagePreviews,
 };
 
-export function parseMarkdownDocument(documentFile: MarkdownDocumentFile): ParsedDocument {
+export function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDocument {
     const lines = readMarkdownLines(documentFile.content, true);
     let title = titleFromFileName(documentFile.name);
     let usesTitle = false;
@@ -129,6 +147,23 @@ export function serializeMarkdownDocument(title: string, usesTitle: boolean, blo
     const content = usesTitle && trimmedTitle ? `# ${trimmedTitle}${body ? `\n\n${body}` : ""}` : body;
 
     return content ? `${content}\n` : "";
+}
+
+export function readMarkdownReferences(blocks: ParsedBlock[]): MarkdownReferenceMap {
+    const references: MarkdownReferenceMap = {};
+
+    for (const block of blocks) {
+        if (block.type !== "reference") {
+            continue;
+        }
+
+        const definition = parseMarkdownReferenceDefinition(block.text);
+        if (definition) {
+            references[definition.normalizedLabel] = definition.reference;
+        }
+    }
+
+    return references;
 }
 
 function parseMarkdownLine(line: string): ParsedBlock {
@@ -401,30 +436,4 @@ function isClosingCodeFence(line: string, fence: string): boolean {
     const fenceCharacter = fence[0];
 
     return trimmed.startsWith(fenceCharacter.repeat(fence.length)) && trimmed.split("").every((char) => char === fenceCharacter);
-}
-
-function createCodeFence(text: string, preferredFence?: string): string {
-    if (preferredFence && /^(`{3,}|~{3,})$/.test(preferredFence) && isCodeFenceSafe(text, preferredFence)) {
-        return preferredFence;
-    }
-
-    const longestRun = text.match(/`+/g)?.reduce((longest, run) => Math.max(longest, run.length), 0) ?? 0;
-    return "`".repeat(Math.max(3, longestRun + 1));
-}
-
-function isCodeFenceSafe(text: string, fence: string): boolean {
-    const fenceCharacter = fence[0];
-    const closingFence = fenceCharacter.repeat(fence.length);
-
-    return !text.split("\n").some((line) => {
-        const trimmed = line.trim();
-        return trimmed.startsWith(closingFence) && trimmed.split("").every((character) => character === fenceCharacter);
-    });
-}
-
-function titleFromFileName(fileName: string): string {
-    const extensionIndex = fileName.lastIndexOf(".");
-    const title = extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName;
-
-    return title || "Untitled";
 }

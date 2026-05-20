@@ -1,10 +1,11 @@
 import { chooseDocumentToOpen, chooseDocumentToSave, readDocument, saveDocument } from "../bridge/documents";
 import type { DocumentFile } from "../bridge/types";
+import { getDocumentFormatById } from "../formats/registry";
 import { documentState, notifyDocumentStateChanged } from "./document-state";
 
 type DocumentActionHost = {
     loadDocument: (documentFile: DocumentFile) => void;
-    serializeDocumentMarkdown: () => string;
+    serializeDocument: () => string;
 };
 
 type SaveDocumentOptions = {
@@ -18,7 +19,7 @@ let host: DocumentActionHost | null = null;
 
 export function bindDocumentActions(nextHost: DocumentActionHost): void {
     host = nextHost;
-    documentState.lastSavedMarkdown = nextHost.serializeDocumentMarkdown();
+    documentState.lastSavedContent = nextHost.serializeDocument();
     notifyDocumentStateChanged();
 }
 
@@ -87,9 +88,9 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
         return false;
     }
 
-    const content = getHost().serializeDocumentMarkdown();
+    const content = getHost().serializeDocument();
 
-    if (content === documentState.lastSavedMarkdown && !options.promptForPath) {
+    if (content === documentState.lastSavedContent && !options.promptForPath) {
         documentState.hasUnsavedChanges = false;
         notifyDocumentStateChanged();
         return true;
@@ -104,8 +105,8 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
 
         if (documentState.activeFilePath === previousPath || options.promptForPath) {
             documentState.activeFilePath = path;
-            documentState.lastSavedMarkdown = content;
-            documentState.hasUnsavedChanges = getHost().serializeDocumentMarkdown() !== documentState.lastSavedMarkdown;
+            documentState.lastSavedContent = content;
+            documentState.hasUnsavedChanges = getHost().serializeDocument() !== documentState.lastSavedContent;
         }
 
         saved = !documentState.hasUnsavedChanges;
@@ -132,7 +133,10 @@ async function resolveSavePath(options: SaveDocumentOptions): Promise<string | n
 
     const selectedPath = await chooseDocumentToSave(
         normalizeSuggestedFileName(
-            options.suggestedFileName ?? fileNameFromPath(documentState.activeFilePath) ?? "Untitled.md",
+            options.suggestedFileName ??
+                fileNameFromPath(documentState.activeFilePath) ??
+                getDocumentFormatById(documentState.activeFormatId).defaultFileName,
+            getDocumentFormatById(documentState.activeFormatId).defaultExtension,
         ),
     );
 
@@ -143,14 +147,14 @@ async function resolveSavePath(options: SaveDocumentOptions): Promise<string | n
     return selectedPath;
 }
 
-function normalizeSuggestedFileName(value: string): string {
+function normalizeSuggestedFileName(value: string, defaultExtension: string): string {
     const trimmed = value.trim() || "Untitled";
 
     if (/[\\/]$/.test(trimmed)) {
-        return "Untitled.md";
+        return `Untitled.${defaultExtension}`;
     }
 
-    return /\.[^\\/.\s]+$/.test(trimmed) ? trimmed : `${trimmed}.md`;
+    return /\.[^\\/.\s]+$/.test(trimmed) ? trimmed : `${trimmed}.${defaultExtension}`;
 }
 
 function fileNameFromPath(path: string | null): string | null {

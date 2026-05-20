@@ -11,6 +11,7 @@ export type BlockType =
     | "todo"
     | "quote"
     | "code"
+    | "source"
     | "rule"
     | "reference";
 
@@ -47,6 +48,7 @@ export const blockLabels: Record<BlockType, string> = {
     todo: "Todo",
     quote: "Quote",
     code: "Code",
+    source: "Source",
     rule: "Horizontal rule",
     reference: "Reference",
 };

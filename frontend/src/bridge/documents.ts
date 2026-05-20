@@ -1,10 +1,11 @@
 import { Call, Dialogs } from "@wailsio/runtime";
+import { getDocumentFileFilters } from "../formats/registry";
 import type { DocumentFile, ImageFile } from "./types";
 
-const textFileFilters: Dialogs.FileFilter[] = [
-    { DisplayName: "Markdown", Pattern: "*.md;*.markdown" },
-    { DisplayName: "Text Documents", Pattern: "*.txt;*.tex;*.org;*.typ" },
-];
+const textFileFilters: Dialogs.FileFilter[] = getDocumentFileFilters().map((filter) => ({
+    DisplayName: filter.displayName,
+    Pattern: filter.patterns.join(";"),
+}));
 
 export async function chooseDocumentToOpen(): Promise<string | null> {
     const selection = await Dialogs.OpenFile({

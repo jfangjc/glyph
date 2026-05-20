@@ -20,7 +20,7 @@ var assets embed.FS
 func main() {
 	app := application.New(application.Options{
 		Name:        "Glyph",
-		Description: "A lightweight, minimalistic cross-platform Markdown editor.",
+		Description: "A lightweight, minimalistic cross-platform document editor.",
 		Services: []application.Service{
 			application.NewService(&documents.Service{}),
 		},

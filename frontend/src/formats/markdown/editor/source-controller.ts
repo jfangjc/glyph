@@ -1,5 +1,4 @@
-import { getMarkdownText } from "../formats/markdown/dom";
-import { parseMarkdownFragment } from "../formats/markdown/document";
+import { parseMarkdownFragment } from "../document";
 import {
     applyBlockProperties,
     ensureEditableBlockAfter,
@@ -7,12 +6,16 @@ import {
     getBlockContent,
     getBlockText,
     getSiblingBlock,
-    hasBlockMarkdownSource,
     setBlockText,
-    type BlockMarkdownSourcePosition,
-} from "./block-view";
-import { readBlockType, type ParsedBlock } from "./block-model";
-import { removeOrMergeBackward, splitBlock } from "./block-operations";
+} from "../../../editor/block-view";
+import { readBlockType, type ParsedBlock } from "../../../editor/block-model";
+import { removeOrMergeBackward, splitBlock } from "../../../editor/block-operations";
+import {
+    getBlockSourceElement,
+    isBlockSourceElement,
+    readBlockSourcePosition,
+    type BlockSourcePosition,
+} from "../../../editor/block-rendering";
 import {
     focusBlockAtOffset,
     focusPlainTextElement,
@@ -20,9 +23,11 @@ import {
     getCurrentBlockOffset,
     getPlainTextBoundaryOffset,
     isCaretAtBlockEdge,
-} from "./caret";
-import { readInlineFormatShortcut } from "./keyboard-shortcuts";
-import { clearPendingMarkdownTokenNavigation } from "./markdown-token-controller";
+} from "../../../editor/caret";
+import { readInlineFormatShortcut } from "../../../editor/keyboard-shortcuts";
+import { getRenderedContentText } from "../../../editor/rendered-content-dom";
+import { hasMarkdownBlockSource } from "../block-source";
+import { clearPendingMarkdownTokenNavigation } from "./token-controller";
 
 type MarkdownSourceHooks = {
     markEditorDirty?: () => void;
@@ -137,7 +142,7 @@ export function trackVerticalBlockSourceNavigation(event: KeyboardEvent, block: 
     }
 
     const target = getSiblingBlock(block, direction);
-    if (target && hasBlockMarkdownSource(readBlockType(target.dataset.type))) {
+    if (target && hasMarkdownBlockSource(readBlockType(target.dataset.type))) {
         hooks.syncBlockMarkdownSourceReveal?.(target);
 
         if (direction === "previous" && getBlockText(block) === "") {
@@ -154,7 +159,7 @@ export function getFocusedBlockMarkdownSource(): HTMLElement | null {
     const focusNode = document.getSelection()?.focusNode;
     const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
 
-    return focusElement?.closest<HTMLElement>(".markdown-block-source") ?? null;
+    return focusElement?.closest<HTMLElement>(".format-block-source") ?? null;
 }
 
 export function applyFocusedBlockMarkdownSourceInput(
@@ -171,7 +176,7 @@ export function applyFocusedBlockMarkdownSourceInput(
         selection?.isCollapsed && focusNode && (focusNode === source || source.contains(focusNode))
             ? getPlainTextBoundaryOffset(source, focusNode, selection.focusOffset)
             : (source.textContent ?? "").length;
-    const sourcePosition = readBlockMarkdownSourcePosition(source);
+    const sourcePosition = readBlockSourcePosition(source);
     const rawOffset = getBlockRawMarkdownOffset(block, sourcePosition, sourceOffset);
     const parsedBlock = parseEditedRawMarkdownBlock(block, getBlockRawMarkdown(block));
 
@@ -255,8 +260,7 @@ function deleteLastBlockMarkdownSourceCharacter(event: KeyboardEvent, source: HT
 function removeOrMergeBackwardFromSourceStart(source: HTMLElement): boolean {
     if (
         !isCaretAtPlainTextEdge(source, "start") ||
-        (!source.classList.contains("markdown-block-source-prefix") &&
-            !source.classList.contains("markdown-block-source-atomic"))
+        (readBlockSourcePosition(source) !== "prefix" && readBlockSourcePosition(source) !== "atomic")
     ) {
         return false;
     }
@@ -266,7 +270,7 @@ function removeOrMergeBackwardFromSourceStart(source: HTMLElement): boolean {
 }
 
 function removeFollowingEmptyParagraphFromCodeSuffix(source: HTMLElement): boolean {
-    if (!source.classList.contains("markdown-block-source-suffix") || !isCaretAtPlainTextEdge(source, "end")) {
+    if (readBlockSourcePosition(source) !== "suffix" || !isCaretAtPlainTextEdge(source, "end")) {
         return false;
     }
 
@@ -282,10 +286,10 @@ function removeFollowingEmptyParagraphFromCodeSuffix(source: HTMLElement): boole
 
 function focusBlockMarkdownSource(
     block: HTMLElement,
-    position: BlockMarkdownSourcePosition,
+    position: BlockSourcePosition,
     edge: "start" | "end",
 ): boolean {
-    const source = getBlockContent(block).querySelector<HTMLElement>(`.markdown-block-source-${position}`);
+    const source = getBlockSourceElement(getBlockContent(block), position);
     if (!source) {
         return false;
     }
@@ -324,7 +328,7 @@ function moveCaretAfterCodeBlockSource(source: HTMLElement): boolean {
     if (
         !block ||
         readBlockType(block.dataset.type) !== "code" ||
-        !source.classList.contains("markdown-block-source-suffix") ||
+        readBlockSourcePosition(source) !== "suffix" ||
         !isCaretAtPlainTextEdge(source, "end")
     ) {
         return false;
@@ -340,7 +344,7 @@ function isCaretAfterCodeBlockSuffixSource(block: HTMLElement): boolean {
     const selection = document.getSelection();
     const focusNode = selection?.focusNode;
     const content = getBlockContent(block);
-    const suffix = content.querySelector<HTMLElement>(".markdown-block-source-suffix");
+    const suffix = getBlockSourceElement(content, "suffix");
 
     if (!selection?.isCollapsed || !focusNode || !suffix) {
         return false;
@@ -387,12 +391,12 @@ function applyRawMarkdownToBlock(block: HTMLElement, rawMarkdown: string, focusB
 
 function restoreFocusAfterBlockMarkdownSourceInput(
     block: HTMLElement,
-    position: BlockMarkdownSourcePosition | null,
+    position: BlockSourcePosition | null,
     sourceOffset: number,
     rawOffset: number,
 ): void {
     const source = position
-        ? getBlockContent(block).querySelector<HTMLElement>(`.markdown-block-source-${position}`)
+        ? getBlockSourceElement(getBlockContent(block), position)
         : null;
 
     if (source) {
@@ -408,25 +412,9 @@ function restoreFocusAfterBlockMarkdownSourceInput(
     focusBlockAtOffset(block, Math.min(rawOffset, getBlockText(block).length), { scroll: "none" });
 }
 
-function readBlockMarkdownSourcePosition(source: HTMLElement): BlockMarkdownSourcePosition | null {
-    if (source.classList.contains("markdown-block-source-prefix")) {
-        return "prefix";
-    }
-
-    if (source.classList.contains("markdown-block-source-suffix")) {
-        return "suffix";
-    }
-
-    if (source.classList.contains("markdown-block-source-atomic")) {
-        return "atomic";
-    }
-
-    return null;
-}
-
 function getBlockRawMarkdownOffset(
     block: HTMLElement,
-    position: BlockMarkdownSourcePosition | null,
+    position: BlockSourcePosition | null,
     sourceOffset: number,
 ): number {
     if (position !== "suffix" || readBlockType(block.dataset.type) !== "code") {
@@ -464,7 +452,7 @@ function getBlockRawMarkdown(block: HTMLElement): string {
     let text = "";
 
     for (const child of Array.from(getBlockContent(block).childNodes)) {
-        text += isBlockMarkdownSource(child) ? child.textContent ?? "" : getMarkdownText(child);
+        text += isBlockMarkdownSource(child) ? child.textContent ?? "" : getRenderedContentText(child);
     }
 
     return text;
@@ -473,14 +461,14 @@ function getBlockRawMarkdown(block: HTMLElement): string {
 function getCodeBlockRawMarkdown(block: HTMLElement): string {
     const source = readCodeBlockSourceParts(block);
 
-    return source ? `${source.prefix}\n${source.text}\n${source.suffix}` : getMarkdownText(getBlockContent(block));
+    return source ? `${source.prefix}\n${source.text}\n${source.suffix}` : getRenderedContentText(getBlockContent(block));
 }
 
 function readCodeBlockSourceParts(block: HTMLElement): { prefix: string; text: string; suffix: string } | null {
     const content = getBlockContent(block);
-    const prefix = content.querySelector<HTMLElement>(".markdown-block-source-prefix");
+    const prefix = getBlockSourceElement(content, "prefix");
     const body = content.querySelector<HTMLElement>(".markdown-code-block-body");
-    const suffix = content.querySelector<HTMLElement>(".markdown-block-source-suffix");
+    const suffix = getBlockSourceElement(content, "suffix");
 
     if (!prefix || !body || !suffix) {
         return null;
@@ -488,7 +476,7 @@ function readCodeBlockSourceParts(block: HTMLElement): { prefix: string; text: s
 
     return {
         prefix: prefix.textContent ?? "",
-        text: getMarkdownText(body),
+        text: getRenderedContentText(body),
         suffix: suffix.textContent ?? "",
     };
 }
@@ -519,5 +507,5 @@ function serializeInvalidCodeBlockSource(source: { prefix: string; text: string;
 }
 
 function isBlockMarkdownSource(node: Node): node is HTMLElement {
-    return node instanceof HTMLElement && node.classList.contains("markdown-block-source");
+    return isBlockSourceElement(node);
 }

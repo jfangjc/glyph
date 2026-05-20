@@ -5,23 +5,23 @@ import {
     getMarkdownBoundaryOffset,
     getMarkdownText,
     type MarkdownTokenEdge,
-} from "../formats/markdown/dom";
-import { findFirstInlineToken } from "../formats/markdown/inline";
+} from "../dom";
+import { findFirstInlineToken } from "../inline";
 import { findVerticalMarkdownImageToken } from "./block-operations";
 import {
     findBlock,
     getBlockContent,
     getBlockText,
     setBlockText,
-} from "./block-view";
+} from "../../../editor/block-view";
 import {
     focusBlockAtOffset,
     getCaretOffset,
     getCurrentBlockOffset,
     getTextPosition,
-} from "./caret";
-import { getElement } from "./dom-utils";
-import { setPointerSelecting } from "./pointer-interactions";
+} from "../../../editor/caret";
+import { getElement } from "../../../editor/dom-utils";
+import { setPointerSelecting } from "../../../editor/pointer-interactions";
 
 type MarkdownTokenHooks = {
     syncActiveBlockIndicator?: (block: HTMLElement | null) => void;

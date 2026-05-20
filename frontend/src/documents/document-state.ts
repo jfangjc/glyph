@@ -1,23 +1,25 @@
 export type DocumentState = {
     activeFilePath: string | null;
+    activeFormatId: string;
     usesTitle: boolean;
     hasUnsavedChanges: boolean;
     isOpeningDocument: boolean;
     isSavingDocument: boolean;
     saveAgainAfterCurrent: boolean;
-    lastSavedMarkdown: string;
+    lastSavedContent: string;
 };
 
 export const documentStateChangedEvent = "glyph:document-state-changed";
 
 export const documentState: DocumentState = {
     activeFilePath: null,
+    activeFormatId: "markdown",
     usesTitle: false,
     hasUnsavedChanges: false,
     isOpeningDocument: false,
     isSavingDocument: false,
     saveAgainAfterCurrent: false,
-    lastSavedMarkdown: "",
+    lastSavedContent: "",
 };
 
 export function markDocumentDirty(): void {

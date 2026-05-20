@@ -1,35 +1,33 @@
-import {
-    getMarkdownText,
-} from "../formats/markdown/dom";
-import { hydrateMarkdownImagePreviews } from "../formats/markdown/images";
-import { renderInlineMarkdown } from "../formats/markdown/inline";
-import type { MarkdownReferenceMap } from "../formats/markdown/references";
+import type { DocumentReferenceMap } from "../formats/types";
 import { blockLabels, headingTypes, readBlockType, type BlockType, type ParsedBlock } from "./block-model";
+import {
+    renderAtomicBlockContent,
+    renderBlockSourceHtml,
+    renderCodeBlockContent,
+    renderPlainTextBlockContent,
+    type BlockSource,
+} from "./block-rendering";
 import { getElement } from "./dom-utils";
-import { createCodeFence, escapeHtml } from "./text-utils";
-
-type BlockMarkdownSource = {
-    prefix?: string;
-    suffix?: string;
-    atomic?: string;
-};
-
-export type BlockMarkdownSourcePosition = "prefix" | "suffix" | "atomic";
+import { getRenderedContentText } from "./rendered-content-dom";
+import { escapeHtml } from "./text-utils";
 
 type BlockRenderContext = {
-    markdownReferences: MarkdownReferenceMap;
+    references: DocumentReferenceMap;
     activeFilePath: string | null;
+    renderInlineContent: (text: string, references: DocumentReferenceMap) => string;
+    hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
+    readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
 };
 
-const caretSpacerCharacter = String.fromCharCode(8203);
-
 let renderContext: BlockRenderContext = {
-    markdownReferences: {},
+    references: {},
     activeFilePath: null,
+    renderInlineContent: renderPlainInlineContent,
 };
 
 export function configureBlockView(context: Partial<BlockRenderContext>): void {
     renderContext = { ...renderContext, ...context };
+    renderContext.renderInlineContent = context.renderInlineContent ?? renderPlainInlineContent;
 }
 
 export function createBlock(type: BlockType = "paragraph", text = "", options: Partial<ParsedBlock> = {}): HTMLElement {
@@ -59,8 +57,10 @@ export function applyBlockProperties(block: HTMLElement, options: Partial<Parsed
 }
 
 export function setBlockType(block: HTMLElement, type: BlockType): void {
+    const content = getBlockContent(block);
+
     block.dataset.type = type;
-    getBlockContent(block).setAttribute("aria-label", `${blockLabels[type]} block`);
+    content.setAttribute("aria-label", `${blockLabels[type]} block`);
 
     if (!isIndentableListBlockType(type)) {
         setBlockIndent(block, 0);
@@ -77,6 +77,7 @@ export function setBlockType(block: HTMLElement, type: BlockType): void {
     if (type !== "code") {
         delete block.dataset.codeFence;
         delete block.dataset.codeInfo;
+        delete content.dataset.codeInfo;
     }
 
     if (type !== "rule") {
@@ -91,7 +92,7 @@ export function setBlockType(block: HTMLElement, type: BlockType): void {
 export function setBlockText(block: HTMLElement, text: string): void {
     const content = getBlockContent(block);
     const type = readBlockType(block.dataset.type);
-    const source = readBlockMarkdownSource(block, type, text);
+    const source = renderContext.readBlockSource?.(block, type, text) ?? {};
 
     if (text !== "") {
         delete block.dataset.transient;
@@ -119,14 +120,14 @@ export function setBlockText(block: HTMLElement, text: string): void {
 
     content.innerHTML = html;
     content.dataset.renderedMarkdown = html;
-    hydrateMarkdownImagePreviews(content, renderContext.activeFilePath);
+    renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
 }
 
 export function rerenderInlineBlockContent(block: HTMLElement, offset: number): number | null {
     const type = readBlockType(block.dataset.type);
     const text = getBlockText(block);
 
-    if (!isInlineMarkdownBlockType(type)) {
+    if (!isRichTextBlockType(type)) {
         return null;
     }
 
@@ -136,7 +137,7 @@ export function rerenderInlineBlockContent(block: HTMLElement, offset: number): 
     }
 
     const content = getBlockContent(block);
-    const html = renderBlockInnerHtml(block, type, text, readBlockMarkdownSource(block, type, text));
+    const html = renderBlockInnerHtml(block, type, text, renderContext.readBlockSource?.(block, type, text) ?? {});
 
     if (content.dataset.renderedMarkdown === html) {
         return null;
@@ -144,7 +145,7 @@ export function rerenderInlineBlockContent(block: HTMLElement, offset: number): 
 
     content.innerHTML = html;
     content.dataset.renderedMarkdown = html;
-    hydrateMarkdownImagePreviews(content, renderContext.activeFilePath);
+    renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
 
     return Math.min(offset, getBlockText(block).length);
 }
@@ -153,111 +154,17 @@ function renderBlockInnerHtml(
     block: HTMLElement,
     type: BlockType,
     text: string,
-    source: BlockMarkdownSource,
+    source: BlockSource,
 ): string {
     return (
-        renderBlockMarkdownSourceHtml(source.prefix, "prefix") +
-        renderInlineMarkdown(text, renderContext.markdownReferences) +
-        renderBlockMarkdownSourceHtml(source.suffix, "suffix")
+        renderBlockSourceHtml(source.prefix, "prefix") +
+        renderContext.renderInlineContent(text, renderContext.references) +
+        renderBlockSourceHtml(source.suffix, "suffix")
     );
 }
 
-function renderPlainTextBlockContent(content: HTMLElement, text: string, source: BlockMarkdownSource): void {
-    content.replaceChildren();
-    appendBlockMarkdownSourceElement(content, source.prefix, "prefix");
-    content.append(document.createTextNode(renderPlainTextContentText(text)));
-    appendBlockMarkdownSourceElement(content, source.suffix, "suffix");
-}
-
-function renderCodeBlockContent(content: HTMLElement, text: string, source: BlockMarkdownSource): void {
-    content.replaceChildren();
-    appendBlockMarkdownSourceElement(content, source.prefix, "prefix");
-    appendCodeBlockBodyElement(content, text);
-    appendBlockMarkdownSourceElement(content, source.suffix, "suffix");
-}
-
-function appendCodeBlockBodyElement(content: HTMLElement, text: string): void {
-    const body = document.createElement("span");
-    body.className = "markdown-code-block-body";
-    body.spellcheck = false;
-    body.append(document.createTextNode(renderCodeBlockBodyText(text)));
-    content.append(body);
-}
-
-function renderCodeBlockBodyText(text: string): string {
-    return text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
-}
-
-function renderPlainTextContentText(text: string): string {
-    return text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
-}
-
-function renderAtomicBlockContent(content: HTMLElement, source: BlockMarkdownSource): void {
-    content.replaceChildren();
-    appendBlockMarkdownSourceElement(content, source.atomic ?? source.prefix, "atomic");
-}
-
-function appendBlockMarkdownSourceElement(
-    content: HTMLElement,
-    value: string | undefined,
-    position: BlockMarkdownSourcePosition,
-): void {
-    if (!value) {
-        return;
-    }
-
-    const source = document.createElement("span");
-    source.className = `markdown-block-source markdown-block-source-${position}`;
-    source.dataset.markdownIgnore = "true";
-    source.spellcheck = false;
-    source.textContent = value;
-    content.append(source);
-}
-
-export function renderBlockMarkdownSourceHtml(value: string | undefined, position: BlockMarkdownSourcePosition): string {
-    if (!value) {
-        return "";
-    }
-
-    return `<span class="markdown-block-source markdown-block-source-${position}" data-markdown-ignore="true" spellcheck="false">${escapeHtml(value)}</span>`;
-}
-
-export function readBlockMarkdownSource(block: HTMLElement, type: BlockType, text: string): BlockMarkdownSource {
-    if (headingTypes.has(type)) {
-        return { prefix: `${"#".repeat(readHeadingLevel(type))} ` };
-    }
-
-    if (type === "list") {
-        return { prefix: `${readBlockListMarker(block) ?? "-"} ` };
-    }
-
-    if (type === "ordered-list") {
-        return { prefix: `${readBlockListNumber(block) ?? "1"}. ` };
-    }
-
-    if (type === "todo") {
-        return { prefix: `${readBlockListMarker(block) ?? "-"} [${getTodoCheckbox(block).checked ? "x" : " "}] ` };
-    }
-
-    if (type === "quote") {
-        const marker = ">".repeat(Math.max(1, readBlockQuoteLevel(block) ?? 1));
-        return { prefix: `${marker} ` };
-    }
-
-    if (type === "code") {
-        const fence = createCodeFence(text, readBlockCodeFence(block));
-        const codeInfo = block.dataset.codeInfo ? ` ${block.dataset.codeInfo}` : "";
-        return {
-            prefix: `${fence}${codeInfo}`,
-            suffix: fence,
-        };
-    }
-
-    if (type === "rule") {
-        return { atomic: readBlockRuleMarker(block) ?? "---" };
-    }
-
-    return {};
+function renderPlainInlineContent(text: string): string {
+    return escapeHtml(text).replace(/\n/g, '<br data-source-raw="&#10;">');
 }
 
 function isOpenFencedCodeParagraph(type: BlockType, text: string): boolean {
@@ -266,14 +173,6 @@ function isOpenFencedCodeParagraph(type: BlockType, text: string): boolean {
     }
 
     return Boolean(text.split("\n")[0]?.trim().match(/^(`{3,}|~{3,})(.*)$/));
-}
-
-export function hasBlockMarkdownSource(type: BlockType): boolean {
-    return headingTypes.has(type) || ["list", "ordered-list", "todo", "quote", "code", "rule"].includes(type);
-}
-
-export function readHeadingLevel(type: BlockType): number {
-    return Number(type.slice("heading-".length)) || 1;
 }
 
 export function setBlockIndent(block: HTMLElement, indent: number): void {
@@ -354,19 +253,19 @@ export function getBlockText(block: HTMLElement): string {
     const type = readBlockType(block.dataset.type);
 
     if (isPlainTextBlockType(type)) {
-        return getMarkdownText(content);
+        return getRenderedContentText(content);
     }
 
     if (isAtomicBlockType(type)) {
         return "";
     }
 
-    return getMarkdownText(content);
+    return getRenderedContentText(content);
 }
 
 export function readBlockIndent(block: HTMLElement): number {
     const indent = Number(block.dataset.indent ?? 0);
-    return Number.isFinite(indent) ? indent : 0;
+    return Number.isFinite(indent) ? Math.max(0, Math.min(indent, 3)) : 0;
 }
 
 export function readBlockListMarker(block: HTMLElement): string | undefined {
@@ -439,7 +338,7 @@ export function readSplitContinuationType(type: BlockType): BlockType {
     return headingTypes.has(type) || isStandaloneBlockType(type) ? "paragraph" : type;
 }
 
-export function isInlineMarkdownBlockType(type: BlockType): boolean {
+export function isRichTextBlockType(type: BlockType): boolean {
     return !isStandaloneBlockType(type);
 }
 
@@ -448,7 +347,11 @@ export function isStandaloneBlockType(type: BlockType): boolean {
 }
 
 export function isPlainTextBlockType(type: BlockType): boolean {
-    return type === "code" || type === "reference";
+    return type === "code" || type === "source" || type === "reference";
+}
+
+export function isMultilinePlainTextBlockType(type: BlockType): boolean {
+    return type === "code" || type === "source";
 }
 
 export function isAtomicBlockType(type: BlockType): boolean {
@@ -530,6 +433,15 @@ export function syncFirstBlockPlaceholder(): void {
 
     if (!firstBlock) {
         return;
+    }
+
+    const firstContent = getBlockContent(firstBlock);
+    const firstType = readBlockType(firstBlock.dataset.type);
+
+    if (firstType === "paragraph" || firstType === "source") {
+        firstContent.dataset.placeholder = "Start writing";
+    } else {
+        delete firstContent.dataset.placeholder;
     }
 
     for (const block of remainingBlocks) {
