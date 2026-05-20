@@ -9,8 +9,8 @@ import {
     getBlockContent,
     getBlockText,
     getEditorBlocks,
-} from "./block-view";
-import { getElement } from "./dom-utils";
+} from "../blocks/view";
+import { getElement } from "../../utils/dom";
 
 export type SelectedBlockRange = {
     blocks: HTMLElement[];

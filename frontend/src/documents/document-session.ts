@@ -10,10 +10,10 @@ import {
     readEditorBlock,
     setBlockText,
     syncFirstBlockPlaceholder,
-} from "../editor/block-view";
-import { readBlockType, type ParsedBlock } from "../editor/block-model";
-import { focusBlockAtOffset, getCurrentBlockOffset } from "../editor/caret";
-import { getElement } from "../editor/dom-utils";
+} from "../editor/blocks/view";
+import { readBlockType, type ParsedBlock } from "../editor/blocks/model";
+import { focusBlockAtOffset, getCurrentBlockOffset } from "../editor/selection/caret";
+import { getElement } from "../utils/dom";
 import { commitActiveBlockMarkdownSource } from "../formats/markdown/editor/source-controller";
 import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
 import type { DocumentFormat, DocumentReferenceMap } from "../formats/types";

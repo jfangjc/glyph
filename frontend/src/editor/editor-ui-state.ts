@@ -1,5 +1,5 @@
-import type { BlockType } from "./block-model";
-import { readBlockType } from "./block-model";
+import type { BlockType } from "./blocks/model";
+import { readBlockType } from "./blocks/model";
 
 type EditorUiStateOptions = {
     hasBlockSource: (type: BlockType) => boolean;

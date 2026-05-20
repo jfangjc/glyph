@@ -5,15 +5,15 @@ import {
     getBlockText,
     getEditorBlocks,
     syncFirstBlockPlaceholder,
-} from "./block-view";
-import { readBlockType } from "./block-model";
+} from "./blocks/view";
+import { readBlockType } from "./blocks/model";
 import {
     focusBlockAtOffset,
     getCaretOffset,
     getCaretPositionFromPoint,
-} from "./caret";
-import { getElement } from "./dom-utils";
-import { clamp } from "./text-utils";
+} from "./selection/caret";
+import { getElement } from "../utils/dom";
+import { clamp } from "../utils/text";
 
 type PointerBlockTarget = {
     block: HTMLElement;

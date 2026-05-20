@@ -1,6 +1,6 @@
-import type { BlockType } from "../../editor/block-model";
+import type { BlockType } from "../../editor/blocks/model";
 
-export type MarkdownShortcut = {
+type MarkdownShortcut = {
     marker: string;
     type: BlockType;
     indent?: number;

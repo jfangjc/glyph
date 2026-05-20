@@ -13,14 +13,14 @@ import {
     getBlockContent,
     getBlockText,
     setBlockText,
-} from "../../../editor/block-view";
+} from "../../../editor/blocks/view";
 import {
     focusBlockAtOffset,
     getCaretOffset,
     getCurrentBlockOffset,
     getTextPosition,
-} from "../../../editor/caret";
-import { getElement } from "../../../editor/dom-utils";
+} from "../../../editor/selection/caret";
+import { getElement } from "../../../utils/dom";
 import { setPointerSelecting } from "../../../editor/pointer-interactions";
 
 type MarkdownTokenHooks = {
@@ -148,7 +148,7 @@ export function getFocusedMarkdownTokenSource(): HTMLElement | null {
     return focusElement?.closest<HTMLElement>(".markdown-token-source") ?? null;
 }
 
-export function setActiveMarkdownToken(token: HTMLElement): void {
+function setActiveMarkdownToken(token: HTMLElement): void {
     const editor = getElement<HTMLElement>("editor");
     const activeTokens = Array.from(editor.querySelectorAll<HTMLElement>(".markdown-token[data-active]"));
 
@@ -169,7 +169,7 @@ export function setActiveMarkdownToken(token: HTMLElement): void {
     token.dataset.active = "true";
 }
 
-export function activateMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "end"): void {
+function activateMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "end"): void {
     setActiveMarkdownToken(token);
     suppressSelectionChangeForFrame();
     focusMarkdownTokenSource(token, edge);
@@ -196,7 +196,7 @@ export function activateMarkdownTokenAtCaret(): boolean {
     return true;
 }
 
-export function clearActiveMarkdownToken(
+function clearActiveMarkdownToken(
     options: { focusBlock?: HTMLElement; focusOffset?: number; suppressTokenActivationAtFocus?: boolean } = {},
 ): void {
     const editor = getElement<HTMLElement>("editor");
@@ -251,11 +251,11 @@ export function clearActiveMarkdownToken(
     }
 }
 
-export function isEditableMarkdownToken(token: HTMLElement): boolean {
+function isEditableMarkdownToken(token: HTMLElement): boolean {
     return getMarkdownTokenSource(token) !== null;
 }
 
-export function getMarkdownTokenForSource(source: HTMLElement): HTMLElement | null {
+function getMarkdownTokenForSource(source: HTMLElement): HTMLElement | null {
     const parent = source.parentElement;
     return parent instanceof HTMLElement && parent.classList.contains("markdown-token") ? parent : null;
 }

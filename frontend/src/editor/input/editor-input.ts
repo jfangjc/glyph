@@ -1,31 +1,31 @@
 import {
     applyMarkdownShortcut,
     completeCodeBlockFromFencedParagraph,
-} from "../formats/markdown/editor/block-operations";
+} from "../../formats/markdown/editor/block-operations";
 import {
     applyFocusedBlockMarkdownSourceInput,
     getFocusedBlockMarkdownSource,
     rerenderPlainTextBlockMarkdownSource,
-} from "../formats/markdown/editor/source-controller";
+} from "../../formats/markdown/editor/source-controller";
 import {
     activateMarkdownTokenAtCaret,
     getFocusedMarkdownTokenSource,
     normalizeActiveMarkdownTokenSource,
     suppressAdjacentFormatTokenActivation,
-} from "../formats/markdown/editor/token-controller";
+} from "../../formats/markdown/editor/token-controller";
 import {
     commitTransientBlock,
     getBlockText,
     rerenderInlineBlockContent,
     setBlockText,
-} from "./block-view";
-import { readBlockType } from "./block-model";
+} from "../blocks/view";
+import { readBlockType } from "../blocks/model";
 import {
     focusBlockAtOffset,
     focusPlainTextElement,
     getActiveBlock,
     getCurrentBlockOffset,
-} from "./caret";
+} from "../selection/caret";
 import { isCompositionEvent } from "./keyboard-shortcuts";
 
 type EditorInputOptions = {

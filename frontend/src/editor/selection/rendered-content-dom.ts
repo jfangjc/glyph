@@ -1,5 +1,3 @@
-export type RenderedContentTokenEdge = "start" | "end";
-
 export const caretSpacerCharacter = String.fromCharCode(8203);
 
 export function getRenderedContentText(node: Node): string {

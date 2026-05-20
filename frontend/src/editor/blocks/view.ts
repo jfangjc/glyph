@@ -1,15 +1,15 @@
-import type { DocumentReferenceMap } from "../formats/types";
-import { blockLabels, headingTypes, readBlockType, type BlockType, type ParsedBlock } from "./block-model";
+import type { DocumentReferenceMap } from "../../formats/types";
+import { blockLabels, headingTypes, readBlockType, type BlockType, type ParsedBlock } from "./model";
 import {
     renderAtomicBlockContent,
     renderBlockSourceHtml,
     renderCodeBlockContent,
     renderPlainTextBlockContent,
     type BlockSource,
-} from "./block-rendering";
-import { getElement } from "./dom-utils";
-import { getRenderedContentText } from "./rendered-content-dom";
-import { escapeHtml } from "./text-utils";
+} from "./rendering";
+import { getElement } from "../../utils/dom";
+import { getRenderedContentText } from "../selection/rendered-content-dom";
+import { escapeHtml } from "../../utils/text";
 
 type BlockRenderContext = {
     references: DocumentReferenceMap;
@@ -204,7 +204,7 @@ export function setBlockListNumber(block: HTMLElement, value: string | undefined
     delete block.dataset.listNumber;
 }
 
-export function setBlockQuoteLevel(block: HTMLElement, level: number | undefined): void {
+function setBlockQuoteLevel(block: HTMLElement, level: number | undefined): void {
     if (readBlockType(block.dataset.type) === "quote" && level && level > 1) {
         block.dataset.quoteLevel = String(Math.min(level, 6));
         return;
@@ -213,7 +213,7 @@ export function setBlockQuoteLevel(block: HTMLElement, level: number | undefined
     delete block.dataset.quoteLevel;
 }
 
-export function setTodoChecked(block: HTMLElement, checked: boolean): void {
+function setTodoChecked(block: HTMLElement, checked: boolean): void {
     getTodoCheckbox(block).checked = checked;
 }
 
@@ -239,7 +239,7 @@ export function setCodeInfo(block: HTMLElement, codeInfo: string): void {
     delete content.dataset.codeInfo;
 }
 
-export function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void {
+function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void {
     if (readBlockType(block.dataset.type) === "rule" && ruleMarker && /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker)) {
         block.dataset.ruleMarker = ruleMarker;
         return;
@@ -342,11 +342,11 @@ export function isRichTextBlockType(type: BlockType): boolean {
     return !isStandaloneBlockType(type);
 }
 
-export function isStandaloneBlockType(type: BlockType): boolean {
+function isStandaloneBlockType(type: BlockType): boolean {
     return isPlainTextBlockType(type) || isAtomicBlockType(type);
 }
 
-export function isPlainTextBlockType(type: BlockType): boolean {
+function isPlainTextBlockType(type: BlockType): boolean {
     return type === "code" || type === "source" || type === "reference";
 }
 
@@ -354,7 +354,7 @@ export function isMultilinePlainTextBlockType(type: BlockType): boolean {
     return type === "code" || type === "source";
 }
 
-export function isAtomicBlockType(type: BlockType): boolean {
+function isAtomicBlockType(type: BlockType): boolean {
     return type === "rule";
 }
 
@@ -362,7 +362,7 @@ export function isIndentableListBlockType(type: BlockType): boolean {
     return type === "list" || type === "ordered-list" || type === "todo";
 }
 
-export function usesBulletListMarker(type: BlockType): boolean {
+function usesBulletListMarker(type: BlockType): boolean {
     return type === "list" || type === "todo";
 }
 

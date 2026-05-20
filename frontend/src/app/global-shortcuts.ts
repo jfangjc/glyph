@@ -3,7 +3,7 @@ import {
     isOpenFileShortcut,
     isSaveFileShortcut,
     readZoomShortcut,
-} from "../editor/keyboard-shortcuts";
+} from "../editor/input/keyboard-shortcuts";
 import { syncLinkOpenIntentFromKeyboard } from "../editor/pointer-interactions";
 import { applyZoomShortcut } from "./zoom";
 

@@ -1,14 +1,11 @@
-import { headingTypes, type BlockType, type ParsedBlock, type ParsedDocument } from "../../editor/block-model";
+import { headingTypes, type BlockType, type ParsedBlock, type ParsedDocument } from "../../editor/blocks/model";
 import { titleFromFileName } from "../file-names";
-import type { DocumentFileLike, DocumentFormat } from "../types";
+import type { DocumentFileLike, DocumentFormat, DocumentReferenceMap } from "../types";
 import { hasMarkdownBlockSource, readMarkdownBlockSource } from "./block-source";
 import { createCodeFence } from "./code-fence";
 import { hydrateMarkdownImagePreviews } from "./images";
 import { renderInlineMarkdown } from "./inline";
-import {
-    parseMarkdownReferenceDefinition,
-    type MarkdownReferenceMap,
-} from "./references";
+import { parseMarkdownReferenceDefinition } from "./references";
 
 export const markdownDocumentFormat: DocumentFormat = {
     id: "markdown",
@@ -27,7 +24,7 @@ export const markdownDocumentFormat: DocumentFormat = {
     hydrateRenderedContent: hydrateMarkdownImagePreviews,
 };
 
-export function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDocument {
+function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDocument {
     const lines = readMarkdownLines(documentFile.content, true);
     let title = titleFromFileName(documentFile.name);
     let usesTitle = false;
@@ -54,7 +51,7 @@ export function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDoc
     };
 }
 
-export function parseMarkdownFragment(content: string): { blocks: ParsedBlock[]; references: MarkdownReferenceMap } {
+export function parseMarkdownFragment(content: string): { blocks: ParsedBlock[]; references: DocumentReferenceMap } {
     const parsed = parseMarkdownLines(readMarkdownLines(content, false), 0);
 
     return {
@@ -73,9 +70,9 @@ function readMarkdownLines(content: string, trimTrailingEmptyLine: boolean): str
     return lines;
 }
 
-function parseMarkdownLines(lines: string[], startLine: number): { blocks: ParsedBlock[]; references: MarkdownReferenceMap } {
+function parseMarkdownLines(lines: string[], startLine: number): { blocks: ParsedBlock[]; references: DocumentReferenceMap } {
     const blocks: ParsedBlock[] = [];
-    const references: MarkdownReferenceMap = {};
+    const references: DocumentReferenceMap = {};
 
     for (let index = startLine; index < lines.length; index += 1) {
         const line = lines[index];
@@ -141,7 +138,7 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
     return { blocks, references };
 }
 
-export function serializeMarkdownDocument(title: string, usesTitle: boolean, blocks: ParsedBlock[]): string {
+function serializeMarkdownDocument(title: string, usesTitle: boolean, blocks: ParsedBlock[]): string {
     const trimmedTitle = title.trim();
     const body = blocks.map(serializeMarkdownBlock).join("\n");
     const content = usesTitle && trimmedTitle ? `# ${trimmedTitle}${body ? `\n\n${body}` : ""}` : body;
@@ -149,8 +146,8 @@ export function serializeMarkdownDocument(title: string, usesTitle: boolean, blo
     return content ? `${content}\n` : "";
 }
 
-export function readMarkdownReferences(blocks: ParsedBlock[]): MarkdownReferenceMap {
-    const references: MarkdownReferenceMap = {};
+function readMarkdownReferences(blocks: ParsedBlock[]): DocumentReferenceMap {
+    const references: DocumentReferenceMap = {};
 
     for (const block of blocks) {
         if (block.type !== "reference") {

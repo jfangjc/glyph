@@ -1,4 +1,4 @@
-import type { ParsedBlock, ParsedDocument } from "../../editor/block-model";
+import type { ParsedBlock, ParsedDocument } from "../../editor/blocks/model";
 import { titleFromFileName } from "../file-names";
 import type { DocumentFileLike, DocumentFormat, ParsedDocumentFragment } from "../types";
 

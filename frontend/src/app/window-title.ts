@@ -1,8 +1,8 @@
 import { Window } from "@wailsio/runtime";
 import { canUseDesktopFileSystem } from "../documents/document-actions";
 import { documentState } from "../documents/document-state";
-import { getElement } from "../editor/dom-utils";
-import { fileNameFromPath } from "../editor/text-utils";
+import { getElement } from "../utils/dom";
+import { fileNameFromPath } from "../utils/text";
 
 export function syncDocumentWindowTitle(): void {
     const fileName = documentState.activeFilePath

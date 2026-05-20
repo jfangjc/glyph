@@ -2,38 +2,38 @@ import {
     insertLineBreakInOpenCodeFenceParagraph,
     removeTrailingLineBreakInOpenCodeFenceParagraph,
     startCodeBlockFromFence,
-} from "../formats/markdown/editor/block-operations";
+} from "../../formats/markdown/editor/block-operations";
 import {
     moveCaretAfterCodeBlockSourceAtSelection,
     moveCaretIntoCodeBlockSourceAtBoundary,
     handleBlockMarkdownSourceKeydown,
     trackVerticalBlockSourceNavigation,
-} from "../formats/markdown/editor/source-controller";
+} from "../../formats/markdown/editor/source-controller";
 import {
     moveCaretOutOfActiveMarkdownTokenSource,
     trackHorizontalMarkdownNavigation,
     trackVerticalLeadingTokenNavigation,
     trackVerticalMarkdownImageNavigation,
-} from "../formats/markdown/editor/token-controller";
+} from "../../formats/markdown/editor/token-controller";
 import {
     indentListBlocks,
     mergeForward,
     removeOrMergeBackward,
     removeTrailingLineBreakInMultilinePlainTextBlock,
     splitBlock,
-} from "./block-operations";
+} from "../blocks/operations";
 import {
     getSiblingBlock,
     isMultilinePlainTextBlockType,
-} from "./block-view";
-import { readBlockType } from "./block-model";
+} from "../blocks/view";
+import { readBlockType } from "../blocks/model";
 import {
     getActiveBlock,
     getSelectedBlockRange,
     isCaretAtBlockEdge,
     selectEditorContents,
-} from "./caret";
-import { getElement } from "./dom-utils";
+} from "../selection/caret";
+import { getElement } from "../../utils/dom";
 import {
     isCompositionEvent,
     isPlainTextKey,
@@ -44,7 +44,7 @@ import {
     applyInlineFormatShortcut,
     deleteSelectedContent,
     replaceSelectionWithText,
-} from "./selection-commands";
+} from "../selection/commands";
 
 type EditorKeydownOptions = {
     isComposingText: boolean;

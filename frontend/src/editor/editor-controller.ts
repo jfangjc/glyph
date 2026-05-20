@@ -18,26 +18,26 @@ import {
     syncBlockViewContext,
     syncDocumentFormatUi,
 } from "../documents/document-session";
-import { configureBlockOperations } from "./block-operations";
+import { configureBlockOperations } from "./blocks/operations";
 import {
     findBlock,
     getBlockText,
     setBlockText,
     syncFirstBlockPlaceholder,
-} from "./block-view";
-import { configureCaret } from "./caret";
-import { getElement } from "./dom-utils";
+} from "./blocks/view";
+import { configureCaret } from "./selection/caret";
+import { getElement } from "../utils/dom";
 import {
     handleEditorCopy as handleEditorCopyCommand,
     handleEditorCut as handleEditorCutCommand,
     handleEditorPaste as handleEditorPasteCommand,
-} from "./editor-clipboard";
+} from "./input/editor-clipboard";
 import {
     handleEditorBeforeInput as handleEditorBeforeInputCommand,
     handleEditorInput as handleEditorInputCommand,
-} from "./editor-input";
+} from "./input/editor-input";
 import { installEditorEventListeners } from "./editor-events";
-import { handleEditorKeydown as handleEditorKeydownCommand } from "./editor-keydown";
+import { handleEditorKeydown as handleEditorKeydownCommand } from "./input/editor-keydown";
 import {
     configureEditorUiState,
     syncActiveBlockIndicator,

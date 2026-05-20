@@ -1,5 +1,5 @@
-import { type ParsedBlock, readBlockType } from "../../../editor/block-model";
-import { getBlockSourceElement } from "../../../editor/block-rendering";
+import { type ParsedBlock, readBlockType } from "../../../editor/blocks/model";
+import { getBlockSourceElement } from "../../../editor/blocks/rendering";
 import {
     ensureEditableBlockAfter,
     getBlockContent,
@@ -12,7 +12,7 @@ import {
     setBlockType,
     setCodeFence,
     setCodeInfo,
-} from "../../../editor/block-view";
+} from "../../../editor/blocks/view";
 import {
     focusBlock,
     focusBlockAtOffset,
@@ -21,9 +21,9 @@ import {
     getCurrentBlockOffset,
     isCaretAtBlockEdge,
     readLineHeight,
-} from "../../../editor/caret";
-import { caretSpacerCharacter, getRenderedContentText } from "../../../editor/rendered-content-dom";
-import { insertTextAtCaret } from "../../../editor/selection-commands";
+} from "../../../editor/selection/caret";
+import { caretSpacerCharacter, getRenderedContentText } from "../../../editor/selection/rendered-content-dom";
+import { insertTextAtCaret } from "../../../editor/selection/commands";
 import { parseMarkdownReferenceDefinition } from "../references";
 import { markdownShortcuts } from "../shortcuts";
 

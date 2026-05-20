@@ -1,6 +1,7 @@
 import { chooseDocumentToOpen, chooseDocumentToSave, readDocument, saveDocument } from "../bridge/documents";
 import type { DocumentFile } from "../bridge/types";
 import { getDocumentFormatById } from "../formats/registry";
+import { fileNameFromPath } from "../utils/text";
 import { documentState, notifyDocumentStateChanged } from "./document-state";
 
 type DocumentActionHost = {
@@ -23,8 +24,8 @@ export function bindDocumentActions(nextHost: DocumentActionHost): void {
     notifyDocumentStateChanged();
 }
 
-export function startDocumentAutosave(): number {
-    return window.setInterval(() => void saveCurrentDocument(), autoSaveIntervalMs);
+export function startDocumentAutosave(): void {
+    window.setInterval(() => void saveCurrentDocument(), autoSaveIntervalMs);
 }
 
 export function canUseDesktopFileSystem(): boolean {
@@ -134,7 +135,7 @@ async function resolveSavePath(options: SaveDocumentOptions): Promise<string | n
     const selectedPath = await chooseDocumentToSave(
         normalizeSuggestedFileName(
             options.suggestedFileName ??
-                fileNameFromPath(documentState.activeFilePath) ??
+                (documentState.activeFilePath ? fileNameFromPath(documentState.activeFilePath) : null) ??
                 getDocumentFormatById(documentState.activeFormatId).defaultFileName,
             getDocumentFormatById(documentState.activeFormatId).defaultExtension,
         ),
@@ -155,15 +156,6 @@ function normalizeSuggestedFileName(value: string, defaultExtension: string): st
     }
 
     return /\.[^\\/.\s]+$/.test(trimmed) ? trimmed : `${trimmed}.${defaultExtension}`;
-}
-
-function fileNameFromPath(path: string | null): string | null {
-    if (!path) {
-        return null;
-    }
-
-    const normalized = path.replace(/\\/g, "/");
-    return normalized.slice(normalized.lastIndexOf("/") + 1) || null;
 }
 
 function getHost(): DocumentActionHost {

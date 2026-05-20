@@ -5,16 +5,16 @@ import {
     readEditorBlock,
     setBlockText,
     setBlockType,
-} from "./block-view";
-import { readBlockType } from "./block-model";
+} from "../blocks/view";
+import { readBlockType } from "../blocks/model";
 import {
     focusBlockAtOffset,
     getCaretOffset,
     getSelectedBlockRange,
     type SelectedBlockRange,
 } from "./caret";
-import type { ParsedBlock } from "./block-model";
-import type { InlineFormat } from "./keyboard-shortcuts";
+import type { ParsedBlock } from "../blocks/model";
+import type { InlineFormat } from "../input/keyboard-shortcuts";
 
 export function readSelectedContent(serializeBlocks: (blocks: ParsedBlock[]) => string): string | null {
     const selectedRange = getSelectedBlockRange();

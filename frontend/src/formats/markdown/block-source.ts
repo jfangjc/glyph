@@ -1,5 +1,5 @@
-import { headingTypes, type BlockType } from "../../editor/block-model";
-import type { BlockSource } from "../../editor/block-rendering";
+import { headingTypes, type BlockType } from "../../editor/blocks/model";
+import type { BlockSource } from "../../editor/blocks/rendering";
 import {
     getTodoCheckbox,
     readBlockCodeFence,
@@ -7,7 +7,7 @@ import {
     readBlockListNumber,
     readBlockQuoteLevel,
     readBlockRuleMarker,
-} from "../../editor/block-view";
+} from "../../editor/blocks/view";
 import { createCodeFence } from "./code-fence";
 
 export function hasMarkdownBlockSource(type: BlockType): boolean {

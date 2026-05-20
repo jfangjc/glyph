@@ -1,7 +1,7 @@
 import { Window } from "@wailsio/runtime";
 import { canUseDesktopFileSystem } from "../documents/document-actions";
-import { clamp } from "../editor/text-utils";
-import type { ZoomShortcut } from "../editor/keyboard-shortcuts";
+import { clamp } from "../utils/text";
+import type { ZoomShortcut } from "../editor/input/keyboard-shortcuts";
 
 let browserPreviewZoom = 1;
 

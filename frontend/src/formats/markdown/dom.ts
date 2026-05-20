@@ -2,10 +2,9 @@ import {
     getRenderedContentBoundaryOffset,
     getRenderedContentText,
     stripCaretSpacers,
-    type RenderedContentTokenEdge,
-} from "../../editor/rendered-content-dom";
+} from "../../editor/selection/rendered-content-dom";
 
-export type MarkdownTokenEdge = RenderedContentTokenEdge;
+export type MarkdownTokenEdge = "start" | "end";
 
 export function findAdjacentInactiveMarkdownToken(
     node: Node,

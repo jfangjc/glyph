@@ -16,8 +16,8 @@ import {
     setBlockText,
     shouldResetEmptyBlock,
     syncFirstBlockPlaceholder,
-} from "./block-view";
-import { readBlockType, type ParsedBlock } from "./block-model";
+} from "./view";
+import { readBlockType, type ParsedBlock } from "./model";
 import {
     focusBlock,
     focusBlockAtOffset,
@@ -25,11 +25,11 @@ import {
     getCurrentBlockOffset,
     getSelectedBlockRange,
     isCaretAtBlockEdge,
-} from "./caret";
+} from "../selection/caret";
 import {
     deleteSelectedContent,
     insertTextAtCaret,
-} from "./selection-commands";
+} from "../selection/commands";
 
 type BlockOperationHooks = {
     parseFragment?: (content: string) => { blocks: ParsedBlock[] };

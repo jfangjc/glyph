@@ -7,15 +7,15 @@ import {
     getBlockText,
     getSiblingBlock,
     setBlockText,
-} from "../../../editor/block-view";
-import { readBlockType, type ParsedBlock } from "../../../editor/block-model";
-import { removeOrMergeBackward, splitBlock } from "../../../editor/block-operations";
+} from "../../../editor/blocks/view";
+import { readBlockType, type ParsedBlock } from "../../../editor/blocks/model";
+import { removeOrMergeBackward, splitBlock } from "../../../editor/blocks/operations";
 import {
     getBlockSourceElement,
     isBlockSourceElement,
     readBlockSourcePosition,
     type BlockSourcePosition,
-} from "../../../editor/block-rendering";
+} from "../../../editor/blocks/rendering";
 import {
     focusBlockAtOffset,
     focusPlainTextElement,
@@ -23,9 +23,9 @@ import {
     getCurrentBlockOffset,
     getPlainTextBoundaryOffset,
     isCaretAtBlockEdge,
-} from "../../../editor/caret";
-import { readInlineFormatShortcut } from "../../../editor/keyboard-shortcuts";
-import { getRenderedContentText } from "../../../editor/rendered-content-dom";
+} from "../../../editor/selection/caret";
+import { readInlineFormatShortcut } from "../../../editor/input/keyboard-shortcuts";
+import { getRenderedContentText } from "../../../editor/selection/rendered-content-dom";
 import { hasMarkdownBlockSource } from "../block-source";
 import { clearPendingMarkdownTokenNavigation } from "./token-controller";
 

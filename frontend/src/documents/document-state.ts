@@ -1,4 +1,4 @@
-export type DocumentState = {
+type DocumentState = {
     activeFilePath: string | null;
     activeFormatId: string;
     usesTitle: boolean;

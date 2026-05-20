@@ -1,7 +1,4 @@
-import type { DocumentReference, DocumentReferenceMap } from "../types";
-
-export type MarkdownReference = DocumentReference;
-export type MarkdownReferenceMap = DocumentReferenceMap;
+import type { DocumentReference } from "../types";
 
 export function normalizeReferenceLabel(label: string): string {
     return label.trim().replace(/\s+/g, " ").toLowerCase();
@@ -9,7 +6,7 @@ export function normalizeReferenceLabel(label: string): string {
 
 export function parseMarkdownReferenceDefinition(
     line: string,
-): { normalizedLabel: string; reference: MarkdownReference } | null {
+): { normalizedLabel: string; reference: DocumentReference } | null {
     const leadingWhitespace = line.match(/^[ \t]*/)?.[0] ?? "";
     if (countIndentColumns(leadingWhitespace) > 3) {
         return null;
@@ -39,7 +36,7 @@ export function parseMarkdownReferenceDefinition(
     return { normalizedLabel, reference };
 }
 
-export function parseMarkdownDestinationWithTitle(value: string): MarkdownReference | null {
+export function parseMarkdownDestinationWithTitle(value: string): DocumentReference | null {
     const trimmed = value.trim();
     if (!trimmed) {
         return null;

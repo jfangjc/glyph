@@ -1,11 +1,11 @@
-import type { DocumentFormat } from "../formats/types";
-import { commitTransientBlock } from "./block-view";
-import { getActiveBlock } from "./caret";
-import { insertPastedText } from "./block-operations";
+import type { DocumentFormat } from "../../formats/types";
+import { commitTransientBlock } from "../blocks/view";
+import { getActiveBlock } from "../selection/caret";
+import { insertPastedText } from "../blocks/operations";
 import {
     deleteSelectedContent,
     readSelectedContent,
-} from "./selection-commands";
+} from "../selection/commands";
 
 type EditorClipboardOptions = {
     getActiveDocumentFormat: () => DocumentFormat;

@@ -1,6 +1,7 @@
 import "./window-controls.css";
 import windowControlsHtml from "./window-controls.html?raw";
 import { System, Window } from "@wailsio/runtime";
+import { getElement } from "../../utils/dom";
 
 let maximiseButton: HTMLButtonElement | null = null;
 let snapAssistTimer = 0;
@@ -98,12 +99,4 @@ async function syncMaximiseButton(): Promise<void> {
     if (icon) {
         icon.innerHTML = isMaximised ? "&#xE923;" : "&#xE922;";
     }
-}
-
-function getElement<TElement extends HTMLElement>(id: string): TElement {
-    const element = document.getElementById(id);
-    if (!element) {
-        throw new Error(`Missing element: ${id}`);
-    }
-    return element as TElement;
 }

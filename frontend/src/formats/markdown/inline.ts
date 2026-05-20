@@ -2,10 +2,11 @@ import {
     normalizeReferenceLabel,
     parseMarkdownDestinationWithTitle,
     unescapeMarkdownText,
-    type MarkdownReferenceMap,
 } from "./references";
+import type { DocumentReferenceMap } from "../types";
+import { escapeHtml } from "../../utils/text";
 
-export type InlineToken = {
+type InlineToken = {
     raw: string;
     label: string;
     destination: string;
@@ -40,17 +41,9 @@ type MarkdownInlineToken = {
     raw: string;
 };
 
-const htmlEscapes: Record<string, string> = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-};
-
 const escapableCharacters = new Set(["\\", "`", "*", "_", "{", "}", "[", "]", "<", ">", "(", ")", "#", "+", "-", ".", "!", "|"]);
 
-export function renderInlineMarkdown(text: string, references: MarkdownReferenceMap = {}, depth = 0): string {
+export function renderInlineMarkdown(text: string, references: DocumentReferenceMap = {}, depth = 0): string {
     if (depth > 8) {
         return escapeHtml(text);
     }
@@ -230,7 +223,7 @@ function readReferenceToken(
     text: string,
     index: number,
     image: boolean,
-    references: MarkdownReferenceMap,
+    references: DocumentReferenceMap,
 ): InlineToken | null {
     const token = readReferenceSyntaxToken(text, index, image);
     if (!token) {
@@ -397,7 +390,7 @@ function renderEscapedCharacter(token: EscapedCharacterToken): string {
     return `<span class="markdown-escape" data-source-raw="${escapeHtml(token.raw)}">${escapeHtml(token.character)}</span>`;
 }
 
-function renderEmphasisToken(token: EmphasisToken, references: MarkdownReferenceMap, depth: number): string {
+function renderEmphasisToken(token: EmphasisToken, references: DocumentReferenceMap, depth: number): string {
     const raw = escapeHtml(token.raw);
     const label = renderInlineMarkdown(token.label, references, depth);
 
@@ -421,7 +414,7 @@ function renderImageToken(token: InlineToken): string {
     return `<span class="markdown-token markdown-image-token"><span class="markdown-image-preview" contenteditable="false" data-source-ignore="true" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>`;
 }
 
-function renderLinkToken(token: InlineToken, references: MarkdownReferenceMap, depth: number): string {
+function renderLinkToken(token: InlineToken, references: DocumentReferenceMap, depth: number): string {
     const href = normalizeLinkHref(token.destination);
     const title = token.title ? ` title="${escapeHtml(token.title)}"` : "";
     const labelHtml = renderInlineMarkdown(token.label, references, depth);
@@ -592,8 +585,4 @@ function countMarkerRun(text: string, index: number, marker: string): number {
     }
 
     return length;
-}
-
-function escapeHtml(value: string): string {
-    return value.replace(/[&<>"']/g, (character) => htmlEscapes[character]);
 }

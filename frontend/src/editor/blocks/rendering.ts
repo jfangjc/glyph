@@ -1,5 +1,5 @@
-import { caretSpacerCharacter } from "./rendered-content-dom";
-import { escapeHtml } from "./text-utils";
+import { caretSpacerCharacter } from "../selection/rendered-content-dom";
+import { escapeHtml } from "../../utils/text";
 
 export type BlockSource = {
     prefix?: string;

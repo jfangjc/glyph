@@ -1,5 +1,5 @@
-import type { BlockType, ParsedBlock, ParsedDocument } from "../editor/block-model";
-import type { BlockSource } from "../editor/block-rendering";
+import type { BlockType, ParsedBlock, ParsedDocument } from "../editor/blocks/model";
+import type { BlockSource } from "../editor/blocks/rendering";
 
 export type DocumentFileLike = {
     name: string;

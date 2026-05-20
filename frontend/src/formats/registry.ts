@@ -3,7 +3,7 @@ import { markdownDocumentFormat } from "./markdown/document";
 import { createSourceDocumentFormat } from "./source/document";
 import type { DocumentFormat } from "./types";
 
-export type DocumentFileFilter = {
+type DocumentFileFilter = {
     displayName: string;
     patterns: string[];
 };
@@ -40,7 +40,7 @@ const plainTextDocumentFormat = createSourceDocumentFormat({
     defaultFileName: "Untitled.txt",
 });
 
-export const documentFormats: DocumentFormat[] = [
+const documentFormats: DocumentFormat[] = [
     markdownDocumentFormat,
     latexDocumentFormat,
     orgDocumentFormat,
@@ -48,8 +48,8 @@ export const documentFormats: DocumentFormat[] = [
     plainTextDocumentFormat,
 ];
 
-export const defaultDocumentFormat = markdownDocumentFormat;
-export const fallbackDocumentFormat = plainTextDocumentFormat;
+const defaultDocumentFormat = markdownDocumentFormat;
+const fallbackDocumentFormat = plainTextDocumentFormat;
 
 export function getDocumentFormatById(id: string | null | undefined): DocumentFormat {
     return documentFormats.find((format) => format.id === id) ?? defaultDocumentFormat;
