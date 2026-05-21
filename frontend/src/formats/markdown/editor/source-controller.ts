@@ -27,6 +27,7 @@ import {
 import { readInlineFormatShortcut } from "../../../editor/input/keyboard-shortcuts";
 import { getRenderedContentText } from "../../../editor/selection/rendered-content-dom";
 import { hasMarkdownBlockSource } from "../block-source";
+import { formatMarkdownTableSource } from "../table";
 import { clearPendingMarkdownTokenNavigation } from "./token-controller";
 
 type MarkdownSourceHooks = {
@@ -75,6 +76,24 @@ export function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean 
         return true;
     }
 
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && moveAfterTableSource(source)) {
+        event.preventDefault();
+        hooks.markEditorDirty?.();
+        return true;
+    }
+
+    if (event.key === "Tab" && moveInTableSource(event, source, event.shiftKey ? "previous-cell" : "next-cell")) {
+        event.preventDefault();
+        hooks.markEditorDirty?.();
+        return true;
+    }
+
+    if (event.key === "Enter" && insertLineBreakInTableSource(event, source)) {
+        event.preventDefault();
+        hooks.markEditorDirty?.();
+        return true;
+    }
+
     if (event.key === "Enter" && moveCaretAfterCodeBlockSource(source)) {
         event.preventDefault();
         hooks.markEditorDirty?.();
@@ -92,6 +111,266 @@ export function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean 
     }
 
     return true;
+}
+
+type TableCellBoundary = {
+    lineIndex: number;
+    cellIndex: number;
+    start: number;
+    end: number;
+};
+
+type TableSourceFocus = {
+    lineIndex: number;
+    cellIndex: number;
+    cellOffset: number;
+} | null;
+
+function insertLineBreakInTableSource(event: KeyboardEvent, source: HTMLElement): boolean {
+    const block = findBlock(source);
+    if (
+        !block ||
+        readBlockType(block.dataset.type) !== "table" ||
+        readBlockSourcePosition(source) !== "atomic" ||
+        event.ctrlKey ||
+        event.metaKey
+    ) {
+        return false;
+    }
+
+    const currentText = source.textContent ?? "";
+    const currentCell = readCurrentTableCell(source);
+    const columnCount = readTableColumnCount(currentText);
+    if (!currentCell || columnCount < 2) {
+        return false;
+    }
+
+    if (isCaretAfterFinalTablePipe(source)) {
+        moveAfterTableSource(source);
+        return true;
+    }
+
+    moveToTableCell(source, currentCell.lineIndex + 1, 0, true);
+    return true;
+}
+
+function moveInTableSource(
+    event: KeyboardEvent,
+    source: HTMLElement,
+    direction: "previous-cell" | "next-cell",
+): boolean {
+    const block = findBlock(source);
+    if (
+        !block ||
+        readBlockType(block.dataset.type) !== "table" ||
+        readBlockSourcePosition(source) !== "atomic" ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey
+    ) {
+        return false;
+    }
+
+    const currentCell = readCurrentTableCell(source);
+    if (!currentCell) {
+        return false;
+    }
+
+    const text = source.textContent ?? "";
+    const columnCount = readTableColumnCount(text);
+    if (columnCount < 2) {
+        return false;
+    }
+
+    const nextCellIndex = currentCell.cellIndex + (direction === "next-cell" ? 1 : -1);
+    if (nextCellIndex >= 0 && nextCellIndex < columnCount) {
+        moveToTableCell(source, currentCell.lineIndex, nextCellIndex, false);
+        return true;
+    }
+
+    const nextLineIndex = currentCell.lineIndex + (direction === "next-cell" ? 1 : -1);
+    if (nextLineIndex < 2) {
+        return true;
+    }
+
+    moveToTableCell(source, nextLineIndex, direction === "next-cell" ? 0 : columnCount - 1, direction === "next-cell");
+    return true;
+}
+
+function moveAfterTableSource(source: HTMLElement): boolean {
+    const block = findBlock(source);
+    if (!block) {
+        return false;
+    }
+
+    if (readBlockType(block.dataset.type) !== "table" || readBlockSourcePosition(source) !== "atomic") {
+        return false;
+    }
+
+    applyFocusedBlockMarkdownSourceInput(source);
+    ensureEditableBlockAfter(block);
+    focusBlockAtOffset(getSiblingBlock(block, "next") ?? block, 0);
+    return true;
+}
+
+function moveToTableCell(source: HTMLElement, lineIndex: number, cellIndex: number, appendRows: boolean): void {
+    let text = source.textContent ?? "";
+    const columnCount = readTableColumnCount(text);
+    if (columnCount < 2) {
+        return;
+    }
+
+    if (appendRows) {
+        const row = createEmptyTableRow(columnCount);
+        let lines = text.split("\n");
+        while (lineIndex >= lines.length) {
+            lines.push(row);
+        }
+        text = formatMarkdownTableSource(lines.join("\n"));
+        source.textContent = text;
+    }
+
+    const targetCell = readTableCellBoundary(text, lineIndex, cellIndex);
+    if (!targetCell) {
+        return;
+    }
+
+    focusPlainTextElement(source, targetCell.start);
+    applyFocusedBlockMarkdownSourceInput(source);
+}
+
+function readCurrentTableCell(source: HTMLElement): TableCellBoundary | null {
+    const text = source.textContent ?? "";
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const offset =
+        selection?.isCollapsed && focusNode && (focusNode === source || source.contains(focusNode))
+            ? getPlainTextBoundaryOffset(source, focusNode, selection.focusOffset)
+            : text.length;
+
+    return readTableCellBoundaryAtOffset(text, offset);
+}
+
+function isCaretAfterFinalTablePipe(source: HTMLElement): boolean {
+    const text = source.textContent ?? "";
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const offset =
+        selection?.isCollapsed && focusNode && (focusNode === source || source.contains(focusNode))
+            ? getPlainTextBoundaryOffset(source, focusNode, selection.focusOffset)
+            : text.length;
+    const finalPipeOffset = text.search(/\|\s*$/);
+
+    return finalPipeOffset >= 0 && offset > finalPipeOffset && offset <= text.length;
+}
+
+function readTableCellBoundaryAtOffset(text: string, offset: number): TableCellBoundary | null {
+    const lines = text.split("\n");
+    let lineStart = 0;
+
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+        const line = lines[lineIndex];
+        const lineEnd = lineStart + line.length;
+        if (offset >= lineStart && offset <= lineEnd) {
+            const cells = readTableRowCellBoundaries(line, lineStart, lineIndex);
+            return cells.find((cell) => offset <= cell.end) ?? cells[cells.length - 1] ?? null;
+        }
+
+        lineStart = lineEnd + 1;
+    }
+
+    return null;
+}
+
+function readTableCellBoundary(text: string, lineIndex: number, cellIndex: number): TableCellBoundary | null {
+    const lines = text.split("\n");
+    if (lineIndex < 0 || lineIndex >= lines.length) {
+        return null;
+    }
+
+    const lineStart = lines.slice(0, lineIndex).join("\n").length + (lineIndex > 0 ? 1 : 0);
+    return readTableRowCellBoundaries(lines[lineIndex], lineStart, lineIndex)[cellIndex] ?? null;
+}
+
+function readTableRowCellBoundaries(line: string, lineStart: number, lineIndex: number): TableCellBoundary[] {
+    const cells: TableCellBoundary[] = [];
+    const leadingPipe = line.startsWith("|");
+    let cellStart = leadingPipe ? 1 : 0;
+    let cellIndex = 0;
+
+    for (let index = cellStart; index <= line.length; index += 1) {
+        if (index < line.length && (line[index] !== "|" || isEscapedAt(line, index))) {
+            continue;
+        }
+
+        cells.push(createTableCellBoundary(line, lineStart, lineIndex, cellIndex, cellStart, index));
+        cellStart = index + 1;
+        cellIndex += 1;
+    }
+
+    if (leadingPipe && cells.length > 0 && cells[cells.length - 1].start === lineStart + line.length) {
+        cells.pop();
+    }
+
+    return cells;
+}
+
+function createTableCellBoundary(
+    line: string,
+    lineStart: number,
+    lineIndex: number,
+    cellIndex: number,
+    rawStart: number,
+    rawEnd: number,
+): TableCellBoundary {
+    const rawCell = line.slice(rawStart, rawEnd);
+    if (rawCell.trim() === "") {
+        const offset = rawCell.startsWith(" ") ? 1 : 0;
+        const emptyCellStart = lineStart + rawStart + offset;
+        return {
+            lineIndex,
+            cellIndex,
+            start: emptyCellStart,
+            end: emptyCellStart,
+        };
+    }
+
+    let start = rawStart;
+    let end = rawEnd;
+
+    while (start < end && line[start] === " ") {
+        start += 1;
+    }
+
+    while (end > start && line[end - 1] === " ") {
+        end -= 1;
+    }
+
+    return {
+        lineIndex,
+        cellIndex,
+        start: lineStart + start,
+        end: lineStart + end,
+    };
+}
+
+function readTableColumnCount(text: string): number {
+    const header = text.split("\n")[0] ?? "";
+    return readTableRowCellBoundaries(header, 0, 0).length;
+}
+
+function createEmptyTableRow(columnCount: number): string {
+    return `| ${Array.from({ length: columnCount }, () => "").join(" | ")} |`;
+}
+
+function isEscapedAt(text: string, index: number): boolean {
+    let slashCount = 0;
+
+    for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
+        slashCount += 1;
+    }
+
+    return slashCount % 2 === 1;
 }
 
 export function moveCaretIntoCodeBlockSourceAtBoundary(event: KeyboardEvent, block: HTMLElement): boolean {
@@ -178,10 +457,15 @@ export function applyFocusedBlockMarkdownSourceInput(
             : (source.textContent ?? "").length;
     const sourcePosition = readBlockSourcePosition(source);
     const rawOffset = getBlockRawMarkdownOffset(block, sourcePosition, sourceOffset);
+    const tableFocus = readTableSourceFocus(block, source, sourceOffset);
     const parsedBlock = parseEditedRawMarkdownBlock(block, getBlockRawMarkdown(block));
 
     applyBlockProperties(block, parsedBlock);
     setBlockText(block, parsedBlock.text);
+    if (restoreTableSourceFocusAfterInput(block, tableFocus)) {
+        return true;
+    }
+
     restoreFocusAfterBlockMarkdownSourceInput(block, sourcePosition, sourceOffset, rawOffset);
     return true;
 }
@@ -371,6 +655,42 @@ function isCaretAtPlainTextEdge(element: HTMLElement, edge: "start" | "end"): bo
 
     const offset = getPlainTextBoundaryOffset(element, focusNode, selection.focusOffset);
     return edge === "start" ? offset === 0 : offset === (element.textContent ?? "").length;
+}
+
+function readTableSourceFocus(block: HTMLElement, source: HTMLElement, sourceOffset: number): TableSourceFocus {
+    if (readBlockType(block.dataset.type) !== "table" || readBlockSourcePosition(source) !== "atomic") {
+        return null;
+    }
+
+    const cell = readTableCellBoundaryAtOffset(source.textContent ?? "", sourceOffset);
+    if (!cell) {
+        return null;
+    }
+
+    return {
+        lineIndex: cell.lineIndex,
+        cellIndex: cell.cellIndex,
+        cellOffset: Math.max(0, sourceOffset - cell.start),
+    };
+}
+
+function restoreTableSourceFocusAfterInput(block: HTMLElement, focus: TableSourceFocus): boolean {
+    if (!focus || readBlockType(block.dataset.type) !== "table") {
+        return false;
+    }
+
+    const source = getBlockSourceElement(getBlockContent(block), "atomic");
+    const cell = source ? readTableCellBoundary(source.textContent ?? "", focus.lineIndex, focus.cellIndex) : null;
+    if (!source || !cell) {
+        return false;
+    }
+
+    focusPlainTextElement(source, Math.min(cell.start + focus.cellOffset, cell.end));
+    activeBlockMarkdownSource = {
+        block,
+        rawBeforeActivation: getBlockRawMarkdown(block),
+    };
+    return true;
 }
 
 function applyRawMarkdownToBlock(block: HTMLElement, rawMarkdown: string, focusBlock: HTMLElement | null): void {

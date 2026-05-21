@@ -28,6 +28,18 @@ export function renderAtomicBlockContent(content: HTMLElement, source: BlockSour
     appendBlockSourceElement(content, source.atomic ?? source.prefix, "atomic");
 }
 
+export function renderPreviewBlockContent(content: HTMLElement, text: string, html: string, className: string): void {
+    content.replaceChildren();
+    appendBlockSourceElement(content, text, "atomic");
+
+    const preview = document.createElement("div");
+    preview.className = className;
+    preview.dataset.sourceIgnore = "true";
+    preview.contentEditable = "false";
+    preview.innerHTML = html;
+    content.append(preview);
+}
+
 export function renderBlockSourceHtml(value: string | undefined, position: BlockSourcePosition): string {
     if (!value) {
         return "";

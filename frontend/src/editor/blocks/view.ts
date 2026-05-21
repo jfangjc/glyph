@@ -5,6 +5,7 @@ import {
     renderBlockSourceHtml,
     renderCodeBlockContent,
     renderPlainTextBlockContent,
+    renderPreviewBlockContent,
     type BlockSource,
 } from "./rendering";
 import { getElement } from "../../utils/dom";
@@ -15,6 +16,7 @@ type BlockRenderContext = {
     references: DocumentReferenceMap;
     activeFilePath: string | null;
     renderInlineContent: (text: string, references: DocumentReferenceMap) => string;
+    renderBlockContent?: (type: BlockType, text: string, references: DocumentReferenceMap) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
 };
@@ -101,6 +103,14 @@ export function setBlockText(block: HTMLElement, text: string): void {
     if (type === "code") {
         renderCodeBlockContent(content, text, source);
         delete content.dataset.renderedMarkdown;
+        return;
+    }
+
+    const blockHtml = renderContext.renderBlockContent?.(type, text, renderContext.references);
+    if (blockHtml !== undefined && blockHtml !== null) {
+        renderPreviewBlockContent(content, text, blockHtml, `markdown-${type}-preview`);
+        content.dataset.renderedMarkdown = blockHtml;
+        renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
         return;
     }
 
@@ -343,7 +353,7 @@ export function isRichTextBlockType(type: BlockType): boolean {
 }
 
 function isStandaloneBlockType(type: BlockType): boolean {
-    return isPlainTextBlockType(type) || isAtomicBlockType(type);
+    return isPlainTextBlockType(type) || isAtomicBlockType(type) || type === "table";
 }
 
 function isPlainTextBlockType(type: BlockType): boolean {
@@ -367,7 +377,7 @@ function usesBulletListMarker(type: BlockType): boolean {
 }
 
 export function shouldResetEmptyBlock(type: BlockType): boolean {
-    return isIndentableListBlockType(type) || type === "quote" || type === "reference";
+    return isIndentableListBlockType(type) || type === "quote" || type === "reference" || type === "table";
 }
 
 export function getBlockContent(block: HTMLElement): HTMLElement {

@@ -2,6 +2,7 @@ import {
     insertLineBreakInOpenCodeFenceParagraph,
     removeTrailingLineBreakInOpenCodeFenceParagraph,
     startCodeBlockFromFence,
+    startTableFromHeader,
 } from "../../formats/markdown/editor/block-operations";
 import {
     moveCaretAfterCodeBlockSourceAtSelection,
@@ -107,6 +108,11 @@ export function handleEditorKeydown(event: KeyboardEvent, options: EditorKeydown
         const targetBlock = deleteSelectedContent() ?? block;
 
         if (startCodeBlockFromFence(targetBlock)) {
+            options.markEditorDirty();
+            return;
+        }
+
+        if (startTableFromHeader(targetBlock)) {
             options.markEditorDirty();
             return;
         }

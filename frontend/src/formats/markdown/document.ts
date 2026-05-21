@@ -6,6 +6,7 @@ import { createCodeFence } from "./code-fence";
 import { hydrateMarkdownImagePreviews } from "./images";
 import { renderInlineMarkdown } from "./inline";
 import { parseMarkdownReferenceDefinition } from "./references";
+import { readMarkdownTable, renderMarkdownBlock } from "./table";
 
 export const markdownDocumentFormat: DocumentFormat = {
     id: "markdown",
@@ -21,6 +22,7 @@ export const markdownDocumentFormat: DocumentFormat = {
     hasBlockSource: hasMarkdownBlockSource,
     readBlockSource: readMarkdownBlockSource,
     renderInline: renderInlineMarkdown,
+    renderBlock: (type, text, references) => renderMarkdownBlock(type, text, references, renderInlineMarkdown),
     hydrateRenderedContent: hydrateMarkdownImagePreviews,
 };
 
@@ -116,6 +118,13 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
         if (setextHeading) {
             blocks.push(setextHeading.block);
             index += 1;
+            continue;
+        }
+
+        const table = readMarkdownTable(lines, index);
+        if (table) {
+            blocks.push(table.block);
+            index += table.consumedLines - 1;
             continue;
         }
 
@@ -246,6 +255,10 @@ function serializeMarkdownBlock(block: ParsedBlock): string {
 
     if (block.type === "rule") {
         return block.ruleMarker ?? "---";
+    }
+
+    if (block.type === "table") {
+        return block.text;
     }
 
     return block.text;

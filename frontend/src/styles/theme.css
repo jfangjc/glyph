@@ -248,6 +248,64 @@
     display: none;
 }
 
+.block[data-type="table"] {
+    padding: 6px 0;
+}
+
+.block[data-type="table"] .block-content {
+    overflow-x: auto;
+    white-space: normal;
+}
+
+.block[data-type="table"] .format-block-source {
+    font-family: var(--glyph-font-code);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+
+.block[data-block-source-active="true"][data-type="table"] .format-block-source {
+    display: block;
+}
+
+.block[data-block-source-active="true"][data-type="table"] .markdown-table-preview {
+    display: none;
+}
+
+.markdown-table {
+    width: max-content;
+    min-width: min(100%, 420px);
+    max-width: 100%;
+    border-collapse: collapse;
+    color: #242424;
+    font-size: 0.95rem;
+    line-height: 1.45;
+}
+
+.markdown-table th,
+.markdown-table td {
+    min-width: 7rem;
+    padding: 7px 10px;
+    border: 1px solid #d9d9d9;
+    vertical-align: top;
+}
+
+.markdown-table th {
+    background: #f4f4f4;
+    font-weight: 650;
+}
+
+.markdown-table tr:nth-child(even) td {
+    background: #fafafa;
+}
+
+.markdown-table-fallback {
+    margin: 0;
+    font-family: var(--glyph-font-code);
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+}
+
 .block[data-type="reference"] .block-content {
     color: #6b6b6b;
     font-family: var(--glyph-font-code);

@@ -13,6 +13,7 @@ export type BlockType =
     | "code"
     | "source"
     | "rule"
+    | "table"
     | "reference";
 
 export type ParsedBlock = {
@@ -50,6 +51,7 @@ export const blockLabels: Record<BlockType, string> = {
     code: "Code",
     source: "Source",
     rule: "Horizontal rule",
+    table: "Table",
     reference: "Reference",
 };
 

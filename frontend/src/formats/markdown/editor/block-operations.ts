@@ -26,6 +26,7 @@ import { caretSpacerCharacter, getRenderedContentText } from "../../../editor/se
 import { insertTextAtCaret } from "../../../editor/selection/commands";
 import { parseMarkdownReferenceDefinition } from "../references";
 import { markdownShortcuts } from "../shortcuts";
+import { createMarkdownTableFromHeader } from "../table";
 
 export function startCodeBlockFromFence(block: HTMLElement): boolean {
     if (readBlockType(block.dataset.type) !== "paragraph" || !isCaretAtBlockEdge(block, "end")) {
@@ -43,6 +44,30 @@ export function startCodeBlockFromFence(block: HTMLElement): boolean {
     setBlockText(block, "");
     ensureEditableBlockAfter(block);
     focusBlockAtOffset(block, 0);
+    return true;
+}
+
+export function startTableFromHeader(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "paragraph" || !isCaretAtBlockEdge(block, "end")) {
+        return false;
+    }
+
+    const table = createMarkdownTableFromHeader(getBlockText(block));
+    if (!table) {
+        return false;
+    }
+
+    setBlockType(block, "table");
+    setBlockText(block, table.text);
+    block.dataset.blockSourceActive = "true";
+
+    const source = getBlockSourceElement(getBlockContent(block), "atomic");
+    if (source) {
+        focusPlainTextElement(source, table.firstBodyCellOffset);
+    } else {
+        focusBlockAtOffset(block, table.firstBodyCellOffset);
+    }
+
     return true;
 }
 

@@ -166,6 +166,10 @@ function isWindowChromeEvent(event: MouseEvent): boolean {
 }
 
 function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
+    if (target.closest(".markdown-table-preview")) {
+        return false;
+    }
+
     return Boolean(
         target.closest(
             "#document-title, .block-content, .todo-checkbox, button, input, textarea, select, [contenteditable='false']",
