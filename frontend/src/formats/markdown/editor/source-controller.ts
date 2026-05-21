@@ -498,11 +498,12 @@ export function commitActiveBlockMarkdownSource(
     }
 
     const rawMarkdown = getBlockRawMarkdown(active.block);
-    if (rawMarkdown === active.rawBeforeActivation) {
+    const shouldNormalizeTable = readBlockType(active.block.dataset.type) === "table";
+    if (rawMarkdown === active.rawBeforeActivation && !shouldNormalizeTable) {
         return;
     }
 
-    applyRawMarkdownToBlock(active.block, rawMarkdown, focusBlock);
+    applyRawMarkdownToBlock(active.block, rawMarkdown, focusBlock, { normalizeTable: shouldNormalizeTable });
 }
 
 export function rerenderPlainTextBlockMarkdownSource(block: HTMLElement): boolean {
@@ -693,8 +694,13 @@ function restoreTableSourceFocusAfterInput(block: HTMLElement, focus: TableSourc
     return true;
 }
 
-function applyRawMarkdownToBlock(block: HTMLElement, rawMarkdown: string, focusBlock: HTMLElement | null): void {
-    const parsedBlock = parseEditedRawMarkdownBlock(block, rawMarkdown);
+function applyRawMarkdownToBlock(
+    block: HTMLElement,
+    rawMarkdown: string,
+    focusBlock: HTMLElement | null,
+    options: { normalizeTable?: boolean } = {},
+): void {
+    const parsedBlock = parseEditedRawMarkdownBlock(block, rawMarkdown, options);
     const selection = document.getSelection();
     const shouldRestoreFocus = focusBlock === block && selection?.focusNode && !getFocusedBlockMarkdownSource();
     const focusOffset = shouldRestoreFocus
@@ -749,8 +755,14 @@ function getBlockRawMarkdownOffset(
     return source.prefix.length + 1 + source.text.length + 1 + sourceOffset;
 }
 
-function parseEditedRawMarkdownBlock(block: HTMLElement, rawMarkdown: string): ParsedBlock {
-    if (readBlockType(block.dataset.type) === "code") {
+function parseEditedRawMarkdownBlock(
+    block: HTMLElement,
+    rawMarkdown: string,
+    options: { normalizeTable?: boolean } = {},
+): ParsedBlock {
+    const type = readBlockType(block.dataset.type);
+
+    if (type === "code") {
         const codeSource = readCodeBlockSourceParts(block);
         if (codeSource && !isValidCodeBlockSource(codeSource)) {
             return {
@@ -760,8 +772,20 @@ function parseEditedRawMarkdownBlock(block: HTMLElement, rawMarkdown: string): P
         }
     }
 
+    if (type === "table" && isEditableTableSource(rawMarkdown)) {
+        return {
+            type: "table",
+            text: options.normalizeTable ? formatMarkdownTableSource(rawMarkdown) : rawMarkdown,
+        };
+    }
+
     const parsedBlocks = parseMarkdownFragment(rawMarkdown).blocks;
     return parsedBlocks.length === 1 ? parsedBlocks[0] : { type: "paragraph", text: rawMarkdown };
+}
+
+function isEditableTableSource(rawMarkdown: string): boolean {
+    const lines = rawMarkdown.replace(/\r\n?/g, "\n").split("\n");
+    return lines.length >= 2 && lines[0].includes("|") && lines[1].includes("|");
 }
 
 function getBlockRawMarkdown(block: HTMLElement): string {

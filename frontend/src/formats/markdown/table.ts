@@ -27,7 +27,7 @@ export function createMarkdownTableFromHeader(headerLine: string): { text: strin
 
     const text = formatMarkdownTableSource([
         serializeTableRow(header),
-        serializeTableRow(header.map(() => "---")),
+        serializeTableRow(header.map(() => ":---")),
         serializeTableRow(header.map(() => "")),
     ].join("\n"));
     const firstBodyCellOffset = readMarkdownTableCellStart(text, 2, 0);
@@ -76,7 +76,7 @@ export function readMarkdownTable(lines: string[], index: number): MarkdownTable
 }
 
 export function formatMarkdownTableSource(text: string): string {
-    const table = parseMarkdownTable(text);
+    const table = parseMarkdownTable(text, { allowShortDelimiters: true });
     if (!table) {
         return text;
     }
@@ -137,13 +137,16 @@ export function renderMarkdownBlock(
     return `<table class="markdown-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function parseMarkdownTable(text: string): ParsedMarkdownTable | null {
+function parseMarkdownTable(
+    text: string,
+    options: { allowShortDelimiters?: boolean } = {},
+): ParsedMarkdownTable | null {
     const lines = text.replace(/\r\n?/g, "\n").split("\n");
     if (lines.length < 2) {
         return null;
     }
 
-    const alignments = parseTableDelimiterRow(lines[1]);
+    const alignments = parseTableDelimiterRow(lines[1], options);
     if (!alignments) {
         return null;
     }
@@ -171,7 +174,10 @@ function renderTableCell(
     return `<${tag}${align}>${renderInline(text.trim(), references)}</${tag}>`;
 }
 
-function parseTableDelimiterRow(line: string): TableAlignment[] | null {
+function parseTableDelimiterRow(
+    line: string,
+    options: { allowShortDelimiters?: boolean } = {},
+): TableAlignment[] | null {
     if (!isPotentialTableRow(line)) {
         return null;
     }
@@ -182,9 +188,10 @@ function parseTableDelimiterRow(line: string): TableAlignment[] | null {
     }
 
     const alignments: TableAlignment[] = [];
+    const delimiterPattern = options.allowShortDelimiters ? /^:?-{1,}:?$/ : /^:?-{3,}:?$/;
     for (const cell of cells) {
         const trimmed = cell.trim();
-        if (!/^:?-{3,}:?$/.test(trimmed)) {
+        if (!delimiterPattern.test(trimmed)) {
             return null;
         }
 
@@ -210,7 +217,7 @@ function readAlignment(delimiter: string): TableAlignment {
         return "left";
     }
 
-    return null;
+    return "left";
 }
 
 function readDelimiterWidth(alignment: TableAlignment): number {
@@ -296,7 +303,7 @@ function createDelimiterCell(alignment: TableAlignment, width: number): string {
         return `:${"-".repeat(Math.max(3, width - 1))}`;
     }
 
-    return "-".repeat(Math.max(3, width));
+    return `:${"-".repeat(Math.max(3, width - 1))}`;
 }
 
 function readTableRowCellRanges(line: string, lineStart: number): Array<{ start: number; end: number }> {
