@@ -14,6 +14,7 @@ import {
 import { readBlockType, type ParsedBlock } from "../editor/blocks/model";
 import { focusBlockAtOffset, getCurrentBlockOffset } from "../editor/selection/caret";
 import { getElement } from "../utils/dom";
+import { clearEditorHistory } from "../editor/history/undo-history";
 import { commitActiveBlockMarkdownSource } from "../formats/markdown/editor/source-controller";
 import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
 import type { DocumentFormat, DocumentReferenceMap } from "../formats/types";
@@ -38,6 +39,7 @@ export function loadDocument(documentFile: DocumentFile): void {
     syncBlockViewContext();
     title.value = parsedDocument.title;
     replaceEditorBlocks(parsedDocument.blocks);
+    clearEditorHistory();
     documentState.lastSavedContent = serializeDocument();
     documentState.hasUnsavedChanges = false;
     notifyDocumentStateChanged();

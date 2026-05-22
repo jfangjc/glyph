@@ -37,8 +37,23 @@ import {
     handleEditorBeforeInput as handleEditorBeforeInputCommand,
     handleEditorInput as handleEditorInputCommand,
 } from "./input/editor-input";
+import {
+    beginDiscreteUndoTransaction,
+    beginTypingUndoTransaction,
+    commitUndoTransaction,
+    flushPendingUndoTransaction,
+    redoEditorChange,
+    undoEditorChange,
+} from "./history/undo-history";
 import { installEditorEventListeners } from "./editor-events";
 import { handleEditorKeydown as handleEditorKeydownCommand } from "./input/editor-keydown";
+import {
+    isPlainTextKey,
+    isRedoShortcut,
+    isUndoShortcut,
+    readInlineFormatShortcut,
+} from "./input/keyboard-shortcuts";
+import { getSelectedBlockRange } from "./selection/caret";
 import {
     configureEditorUiState,
     syncActiveBlockIndicator,
@@ -54,7 +69,7 @@ import {
     handleDocumentSurfaceMouseMove,
     handleDocumentSurfaceMouseOut,
     handleDocumentSurfaceMouseOver,
-    handleEditorMouseDown,
+    handleEditorMouseDown as handleEditorMouseDownCommand,
     syncLinkOpenIntentFromKeyboard,
 } from "./pointer-interactions";
 import {
@@ -68,6 +83,7 @@ import {
 } from "../formats/markdown/editor/source-controller";
 
 let isComposingText = false;
+let shouldFlushTypingBatchAfterInput = false;
 
 export function installEditorController(): void {
     const surface = getElement<HTMLElement>("document-surface");
@@ -163,13 +179,27 @@ function handleTitleInput(): void {
         return;
     }
 
+    beginTypingUndoTransaction();
     documentState.usesTitle = true;
+    commitUndoTransaction();
     markDocumentDirty();
 }
 
 function handleTitleFocus(): void {
+    flushPendingUndoTransaction();
     syncActiveBlockIndicator(null);
     syncBlockSourceReveal(null);
+}
+
+function handleEditorMouseDown(event: MouseEvent): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
+        beginDiscreteUndoTransaction();
+    } else {
+        flushPendingUndoTransaction();
+    }
+
+    handleEditorMouseDownCommand(event);
 }
 
 function handleEditorChange(event: Event): void {
@@ -182,24 +212,78 @@ function handleEditorChange(event: Event): void {
 
         syncActiveBlockIndicator(block);
         syncBlockSourceReveal(block);
+        commitUndoTransaction();
         markDocumentDirty();
     }
 }
 
 function handleEditorKeydown(event: KeyboardEvent): void {
+    if (isUndoShortcut(event)) {
+        event.preventDefault();
+        if (undoEditorChange()) {
+            markEditorDirty();
+        }
+        return;
+    }
+
+    if (isRedoShortcut(event)) {
+        event.preventDefault();
+        if (redoEditorChange()) {
+            markEditorDirty();
+        }
+        return;
+    }
+
+    if (isTodoCheckboxActivation(event)) {
+        beginDiscreteUndoTransaction();
+        return;
+    }
+
+    if (isTypingBoundaryKeydown(event)) {
+        flushPendingUndoTransaction();
+    }
+
+    const shouldTrackPlainTextSelectionReplacement = isPlainTextKey(event) && Boolean(getSelectedBlockRange());
+    if (shouldTrackPlainTextSelectionReplacement) {
+        beginTypingUndoTransaction();
+    }
+
+    const shouldTrackDiscreteEdit = !shouldTrackPlainTextSelectionReplacement && isDiscreteEditorKeydown(event);
+    if (shouldTrackDiscreteEdit) {
+        beginDiscreteUndoTransaction();
+    }
+
     handleEditorKeydownCommand(event, {
         isComposingText,
         markEditorDirty,
     });
+
+    if (shouldTrackDiscreteEdit || shouldTrackPlainTextSelectionReplacement) {
+        commitUndoTransaction();
+    }
 }
 
 function handleEditorBeforeInput(event: InputEvent): void {
+    const undoKind = readBeforeInputUndoKind(event);
+    if (undoKind === "typing") {
+        beginTypingUndoTransaction();
+        shouldFlushTypingBatchAfterInput = shouldEndTypingBatchAfterInput(event);
+    } else if (undoKind === "discrete") {
+        beginDiscreteUndoTransaction();
+        shouldFlushTypingBatchAfterInput = false;
+    }
+
     handleEditorBeforeInputCommand(event, {
         isComposingText,
         markDocumentDirty,
         markEditorDirty,
         syncBlockSourceReveal,
     });
+
+    if (event.defaultPrevented && undoKind) {
+        commitUndoTransaction();
+        flushTypingBatchAfterInputIfNeeded();
+    }
 }
 
 function handleEditorCompositionStart(): void {
@@ -218,13 +302,17 @@ function handleEditorInput(event: Event): void {
         markEditorDirty,
         syncBlockSourceReveal,
     });
+    commitUndoTransaction();
+    flushTypingBatchAfterInputIfNeeded();
 }
 
 function handleEditorPaste(event: ClipboardEvent): void {
+    beginDiscreteUndoTransaction();
     handleEditorPasteCommand(event, {
         getActiveDocumentFormat,
         markEditorDirty,
     });
+    commitUndoTransaction();
 }
 
 function handleEditorCopy(event: ClipboardEvent): void {
@@ -235,8 +323,94 @@ function handleEditorCopy(event: ClipboardEvent): void {
 }
 
 function handleEditorCut(event: ClipboardEvent): void {
+    beginDiscreteUndoTransaction();
     handleEditorCutCommand(event, {
         getActiveDocumentFormat,
         markEditorDirty,
     });
+    commitUndoTransaction();
+}
+
+function isDiscreteEditorKeydown(event: KeyboardEvent): boolean {
+    if (isComposingText) {
+        return false;
+    }
+
+    if (readInlineFormatShortcut(event)) {
+        return true;
+    }
+
+    if (event.key === "Enter" || event.key === "Tab") {
+        return true;
+    }
+
+    if ((event.key === "Backspace" || event.key === "Delete") && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        return true;
+    }
+
+    return false;
+}
+
+function isTodoCheckboxActivation(event: KeyboardEvent): boolean {
+    return (
+        event.target instanceof HTMLInputElement &&
+        event.target.classList.contains("todo-checkbox") &&
+        (event.key === " " || event.key === "Enter")
+    );
+}
+
+function isTypingBoundaryKeydown(event: KeyboardEvent): boolean {
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+        return false;
+    }
+
+    return (
+        event.key.startsWith("Arrow") ||
+        event.key === "Home" ||
+        event.key === "End" ||
+        event.key === "PageUp" ||
+        event.key === "PageDown" ||
+        event.key === "Escape"
+    );
+}
+
+function readBeforeInputUndoKind(event: InputEvent): "typing" | "discrete" | null {
+    if (isComposingText) {
+        return null;
+    }
+
+    if (event.inputType === "insertText" || event.inputType === "insertCompositionText") {
+        return "typing";
+    }
+
+    if (
+        event.inputType === "deleteContentBackward" ||
+        event.inputType === "deleteContentForward" ||
+        event.inputType === "deleteByCut"
+    ) {
+        return "typing";
+    }
+
+    if (event.inputType.startsWith("format") || event.inputType.startsWith("insert")) {
+        return "discrete";
+    }
+
+    return null;
+}
+
+function shouldEndTypingBatchAfterInput(event: InputEvent): boolean {
+    if (event.inputType !== "insertText" || event.data === null) {
+        return false;
+    }
+
+    return /[\s.,;:!?()[\]{}"'`]/.test(event.data);
+}
+
+function flushTypingBatchAfterInputIfNeeded(): void {
+    if (!shouldFlushTypingBatchAfterInput) {
+        return;
+    }
+
+    shouldFlushTypingBatchAfterInput = false;
+    flushPendingUndoTransaction();
 }

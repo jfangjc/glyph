@@ -29,6 +29,20 @@ export function isSaveFileShortcut(event: KeyboardEvent): boolean {
     return event.key.toLowerCase() === "s" && (event.ctrlKey || event.metaKey) && !event.altKey;
 }
 
+export function isUndoShortcut(event: KeyboardEvent): boolean {
+    return event.key.toLowerCase() === "z" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+}
+
+export function isRedoShortcut(event: KeyboardEvent): boolean {
+    const key = event.key.toLowerCase();
+
+    return (
+        ((key === "z" && event.shiftKey) || (key === "y" && !event.shiftKey)) &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey
+    );
+}
+
 export function isSelectAllShortcut(event: KeyboardEvent): boolean {
     return event.key.toLowerCase() === "a" && (event.ctrlKey || event.metaKey);
 }
