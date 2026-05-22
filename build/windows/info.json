@@ -1,15 +1,15 @@
 {
-	"fixed": {
-		"file_version": "0.0.1"
-	},
-	"info": {
-		"0000": {
-			"ProductVersion": "0.0.1",
-			"CompanyName": "Glyph",
-			"FileDescription": "A focused editor for Markdown, LaTeX, Org Mode, Typst, and plain text.",
-			"LegalCopyright": "(c) 2026, Glyph",
-			"ProductName": "Glyph",
-			"Comments": "Cross-platform document editor"
-		}
-	}
+    "fixed": {
+        "file_version": "0.0.1"
+    },
+    "info": {
+        "0000": {
+            "ProductVersion": "0.0.1",
+            "CompanyName": "Glyph",
+            "FileDescription": "A minimalist cross-platform Markdown editor.",
+            "LegalCopyright": "(c) 2026, Jason Fang",
+            "ProductName": "Glyph",
+            "Comments": "Cross-platform document editor"
+        }
+    }
 }
