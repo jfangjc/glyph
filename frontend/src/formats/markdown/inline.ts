@@ -175,14 +175,14 @@ function readMathToken(text: string, index: number): MathToken | null {
     }
 
     const sourceEnd = displayMode
-        ? findUnescapedSequence(text, delimiter, sourceStart)
+        ? findDisplayMathClosingDelimiter(text, sourceStart)
         : findInlineMathClosingDelimiter(text, sourceStart);
     if (sourceEnd < 0) {
         return null;
     }
 
     const source = text.slice(sourceStart, sourceEnd);
-    if (source.trim() === "" || (!displayMode && /\s$/.test(source))) {
+    if ((!displayMode && source.trim() === "") || (!displayMode && /\s$/.test(source))) {
         return null;
     }
 
@@ -193,13 +193,12 @@ function readMathToken(text: string, index: number): MathToken | null {
     };
 }
 
+function findDisplayMathClosingDelimiter(text: string, startIndex: number): number {
+    return text.indexOf("$$", startIndex);
+}
+
 function findInlineMathClosingDelimiter(text: string, startIndex: number): number {
     for (let index = startIndex; index < text.length; index += 1) {
-        if (text[index] === "\\") {
-            index += 1;
-            continue;
-        }
-
         if (text[index] === "$" && text[index - 1] !== "$" && text[index + 1] !== "$") {
             return index;
         }

@@ -387,6 +387,11 @@
     margin: 0.45em 0;
     overflow-x: auto;
     overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.markdown-display-math-token .katex-display::-webkit-scrollbar {
+    display: none;
 }
 
 .block[data-type="math"] {
@@ -396,6 +401,11 @@
 .block[data-type="math"] .block-content {
     overflow-x: auto;
     white-space: normal;
+    scrollbar-width: none;
+}
+
+.block[data-type="math"] .block-content::-webkit-scrollbar {
+    display: none;
 }
 
 .block[data-type="math"] .format-block-source {
@@ -423,7 +433,12 @@
     margin: 0.35em 0;
     overflow-x: auto;
     overflow-y: hidden;
+    scrollbar-width: none;
     text-align: center;
+}
+
+.markdown-math-preview .katex-display::-webkit-scrollbar {
+    display: none;
 }
 
 .format-block-source {
