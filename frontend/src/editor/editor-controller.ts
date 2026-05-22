@@ -46,6 +46,7 @@ import {
     undoEditorChange,
 } from "./history/undo-history";
 import { installEditorEventListeners } from "./editor-events";
+import { installDocumentOutline } from "./document-outline";
 import { handleEditorKeydown as handleEditorKeydownCommand } from "./input/editor-keydown";
 import {
     isPlainTextKey,
@@ -89,7 +90,13 @@ export function installEditorController(): void {
     const surface = getElement<HTMLElement>("document-surface");
     const editor = getElement<HTMLElement>("editor");
     const title = getElement<HTMLInputElement>("document-title");
+    const shell = document.querySelector<HTMLElement>(".editor-shell");
 
+    if (!shell) {
+        throw new Error("Editor shell is missing");
+    }
+
+    installDocumentOutline(shell, editor);
     installEditorEventListeners(
         { surface, editor, title },
         {
@@ -113,6 +120,7 @@ export function installEditorController(): void {
             onEditorCompositionEnd: handleEditorCompositionEnd,
             onTitleInput: handleTitleInput,
             onTitleFocus: handleTitleFocus,
+            onTitleBlur: handleTitleBlur,
             onSelectionChange: handleSelectionChange,
             onWindowKeydown: handleGlobalKeydown,
             onWindowKeyup: syncLinkOpenIntentFromKeyboard,
@@ -180,8 +188,8 @@ function handleTitleInput(): void {
     }
 
     beginTypingUndoTransaction();
-    documentState.usesTitle = true;
     commitUndoTransaction();
+    syncDocumentWindowTitle();
     markDocumentDirty();
 }
 
@@ -189,6 +197,13 @@ function handleTitleFocus(): void {
     flushPendingUndoTransaction();
     syncActiveBlockIndicator(null);
     syncBlockSourceReveal(null);
+}
+
+function handleTitleBlur(): void {
+    flushPendingUndoTransaction();
+    if (documentState.activeFilePath && documentState.hasUnsavedChanges) {
+        void saveCurrentDocument();
+    }
 }
 
 function handleEditorMouseDown(event: MouseEvent): void {

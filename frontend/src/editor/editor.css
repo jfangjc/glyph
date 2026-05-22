@@ -8,12 +8,41 @@
     overscroll-behavior-y: none;
     overscroll-behavior: none;
     scroll-padding: 72px 0 120px;
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+    scrollbar-gutter: stable;
+    scrollbar-color: #b8b8b8 transparent;
+    scrollbar-width: thin;
 }
 
 .editor-shell::-webkit-scrollbar {
-    display: none;
+    width: 10px;
+}
+
+.editor-shell::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+body.windows-host .editor-shell::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+body.windows-host .editor-shell {
+    position: fixed;
+    top: var(--windows-titlebar-height, 37px);
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: auto;
+    scroll-padding-top: calc(72px - var(--windows-titlebar-height, 37px));
+}
+
+.editor-shell::-webkit-scrollbar-thumb {
+    border: 3px solid #ffffff;
+    border-radius: 999px;
+    background: #b8b8b8;
+}
+
+.editor-shell::-webkit-scrollbar-thumb:hover {
+    background: #8d8d8d;
 }
 
 .document-surface {
@@ -25,6 +54,11 @@
     zoom: var(--glyph-editor-zoom, 1);
 }
 
+body.windows-host .document-surface {
+    min-height: calc(100vh - var(--windows-titlebar-height, 37px));
+    padding-top: calc(72px - var(--windows-titlebar-height, 37px));
+}
+
 .document-title {
     width: 100%;
     border: 0;
@@ -34,7 +68,8 @@
     font-family: var(--glyph-font-title, var(--glyph-font-text));
     font-size: 2.75rem;
     font-weight: 700;
-    line-height: 1.15;
+    line-height: 1.22;
+    padding: 0 0 0.08em;
 }
 
 .block-editor {
@@ -43,6 +78,107 @@
     margin-top: 20px;
     cursor: text;
     outline: 0;
+}
+
+.document-outline {
+    position: fixed;
+    z-index: 20;
+    top: 44%;
+    right: 36px;
+    width: 112px;
+    max-height: 268px;
+    padding: 8px 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    color: #777b80;
+    pointer-events: auto;
+    scrollbar-width: none;
+    transform: translateY(-50%);
+}
+
+.document-outline::-webkit-scrollbar {
+    display: none;
+}
+
+.document-outline[hidden],
+.document-outline:empty {
+    display: none;
+}
+
+.document-outline-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.document-outline-item {
+    min-width: 0;
+}
+
+.document-outline-button {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    align-items: center;
+    width: 100%;
+    min-height: 18px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.document-outline-marker {
+    width: 20px;
+    height: 4px;
+    border-radius: 999px;
+    background: #dedfe0;
+    transition:
+        background-color 180ms ease,
+        width 180ms ease;
+}
+
+.document-outline-text {
+    min-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    color: #6f7377;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: opacity 220ms ease;
+}
+
+.document-outline-item[data-level="2"] .document-outline-marker {
+    width: 11px;
+}
+
+.document-outline-item[data-level="2"] .document-outline-text {
+    font-weight: 400;
+}
+
+.document-outline-item[data-active="true"] .document-outline-marker {
+    background: #73787c;
+}
+
+.document-outline:hover .document-outline-text {
+    opacity: 1;
+}
+
+.document-outline-button:hover .document-outline-marker,
+.document-outline-button:focus-visible .document-outline-marker {
+    background: #5f6368;
+}
+
+.document-outline-button:hover .document-outline-text,
+.document-outline-button:focus-visible .document-outline-text {
+    color: #202124;
 }
 
 .block {
@@ -117,6 +253,10 @@
 @media (max-width: 1060px) {
     .document-surface {
         width: 100%;
+    }
+
+    .document-outline {
+        display: none;
     }
 }
 

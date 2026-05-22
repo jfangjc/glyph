@@ -12,6 +12,7 @@ export function installWindowControls(): void {
     }
 
     document.body.insertAdjacentHTML("afterbegin", windowControlsHtml);
+    document.body.classList.add("windows-host");
 
     const titlebar = getElement<HTMLElement>("windows-titlebar");
     titlebar.hidden = false;

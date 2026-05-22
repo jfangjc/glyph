@@ -136,15 +136,14 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
         blocks.push(parseMarkdownLine(line));
     }
 
+    normalizeOrderedListNumbers(blocks);
     return { blocks, references };
 }
 
-function serializeMarkdownDocument(title: string, usesTitle: boolean, blocks: ParsedBlock[]): string {
-    const trimmedTitle = title.trim();
+function serializeMarkdownDocument(_title: string, _usesTitle: boolean, blocks: ParsedBlock[]): string {
     const body = blocks.map(serializeMarkdownBlock).join("\n");
-    const content = usesTitle && trimmedTitle ? `# ${trimmedTitle}${body ? `\n\n${body}` : ""}` : body;
 
-    return content ? `${content}\n` : "";
+    return body ? `${body}\n` : "";
 }
 
 function readMarkdownReferences(blocks: ParsedBlock[]): DocumentReferenceMap {
@@ -210,6 +209,33 @@ function parseMarkdownLine(line: string): ParsedBlock {
     }
 
     return { type: "paragraph", text: line };
+}
+
+function normalizeOrderedListNumbers(blocks: ParsedBlock[]): void {
+    const nextByIndent = new Map<number, number>();
+
+    for (const block of blocks) {
+        if (block.type !== "ordered-list") {
+            nextByIndent.clear();
+            continue;
+        }
+
+        const indent = block.indent ?? 0;
+        for (const trackedIndent of Array.from(nextByIndent.keys())) {
+            if (trackedIndent > indent) {
+                nextByIndent.delete(trackedIndent);
+            }
+        }
+
+        const nextNumber = nextByIndent.get(indent) ?? readOrderedListStart(block.listNumber);
+        block.listNumber = String(nextNumber);
+        nextByIndent.set(indent, nextNumber + 1);
+    }
+}
+
+function readOrderedListStart(value: string | undefined): number {
+    const number = Number(value ?? "1");
+    return Number.isFinite(number) ? number : 1;
 }
 
 function serializeMarkdownBlock(block: ParsedBlock): string {

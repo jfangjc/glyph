@@ -46,6 +46,10 @@ export function saveDocument(path: string, content: string): Promise<void> {
     return Call.ByName("glyph/internal/documents.Service.SaveDocument", path, content) as Promise<void>;
 }
 
+export function renameDocument(oldPath: string, newPath: string): Promise<void> {
+    return Call.ByName("glyph/internal/documents.Service.RenameDocument", oldPath, newPath) as Promise<void>;
+}
+
 export function readImage(path: string, baseFilePath: string | null): Promise<ImageFile> {
     return Call.ByName("glyph/internal/documents.Service.ReadImage", path, baseFilePath ?? "") as Promise<ImageFile>;
 }

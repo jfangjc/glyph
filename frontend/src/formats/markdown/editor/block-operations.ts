@@ -136,6 +136,18 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
         return true;
     }
 
+    const orderedListShortcut = readOrderedListShortcut(text);
+    if (orderedListShortcut) {
+        setBlockType(block, "ordered-list");
+        setBlockIndent(block, orderedListShortcut.indent);
+        setBlockListNumber(block, orderedListShortcut.listNumber);
+        setBlockText(block, orderedListShortcut.text);
+        ensureEmptyShortcutCaretAnchor(block, orderedListShortcut.text);
+        ensureEditableBlockAfter(block);
+        focusBlock(block);
+        return true;
+    }
+
     const shortcut = markdownShortcuts.find((candidate) =>
         candidate.exact ? text === candidate.marker : text.startsWith(candidate.marker),
     );
@@ -169,6 +181,29 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
 
     focusBlock(block);
     return true;
+}
+
+function readOrderedListShortcut(text: string): { indent: number; listNumber: string; text: string } | null {
+    const match = text.match(/^([ \t]*)(\d{1,9})\.\s+(.*)$/);
+    if (!match) {
+        return null;
+    }
+
+    return {
+        indent: readShortcutIndent(match[1]),
+        listNumber: match[2],
+        text: match[3],
+    };
+}
+
+function readShortcutIndent(value: string): number {
+    let columns = 0;
+
+    for (let index = 0; index < value.length; index += 1) {
+        columns += value[index] === "\t" ? 4 - (columns % 4) : 1;
+    }
+
+    return Math.min(Math.max(Math.floor(columns / 2), 0), 3);
 }
 
 function ensureEmptyShortcutCaretAnchor(block: HTMLElement, text: string): void {

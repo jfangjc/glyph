@@ -1,14 +1,9 @@
 html {
-    scrollbar-width: none;
     overflow: hidden;
     overscroll-behavior-x: none;
     overscroll-behavior-y: none;
     overscroll-behavior: none;
     touch-action: pan-y;
-}
-
-html::-webkit-scrollbar {
-    display: none;
 }
 
 :root {

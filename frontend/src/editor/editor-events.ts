@@ -25,6 +25,7 @@ type EditorEventHandlers = {
     onEditorCompositionEnd: (event: CompositionEvent) => void;
     onTitleInput: (event: Event) => void;
     onTitleFocus: (event: FocusEvent) => void;
+    onTitleBlur: (event: FocusEvent) => void;
     onSelectionChange: (event: Event) => void;
     onWindowKeydown: (event: KeyboardEvent) => void;
     onWindowKeyup: (event: KeyboardEvent) => void;
@@ -57,6 +58,7 @@ export function installEditorEventListeners(
     targets.editor.addEventListener("compositionend", handlers.onEditorCompositionEnd);
     targets.title.addEventListener("input", handlers.onTitleInput);
     targets.title.addEventListener("focus", handlers.onTitleFocus);
+    targets.title.addEventListener("blur", handlers.onTitleBlur);
     document.addEventListener("selectionchange", handlers.onSelectionChange);
     window.addEventListener("keydown", handlers.onWindowKeydown);
     window.addEventListener("keyup", handlers.onWindowKeyup);
