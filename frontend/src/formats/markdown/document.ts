@@ -395,7 +395,7 @@ function isIndentedCodeLine(line: string, previousBlock: ParsedBlock | null): bo
         return false;
     }
 
-    if (isNestedListCandidate(line) && previousBlock && isListBlock(previousBlock)) {
+    if (isNestedListCandidate(line)) {
         return false;
     }
 
@@ -408,10 +408,6 @@ function isIndentedCodeContinuationLine(line: string): boolean {
 
 function isNestedListCandidate(line: string): boolean {
     return Boolean(line.match(/^[ \t]*(?:[-*+]|\d{1,9}\.)\s+/));
-}
-
-function isListBlock(block: ParsedBlock): boolean {
-    return block.type === "list" || block.type === "ordered-list" || block.type === "todo";
 }
 
 function getPreviousNonBlankBlock(blocks: ParsedBlock[]): ParsedBlock | null {
@@ -447,13 +443,13 @@ function stripCodeIndent(line: string): string {
 
 function readMarkdownIndent(value: string): number {
     const columns = countIndentColumns(value);
-    const level = columns >= 4 ? Math.floor(columns / 4) : Math.floor(columns / 2);
+    const level = Math.floor(columns / 2);
 
     return Math.min(Math.max(level, 0), 3);
 }
 
 function serializeListIndent(indent: number | undefined): string {
-    return "    ".repeat(Math.max(0, Math.min(indent ?? 0, 3)));
+    return "  ".repeat(Math.max(0, Math.min(indent ?? 0, 3)));
 }
 
 function countIndentColumns(value: string): number {

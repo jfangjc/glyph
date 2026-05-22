@@ -3,6 +3,7 @@ import { escapeHtml } from "../../utils/text";
 
 export type BlockSource = {
     prefix?: string;
+    prefixEditable?: boolean;
     suffix?: string;
     atomic?: string;
 };
@@ -11,14 +12,14 @@ export type BlockSourcePosition = "prefix" | "suffix" | "atomic";
 
 export function renderPlainTextBlockContent(content: HTMLElement, text: string, source: BlockSource): void {
     content.replaceChildren();
-    appendBlockSourceElement(content, source.prefix, "prefix");
+    appendBlockSourceElement(content, source.prefix, "prefix", false, source.prefixEditable);
     content.append(document.createTextNode(renderPlainTextContentText(text)));
     appendBlockSourceElement(content, source.suffix, "suffix");
 }
 
 export function renderCodeBlockContent(content: HTMLElement, text: string, source: BlockSource): void {
     content.replaceChildren();
-    appendBlockSourceElement(content, source.prefix, "prefix");
+    appendBlockSourceElement(content, source.prefix, "prefix", false, source.prefixEditable);
     appendCodeBlockBodyElement(content, text);
     appendBlockSourceElement(content, source.suffix, "suffix");
 }
@@ -46,12 +47,13 @@ export function renderPreviewBlockContent(
     content.append(preview);
 }
 
-export function renderBlockSourceHtml(value: string | undefined, position: BlockSourcePosition): string {
+export function renderBlockSourceHtml(value: string | undefined, position: BlockSourcePosition, editable = true): string {
     if (!value) {
         return "";
     }
 
-    return `<span class="${getBlockSourceClassName(position)}" data-source-ignore="true" spellcheck="false">${escapeHtml(value)}</span>`;
+    const editableAttribute = editable ? "" : ` contenteditable="false"`;
+    return `<span class="${getBlockSourceClassName(position)}" data-source-ignore="true"${editableAttribute} spellcheck="false">${escapeHtml(value)}</span>`;
 }
 
 export function getBlockSourceElement(content: HTMLElement, position: BlockSourcePosition): HTMLElement | null {
@@ -83,6 +85,7 @@ function appendBlockSourceElement(
     value: string | undefined,
     position: BlockSourcePosition,
     allowEmpty = false,
+    editable = true,
 ): void {
     if (!value && !allowEmpty) {
         return;
@@ -91,6 +94,7 @@ function appendBlockSourceElement(
     const source = document.createElement("span");
     source.className = getBlockSourceClassName(position);
     source.dataset.sourceIgnore = "true";
+    source.contentEditable = editable ? "inherit" : "false";
     source.spellcheck = false;
     source.textContent = value ?? "";
     content.append(source);

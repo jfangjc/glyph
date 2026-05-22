@@ -20,15 +20,18 @@ export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, tex
     }
 
     if (type === "list") {
-        return { prefix: `${readBlockListMarker(block) ?? "-"} ` };
+        return { prefix: `${readBlockListMarker(block) ?? "-"} `, prefixEditable: false };
     }
 
     if (type === "ordered-list") {
-        return { prefix: `${readBlockListNumber(block) ?? "1"}. ` };
+        return { prefix: `${readBlockListNumber(block) ?? "1"}. `, prefixEditable: false };
     }
 
     if (type === "todo") {
-        return { prefix: `${readBlockListMarker(block) ?? "-"} [${getTodoCheckbox(block).checked ? "x" : " "}] ` };
+        return {
+            prefix: `${readBlockListMarker(block) ?? "-"} [${getTodoCheckbox(block).checked ? "x" : " "}] `,
+            prefixEditable: false,
+        };
     }
 
     if (type === "quote") {

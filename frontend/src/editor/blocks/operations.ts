@@ -141,11 +141,14 @@ export function indentListBlocks(block: HTMLElement, delta: number): boolean {
         return false;
     }
 
+    const focusOffset = getCurrentBlockOffset(block);
+
     for (const listBlock of listBlocks) {
         setBlockIndent(listBlock, readBlockIndent(listBlock) + delta);
+        setBlockText(listBlock, getBlockText(listBlock));
     }
 
-    focusBlockAtOffset(block, getCurrentBlockOffset(block));
+    focusBlockAtOffset(block, focusOffset);
     return true;
 }
 

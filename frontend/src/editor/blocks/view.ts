@@ -10,7 +10,7 @@ import {
     type BlockSource,
 } from "./rendering";
 import { getElement } from "../../utils/dom";
-import { getRenderedContentText } from "../selection/rendered-content-dom";
+import { caretSpacerCharacter, getRenderedContentText } from "../selection/rendered-content-dom";
 import { escapeHtml } from "../../utils/text";
 import { readMathSourceText } from "../../formats/markdown/math";
 
@@ -174,10 +174,18 @@ function renderBlockInnerHtml(
     source: BlockSource,
 ): string {
     return (
-        renderBlockSourceHtml(source.prefix, "prefix") +
-        renderContext.renderInlineContent(text, renderContext.references) +
+        renderBlockSourceHtml(source.prefix, "prefix", source.prefixEditable ?? true) +
+        renderBlockEditableTextHtml(text, source) +
         renderBlockSourceHtml(source.suffix, "suffix")
     );
+}
+
+function renderBlockEditableTextHtml(text: string, source: BlockSource): string {
+    if (text === "" && source.prefix && source.prefixEditable === false) {
+        return caretSpacerCharacter;
+    }
+
+    return renderContext.renderInlineContent(text, renderContext.references);
 }
 
 function renderPlainInlineContent(text: string): string {

@@ -6,10 +6,11 @@ import {
     getBlockContent,
     getBlockText,
     getSiblingBlock,
+    readBlockIndent,
     setBlockText,
 } from "../../../editor/blocks/view";
 import { readBlockType, type ParsedBlock } from "../../../editor/blocks/model";
-import { removeOrMergeBackward, splitBlock } from "../../../editor/blocks/operations";
+import { indentListBlocks, removeOrMergeBackward, splitBlock } from "../../../editor/blocks/operations";
 import {
     getBlockSourceElement,
     isBlockSourceElement,
@@ -50,6 +51,12 @@ export function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean 
     }
 
     clearPendingMarkdownTokenNavigation();
+
+    if (event.key === "Tab" && indentListBlockFromSource(event, source)) {
+        event.preventDefault();
+        hooks.markEditorDirty?.();
+        return true;
+    }
 
     if (event.key === "Backspace" && removeOrMergeBackwardFromSourceStart(source)) {
         event.preventDefault();
@@ -112,6 +119,17 @@ export function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean 
     }
 
     return true;
+}
+
+function indentListBlockFromSource(event: KeyboardEvent, source: HTMLElement): boolean {
+    const block = findBlock(source);
+    const type = readBlockType(block?.dataset.type);
+
+    if (!block || (type !== "list" && type !== "ordered-list" && type !== "todo")) {
+        return false;
+    }
+
+    return indentListBlocks(block, event.shiftKey ? -1 : 1);
 }
 
 type TableCellBoundary = {
@@ -744,6 +762,10 @@ function getBlockRawMarkdownOffset(
     position: BlockSourcePosition | null,
     sourceOffset: number,
 ): number {
+    if (position === "prefix" && isListSourceBlock(block)) {
+        return serializeListIndent(readBlockIndent(block)).length + sourceOffset;
+    }
+
     if (position !== "suffix" || readBlockType(block.dataset.type) !== "code") {
         return sourceOffset;
     }
@@ -805,10 +827,30 @@ function getBlockRawMarkdown(block: HTMLElement): string {
     let text = "";
 
     for (const child of Array.from(getBlockContent(block).childNodes)) {
-        text += isBlockMarkdownSource(child) ? child.textContent ?? "" : getRenderedContentText(child);
+        text += isBlockMarkdownSource(child)
+            ? getBlockSourceRawMarkdown(block, child)
+            : getRenderedContentText(child);
     }
 
     return text;
+}
+
+function getBlockSourceRawMarkdown(block: HTMLElement, source: HTMLElement): string {
+    const text = source.textContent ?? "";
+    if (readBlockSourcePosition(source) === "prefix" && isListSourceBlock(block)) {
+        return `${serializeListIndent(readBlockIndent(block))}${text}`;
+    }
+
+    return text;
+}
+
+function isListSourceBlock(block: HTMLElement): boolean {
+    const type = readBlockType(block.dataset.type);
+    return type === "list" || type === "ordered-list" || type === "todo";
+}
+
+function serializeListIndent(indent: number | undefined): string {
+    return "  ".repeat(Math.max(0, Math.min(indent ?? 0, 3)));
 }
 
 function getCodeBlockRawMarkdown(block: HTMLElement): string {
