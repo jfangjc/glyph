@@ -138,6 +138,7 @@ export function findFirstInlineToken(text: string): { start: number; token: Mark
     for (let index = 0; index < text.length; index += 1) {
         const token =
             readInlineCodeToken(text, index) ??
+            readEscapedCharacter(text, index) ??
             readMathToken(text, index) ??
             readInlineToken(text, index, true) ??
             readInlineToken(text, index, false) ??
@@ -455,7 +456,10 @@ function renderInlineCodeToken(token: InlineCodeToken): string {
 }
 
 function renderEscapedCharacter(token: EscapedCharacterToken): string {
-    return `<span class="markdown-escape" data-source-raw="${escapeHtml(token.raw)}">${escapeHtml(token.character)}</span>`;
+    const raw = escapeHtml(token.raw);
+    const character = escapeHtml(token.character);
+
+    return `<span class="markdown-token markdown-escape-token"><span class="markdown-escape" contenteditable="false" data-source-ignore="true">${character}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderMathToken(token: MathToken): string {
