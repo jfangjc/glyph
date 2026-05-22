@@ -114,6 +114,13 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
             continue;
         }
 
+        const mathBlock = readMathBlock(lines, index);
+        if (mathBlock) {
+            blocks.push(mathBlock.block);
+            index += mathBlock.consumedLines - 1;
+            continue;
+        }
+
         const setextHeading = readSetextHeading(lines, index);
         if (setextHeading) {
             blocks.push(setextHeading.block);
@@ -261,7 +268,43 @@ function serializeMarkdownBlock(block: ParsedBlock): string {
         return block.text;
     }
 
+    if (block.type === "math") {
+        return block.mathSource ?? `$$\n${block.text}\n$$`;
+    }
+
     return block.text;
+}
+
+function readMathBlock(lines: string[], index: number): { block: ParsedBlock; consumedLines: number } | null {
+    const line = lines[index];
+    const singleLineMatch = line.match(/^ {0,3}\$\$(.*?)\$\$\s*$/);
+    if (singleLineMatch) {
+        return {
+            block: { type: "math", text: singleLineMatch[1], mathSource: line },
+            consumedLines: 1,
+        };
+    }
+
+    if (!line.match(/^ {0,3}\$\$\s*$/)) {
+        return null;
+    }
+
+    const mathLines: string[] = [];
+    let cursor = index + 1;
+
+    while (cursor < lines.length && !lines[cursor].match(/^ {0,3}\$\$\s*$/)) {
+        mathLines.push(lines[cursor]);
+        cursor += 1;
+    }
+
+    return {
+        block: {
+            type: "math",
+            text: mathLines.join("\n"),
+            mathSource: cursor < lines.length ? lines.slice(index, cursor + 1).join("\n") : undefined,
+        },
+        consumedLines: cursor < lines.length ? cursor - index + 1 : cursor - index,
+    };
 }
 
 function readHardBreakParagraph(lines: string[], index: number): { block: ParsedBlock; consumedLines: number } | null {

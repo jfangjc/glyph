@@ -361,6 +361,71 @@
     font-family: var(--glyph-font-code);
 }
 
+.markdown-math-token {
+    display: inline;
+}
+
+.markdown-math {
+    cursor: default;
+}
+
+.markdown-display-math-token {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    text-align: center;
+}
+
+.markdown-display-math-token[data-active="true"] {
+    display: inline-grid;
+    width: auto;
+    max-width: none;
+    text-align: left;
+}
+
+.markdown-display-math-token .katex-display {
+    margin: 0.45em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.block[data-type="math"] {
+    padding: 6px 0;
+}
+
+.block[data-type="math"] .block-content {
+    overflow-x: auto;
+    white-space: normal;
+}
+
+.block[data-type="math"] .format-block-source {
+    font-family: var(--glyph-font-code);
+    font-size: 0.95rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+
+.block[data-block-source-active="true"][data-type="math"] .format-block-source {
+    display: block;
+}
+
+.block[data-block-source-active="true"][data-type="math"] .markdown-math-preview {
+    display: none;
+}
+
+.markdown-math-preview {
+    display: block;
+    width: 100%;
+    text-align: center;
+}
+
+.markdown-math-preview .katex-display {
+    margin: 0.35em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    text-align: center;
+}
+
 .format-block-source {
     display: none;
     color: #767676;
@@ -444,6 +509,21 @@
     background: #ffffff;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 5%);
     transform: translateY(-50%);
+    white-space: pre;
+}
+
+.markdown-token.markdown-math-token[data-active="true"] [data-source-ignore="true"] {
+    display: none;
+}
+
+.markdown-token.markdown-math-token[data-active="true"]:not(.markdown-image-token) .markdown-token-source {
+    display: inline;
+    position: static;
+    max-width: none;
+    overflow: visible;
+    padding: 0 0.08em;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 5%);
+    transform: none;
     white-space: pre;
 }
 

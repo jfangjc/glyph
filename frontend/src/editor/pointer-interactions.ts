@@ -166,7 +166,7 @@ function isWindowChromeEvent(event: MouseEvent): boolean {
 }
 
 function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
-    if (target.closest(".markdown-table-preview")) {
+    if (target.closest(".markdown-table-preview, .markdown-math-preview")) {
         return false;
     }
 

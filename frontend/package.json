@@ -13,7 +13,8 @@
         "preview": "vite preview"
     },
     "dependencies": {
-        "@wailsio/runtime": "latest"
+        "@wailsio/runtime": "latest",
+        "katex": "^0.16.47"
     },
     "devDependencies": {
         "typescript": "^4.9.3",

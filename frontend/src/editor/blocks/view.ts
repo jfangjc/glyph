@@ -4,6 +4,7 @@ import {
     renderAtomicBlockContent,
     renderBlockSourceHtml,
     renderCodeBlockContent,
+    getBlockSourceElement,
     renderPlainTextBlockContent,
     renderPreviewBlockContent,
     type BlockSource,
@@ -11,6 +12,7 @@ import {
 import { getElement } from "../../utils/dom";
 import { getRenderedContentText } from "../selection/rendered-content-dom";
 import { escapeHtml } from "../../utils/text";
+import { readMathSourceText } from "../../formats/markdown/math";
 
 type BlockRenderContext = {
     references: DocumentReferenceMap;
@@ -56,6 +58,7 @@ export function applyBlockProperties(block: HTMLElement, options: Partial<Parsed
     setCodeFence(block, options.codeFence);
     setCodeInfo(block, options.codeInfo ?? "");
     setRuleMarker(block, options.ruleMarker);
+    setMathSource(block, options.mathSource);
 }
 
 export function setBlockType(block: HTMLElement, type: BlockType): void {
@@ -89,6 +92,10 @@ export function setBlockType(block: HTMLElement, type: BlockType): void {
     if (type !== "quote") {
         delete block.dataset.quoteLevel;
     }
+
+    if (type !== "math") {
+        delete block.dataset.mathSource;
+    }
 }
 
 export function setBlockText(block: HTMLElement, text: string): void {
@@ -108,7 +115,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
 
     const blockHtml = renderContext.renderBlockContent?.(type, text, renderContext.references);
     if (blockHtml !== undefined && blockHtml !== null) {
-        renderPreviewBlockContent(content, text, blockHtml, `markdown-${type}-preview`);
+        renderPreviewBlockContent(content, text, blockHtml, `markdown-${type}-preview`, source);
         content.dataset.renderedMarkdown = blockHtml;
         renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
         return;
@@ -258,9 +265,32 @@ function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void
     delete block.dataset.ruleMarker;
 }
 
+function setMathSource(block: HTMLElement, mathSource: string | undefined): void {
+    if (readBlockType(block.dataset.type) === "math" && mathSource !== undefined) {
+        block.dataset.mathSource = mathSource;
+        return;
+    }
+
+    delete block.dataset.mathSource;
+}
+
 export function getBlockText(block: HTMLElement): string {
     const content = getBlockContent(block);
     const type = readBlockType(block.dataset.type);
+
+    if (type === "table") {
+        const source = getBlockSourceElement(content, "atomic");
+        if (source) {
+            return source.textContent ?? "";
+        }
+    }
+
+    if (type === "math") {
+        const source = getBlockSourceElement(content, "atomic");
+        if (source) {
+            return readMathSourceText(source.textContent ?? "");
+        }
+    }
 
     if (isPlainTextBlockType(type)) {
         return getRenderedContentText(content);
@@ -322,6 +352,7 @@ export function readEditorBlock(block: HTMLElement): ParsedBlock {
         listNumber: readBlockListNumber(block),
         quoteLevel: readBlockQuoteLevel(block),
         ruleMarker: readBlockRuleMarker(block),
+        mathSource: type === "math" ? block.dataset.mathSource : undefined,
     };
 }
 
@@ -353,7 +384,7 @@ export function isRichTextBlockType(type: BlockType): boolean {
 }
 
 function isStandaloneBlockType(type: BlockType): boolean {
-    return isPlainTextBlockType(type) || isAtomicBlockType(type) || type === "table";
+    return isPlainTextBlockType(type) || isAtomicBlockType(type) || type === "table" || type === "math";
 }
 
 function isPlainTextBlockType(type: BlockType): boolean {
@@ -377,7 +408,7 @@ function usesBulletListMarker(type: BlockType): boolean {
 }
 
 export function shouldResetEmptyBlock(type: BlockType): boolean {
-    return isIndentableListBlockType(type) || type === "quote" || type === "reference" || type === "table";
+    return isIndentableListBlockType(type) || type === "quote" || type === "reference" || type === "table" || type === "math";
 }
 
 export function getBlockContent(block: HTMLElement): HTMLElement {

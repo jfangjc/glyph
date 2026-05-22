@@ -28,9 +28,15 @@ export function renderAtomicBlockContent(content: HTMLElement, source: BlockSour
     appendBlockSourceElement(content, source.atomic ?? source.prefix, "atomic");
 }
 
-export function renderPreviewBlockContent(content: HTMLElement, text: string, html: string, className: string): void {
+export function renderPreviewBlockContent(
+    content: HTMLElement,
+    text: string,
+    html: string,
+    className: string,
+    source: BlockSource = {},
+): void {
     content.replaceChildren();
-    appendBlockSourceElement(content, text, "atomic");
+    appendBlockSourceElement(content, source.atomic ?? text, "atomic", className === "markdown-math-preview");
 
     const preview = document.createElement("div");
     preview.className = className;
@@ -76,8 +82,9 @@ function appendBlockSourceElement(
     content: HTMLElement,
     value: string | undefined,
     position: BlockSourcePosition,
+    allowEmpty = false,
 ): void {
-    if (!value) {
+    if (!value && !allowEmpty) {
         return;
     }
 
@@ -85,7 +92,7 @@ function appendBlockSourceElement(
     source.className = getBlockSourceClassName(position);
     source.dataset.sourceIgnore = "true";
     source.spellcheck = false;
-    source.textContent = value;
+    source.textContent = value ?? "";
     content.append(source);
 }
 

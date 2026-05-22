@@ -159,16 +159,31 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
         return true;
     }
 
+    if (shortcut.type === "math") {
+        const source = getBlockSourceElement(getBlockContent(block), "atomic");
+        if (source) {
+            focusPlainTextElement(source, readMathShortcutCaretOffset(source));
+            return true;
+        }
+    }
+
     focusBlock(block);
     return true;
 }
 
 function ensureEmptyShortcutCaretAnchor(block: HTMLElement, text: string): void {
-    if (text !== "" || readBlockType(block.dataset.type) === "rule") {
+    const type = readBlockType(block.dataset.type);
+    if (text !== "" || type === "rule" || type === "math") {
         return;
     }
 
     getBlockContent(block).append(document.createTextNode(caretSpacerCharacter));
+}
+
+function readMathShortcutCaretOffset(source: HTMLElement): number {
+    const text = source.textContent ?? "";
+    const openingDelimiterEnd = text.indexOf("\n");
+    return openingDelimiterEnd >= 0 ? openingDelimiterEnd + 1 : text.length;
 }
 
 export function findVerticalMarkdownImageToken(

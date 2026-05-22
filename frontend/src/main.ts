@@ -1,4 +1,5 @@
 import "./styles/global.css";
+import "katex/dist/katex.min.css";
 import "./styles/theme.css";
 import "./editor/editor.css";
 import { getElement } from "./utils/dom";

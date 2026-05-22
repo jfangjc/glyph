@@ -11,6 +11,7 @@ import {
     trackVerticalBlockSourceNavigation,
 } from "../../formats/markdown/editor/source-controller";
 import {
+    moveCaretAfterActiveDisplayMathTokenSource,
     moveCaretOutOfActiveMarkdownTokenSource,
     trackHorizontalMarkdownNavigation,
     trackVerticalLeadingTokenNavigation,
@@ -84,6 +85,11 @@ export function handleEditorKeydown(event: KeyboardEvent, options: EditorKeydown
     }
 
     if (moveCaretOutOfActiveMarkdownTokenSource(event, block)) {
+        event.preventDefault();
+        return;
+    }
+
+    if (moveCaretAfterActiveDisplayMathTokenSource(event, block)) {
         event.preventDefault();
         return;
     }

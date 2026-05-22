@@ -11,7 +11,7 @@ import {
 import { createCodeFence } from "./code-fence";
 
 export function hasMarkdownBlockSource(type: BlockType): boolean {
-    return headingTypes.has(type) || ["list", "ordered-list", "todo", "quote", "code", "rule", "table"].includes(type);
+    return headingTypes.has(type) || ["list", "ordered-list", "todo", "quote", "code", "rule", "table", "math"].includes(type);
 }
 
 export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, text: string): BlockSource {
@@ -51,6 +51,10 @@ export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, tex
 
     if (type === "table") {
         return { atomic: text };
+    }
+
+    if (type === "math") {
+        return { atomic: block.dataset.mathSource ?? `$$\n${text}\n$$` };
     }
 
     return {};

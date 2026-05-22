@@ -20,6 +20,7 @@ import {
     getCurrentBlockOffset,
     getTextPosition,
 } from "../../../editor/selection/caret";
+import { caretSpacerCharacter } from "../../../editor/selection/rendered-content-dom";
 import { getElement } from "../../../utils/dom";
 import { setPointerSelecting } from "../../../editor/pointer-interactions";
 
@@ -169,10 +170,14 @@ function setActiveMarkdownToken(token: HTMLElement): void {
     token.dataset.active = "true";
 }
 
-function activateMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "end"): void {
+function activateMarkdownTokenSource(
+    token: HTMLElement,
+    edge: "start" | "end" = "end",
+    options: { advanceIntoSource?: boolean } = {},
+): void {
     setActiveMarkdownToken(token);
     suppressSelectionChangeForFrame();
-    focusMarkdownTokenSource(token, edge);
+    focusMarkdownTokenSource(token, edge, options);
 }
 
 export function activateMarkdownTokenAtCaret(): boolean {
@@ -197,7 +202,13 @@ export function activateMarkdownTokenAtCaret(): boolean {
 }
 
 function clearActiveMarkdownToken(
-    options: { focusBlock?: HTMLElement; focusOffset?: number; suppressTokenActivationAtFocus?: boolean } = {},
+    options: {
+        focusBlock?: HTMLElement;
+        focusOffset?: number;
+        focusTokenBoundaryEdge?: "start" | "end";
+        advanceAcrossAdjacentText?: boolean;
+        suppressTokenActivationAtFocus?: boolean;
+    } = {},
 ): void {
     const editor = getElement<HTMLElement>("editor");
     const activeTokens = Array.from(editor.querySelectorAll<HTMLElement>(".markdown-token[data-active]"));
@@ -247,6 +258,16 @@ function clearActiveMarkdownToken(
         }
 
         suppressSelectionChangeForFrame();
+        if (
+            options.focusTokenBoundaryEdge &&
+            focusMarkdownTokenBoundaryAtOffset(selectionBlock, focusOffset, {
+                edge: options.focusTokenBoundaryEdge,
+                advanceAcrossAdjacentText: options.advanceAcrossAdjacentText ?? false,
+            })
+        ) {
+            return;
+        }
+
         focusBlockAtOffset(selectionBlock, focusOffset);
     }
 }
@@ -390,7 +411,35 @@ export function moveCaretOutOfActiveMarkdownTokenSource(event: KeyboardEvent, bl
 
     const blockOffset = getCaretOffset(getBlockContent(block), focusNode, selection.focusOffset);
     pendingHorizontalNavigationTarget = null;
-    clearActiveMarkdownToken({ focusBlock: block, focusOffset: blockOffset, suppressTokenActivationAtFocus: true });
+    clearActiveMarkdownToken({
+        focusBlock: block,
+        focusOffset: blockOffset,
+        focusTokenBoundaryEdge: isLeavingStart ? "start" : "end",
+        advanceAcrossAdjacentText: true,
+        suppressTokenActivationAtFocus: true,
+    });
+    return true;
+}
+
+export function moveCaretAfterActiveDisplayMathTokenSource(event: KeyboardEvent, block: HTMLElement): boolean {
+    if (event.key !== "Enter" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return false;
+    }
+
+    const source = getFocusedMarkdownTokenSource();
+    const token = source ? getMarkdownTokenForSource(source) : null;
+    if (!source || !token?.classList.contains("markdown-display-math-token")) {
+        return false;
+    }
+
+    const tokenEndOffset = getMarkdownBoundaryOffset(getBlockContent(block), token, token.childNodes.length);
+    pendingHorizontalNavigationTarget = null;
+    clearActiveMarkdownToken({
+        focusBlock: block,
+        focusOffset: tokenEndOffset,
+        focusTokenBoundaryEdge: "end",
+        suppressTokenActivationAtFocus: true,
+    });
     return true;
 }
 
@@ -478,7 +527,7 @@ function revealPendingHorizontalNavigationTarget(): boolean {
         return false;
     }
 
-    activateMarkdownTokenSource(target.token, target.edge);
+    activateMarkdownTokenSource(target.token, target.edge, { advanceIntoSource: true });
     return true;
 }
 
@@ -527,7 +576,11 @@ function suppressSelectionChangeForFrame(): void {
     });
 }
 
-function focusMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "end"): void {
+function focusMarkdownTokenSource(
+    token: HTMLElement,
+    edge: "start" | "end" = "end",
+    options: { advanceIntoSource?: boolean } = {},
+): void {
     const source = getMarkdownTokenSource(token);
     const selection = document.getSelection();
     const range = document.createRange();
@@ -536,12 +589,103 @@ function focusMarkdownTokenSource(token: HTMLElement, edge: "start" | "end" = "e
         return;
     }
 
-    const position = getTextPosition(source, edge === "start" ? 0 : (source.textContent?.length ?? 0));
+    const sourceLength = source.textContent?.length ?? 0;
+    const offset = readMarkdownTokenSourceFocusOffset(sourceLength, edge, options.advanceIntoSource ?? false);
+    const position = getTextPosition(source, offset);
 
     range.setStart(position.node, position.offset);
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
+}
+
+function readMarkdownTokenSourceFocusOffset(
+    sourceLength: number,
+    edge: "start" | "end",
+    advanceIntoSource: boolean,
+): number {
+    if (!advanceIntoSource) {
+        return edge === "start" ? 0 : sourceLength;
+    }
+
+    return edge === "start" ? Math.min(sourceLength, 1) : Math.max(0, sourceLength - 1);
+}
+
+function focusMarkdownTokenBoundaryAtOffset(
+    block: HTMLElement,
+    offset: number,
+    options: { edge: "start" | "end"; advanceAcrossAdjacentText: boolean },
+): boolean {
+    const content = getBlockContent(block);
+    const tokens = Array.from(content.querySelectorAll<HTMLElement>(".markdown-token"));
+    const token = tokens.find((candidate) => {
+        const tokenOffset = getMarkdownBoundaryOffset(
+            content,
+            candidate,
+            options.edge === "start" ? 0 : candidate.childNodes.length,
+        );
+
+        return tokenOffset === offset;
+    });
+
+    if (!token?.parentNode) {
+        return false;
+    }
+
+    const editor = getElement<HTMLElement>("editor");
+    const selection = document.getSelection();
+    const range = document.createRange();
+    const childIndex = Array.from(token.parentNode.childNodes).findIndex((child) => child === token);
+
+    if (!selection || childIndex < 0) {
+        return false;
+    }
+
+    const boundary = getTokenBoundaryPositionSkippingSpacer(token, childIndex, options);
+
+    editor.focus();
+    range.setStart(boundary.node, boundary.offset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+}
+
+function getTokenBoundaryPositionSkippingSpacer(
+    token: HTMLElement,
+    childIndex: number,
+    options: { edge: "start" | "end"; advanceAcrossAdjacentText: boolean },
+): { node: Node; offset: number } {
+    const parent = token.parentNode;
+    if (!parent) {
+        return { node: token, offset: 0 };
+    }
+
+    if (options.edge === "end") {
+        const nextSibling = token.nextSibling;
+        if (nextSibling?.nodeType === Node.TEXT_NODE && nextSibling.textContent?.startsWith(caretSpacerCharacter)) {
+            return {
+                node: nextSibling,
+                offset: options.advanceAcrossAdjacentText ? Math.min(nextSibling.textContent.length, 2) : 1,
+            };
+        }
+
+        return { node: parent, offset: childIndex + 1 };
+    }
+
+    const previousSibling = token.previousSibling;
+    if (previousSibling?.nodeType === Node.TEXT_NODE && previousSibling.textContent?.endsWith(caretSpacerCharacter)) {
+        return {
+            node: previousSibling,
+            offset: Math.max(0, previousSibling.textContent.length - (options.advanceAcrossAdjacentText ? 2 : 1)),
+        };
+    }
+
+    if (options.advanceAcrossAdjacentText && previousSibling?.nodeType === Node.TEXT_NODE) {
+        return { node: previousSibling, offset: Math.max(0, (previousSibling.textContent ?? "").length - 1) };
+    }
+
+    return { node: parent, offset: childIndex };
 }
 
 function hasActiveMarkdownTokenSourceEdits(token: HTMLElement): boolean {

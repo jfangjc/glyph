@@ -28,6 +28,7 @@ import { readInlineFormatShortcut } from "../../../editor/input/keyboard-shortcu
 import { getRenderedContentText } from "../../../editor/selection/rendered-content-dom";
 import { hasMarkdownBlockSource } from "../block-source";
 import { formatMarkdownTableSource } from "../table";
+import { readMathSourceText } from "../math";
 import { clearPendingMarkdownTokenNavigation } from "./token-controller";
 
 type MarkdownSourceHooks = {
@@ -776,6 +777,14 @@ function parseEditedRawMarkdownBlock(
         return {
             type: "table",
             text: options.normalizeTable ? formatMarkdownTableSource(rawMarkdown) : rawMarkdown,
+        };
+    }
+
+    if (type === "math") {
+        return {
+            type: "math",
+            text: readMathSourceText(rawMarkdown),
+            mathSource: rawMarkdown,
         };
     }
 

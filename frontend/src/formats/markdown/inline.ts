@@ -5,6 +5,7 @@ import {
 } from "./references";
 import type { DocumentReferenceMap } from "../types";
 import { escapeHtml } from "../../utils/text";
+import { renderLatexMath } from "./math";
 
 type InlineToken = {
     raw: string;
@@ -16,6 +17,12 @@ type InlineToken = {
 type InlineCodeToken = {
     raw: string;
     code: string;
+};
+
+type MathToken = {
+    raw: string;
+    source: string;
+    displayMode: boolean;
 };
 
 type EscapedCharacterToken = {
@@ -41,7 +48,7 @@ type MarkdownInlineToken = {
     raw: string;
 };
 
-const escapableCharacters = new Set(["\\", "`", "*", "_", "{", "}", "[", "]", "<", ">", "(", ")", "#", "+", "-", ".", "!", "|"]);
+const escapableCharacters = new Set(["\\", "`", "*", "_", "{", "}", "[", "]", "<", ">", "(", ")", "#", "+", "-", ".", "!", "|", "$"]);
 
 export function renderInlineMarkdown(text: string, references: DocumentReferenceMap = {}, depth = 0): string {
     if (depth > 8) {
@@ -63,6 +70,13 @@ export function renderInlineMarkdown(text: string, references: DocumentReference
         if (escapedCharacter) {
             html += renderEscapedCharacter(escapedCharacter);
             index += escapedCharacter.raw.length;
+            continue;
+        }
+
+        const math = readMathToken(text, index);
+        if (math) {
+            html += renderMathToken(math);
+            index += math.raw.length;
             continue;
         }
 
@@ -124,6 +138,7 @@ export function findFirstInlineToken(text: string): { start: number; token: Mark
     for (let index = 0; index < text.length; index += 1) {
         const token =
             readInlineCodeToken(text, index) ??
+            readMathToken(text, index) ??
             readInlineToken(text, index, true) ??
             readInlineToken(text, index, false) ??
             readReferenceSyntaxToken(text, index, true) ??
@@ -137,6 +152,60 @@ export function findFirstInlineToken(text: string): { start: number; token: Mark
     }
 
     return null;
+}
+
+function readMathToken(text: string, index: number): MathToken | null {
+    if (text[index] !== "$" || isEscapedAt(text, index)) {
+        return null;
+    }
+
+    const displayMode = text.startsWith("$$", index);
+    if (!displayMode && (text[index - 1] === "$" || text[index + 1] === "$")) {
+        return null;
+    }
+
+    const delimiter = displayMode ? "$$" : "$";
+    const sourceStart = index + delimiter.length;
+    if (sourceStart >= text.length) {
+        return null;
+    }
+
+    if (!displayMode && /\s/.test(text[sourceStart])) {
+        return null;
+    }
+
+    const sourceEnd = displayMode
+        ? findUnescapedSequence(text, delimiter, sourceStart)
+        : findInlineMathClosingDelimiter(text, sourceStart);
+    if (sourceEnd < 0) {
+        return null;
+    }
+
+    const source = text.slice(sourceStart, sourceEnd);
+    if (source.trim() === "" || (!displayMode && /\s$/.test(source))) {
+        return null;
+    }
+
+    return {
+        raw: text.slice(index, sourceEnd + delimiter.length),
+        source,
+        displayMode,
+    };
+}
+
+function findInlineMathClosingDelimiter(text: string, startIndex: number): number {
+    for (let index = startIndex; index < text.length; index += 1) {
+        if (text[index] === "\\") {
+            index += 1;
+            continue;
+        }
+
+        if (text[index] === "$" && text[index - 1] !== "$" && text[index + 1] !== "$") {
+            return index;
+        }
+    }
+
+    return -1;
 }
 
 export function normalizeExternalImageUrl(value: string): string | null {
@@ -388,6 +457,14 @@ function renderInlineCodeToken(token: InlineCodeToken): string {
 
 function renderEscapedCharacter(token: EscapedCharacterToken): string {
     return `<span class="markdown-escape" data-source-raw="${escapeHtml(token.raw)}">${escapeHtml(token.character)}</span>`;
+}
+
+function renderMathToken(token: MathToken): string {
+    const raw = escapeHtml(token.raw);
+    const math = renderLatexMath(token.source, token.displayMode);
+    const className = token.displayMode ? "markdown-token markdown-math-token markdown-display-math-token" : "markdown-token markdown-math-token";
+
+    return `<span class="${className}"><span class="markdown-math" contenteditable="false" data-source-ignore="true">${math}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderEmphasisToken(token: EmphasisToken, references: DocumentReferenceMap, depth: number): string {
