@@ -2,6 +2,7 @@ import { getSuggestedFileName, syncDocumentWindowTitle } from "../app/window-tit
 import { handleGlobalKeydown as handleGlobalKeydownCommand } from "../app/global-shortcuts";
 import {
     bindDocumentActions,
+    restoreLastOpenDocument,
     saveCurrentDocument,
     startDocumentAutosave,
 } from "../documents/document-actions";
@@ -129,6 +130,7 @@ export function installEditorController(): void {
         parseFragment: (content) => getActiveDocumentFormat().parseFragment(content),
     });
     bindDocumentActions({ loadDocument, serializeDocument });
+    void restoreLastOpenDocument();
     startDocumentAutosave();
 
     syncDocumentFormatUi();

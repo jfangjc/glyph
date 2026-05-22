@@ -255,7 +255,7 @@
 }
 
 .block[data-type="code"][data-code-info] .block-content {
-    padding-top: 26px;
+    padding-top: 10px;
 }
 
 .block[data-block-source-active="true"][data-type="code"][data-code-info] .block-content {

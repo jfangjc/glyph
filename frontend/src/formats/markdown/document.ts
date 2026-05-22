@@ -28,26 +28,11 @@ export const markdownDocumentFormat: DocumentFormat = {
 
 function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDocument {
     const lines = readMarkdownLines(documentFile.content, true);
-    let title = titleFromFileName(documentFile.name);
-    let usesTitle = false;
-    let startLine = 0;
-    const titleMatch = lines[0]?.match(/^ {0,3}#\s+(.+)$/);
-
-    if (titleMatch) {
-        title = titleMatch[1].replace(/\s+#+\s*$/, "").trim() || title;
-        usesTitle = true;
-        startLine = lines[1] === "" ? 2 : 1;
-    } else if (lines[0] && isSetextHeadingUnderline(lines[1], "=") && isPlainParagraphLine(lines[0])) {
-        title = lines[0].trim() || title;
-        usesTitle = true;
-        startLine = lines[2] === "" ? 3 : 2;
-    }
-
-    const parsed = parseMarkdownLines(lines, startLine);
+    const parsed = parseMarkdownLines(lines, 0);
 
     return {
-        title,
-        usesTitle,
+        title: titleFromFileName(documentFile.name),
+        usesTitle: false,
         blocks: parsed.blocks.length > 0 ? parsed.blocks : [{ type: "paragraph", text: "" }],
         references: parsed.references,
     };

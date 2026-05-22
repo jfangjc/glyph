@@ -15,6 +15,7 @@ type SaveDocumentOptions = {
 };
 
 const autoSaveIntervalMs = 30_000;
+const lastOpenDocumentPathStorageKey = "glyph:last-open-document-path";
 
 let host: DocumentActionHost | null = null;
 
@@ -28,8 +29,39 @@ export function startDocumentAutosave(): void {
     window.setInterval(() => void saveCurrentDocument(), autoSaveIntervalMs);
 }
 
+export async function restoreLastOpenDocument(): Promise<void> {
+    if (documentState.isOpeningDocument || !canUseDesktopFileSystem()) {
+        return;
+    }
+
+    const path = getLastOpenDocumentPath();
+    if (!path) {
+        return;
+    }
+
+    documentState.isOpeningDocument = true;
+    notifyDocumentStateChanged();
+
+    try {
+        getHost().loadDocument(await readDocument(path));
+        rememberLastOpenDocumentPath(path);
+    } catch (error) {
+        forgetLastOpenDocumentPath();
+        console.error("Failed to restore last open file:", error);
+    } finally {
+        documentState.isOpeningDocument = false;
+        notifyDocumentStateChanged();
+    }
+}
+
 export function canUseDesktopFileSystem(): boolean {
-    return Boolean((window as Window & { _wails?: { environment?: unknown } })._wails?.environment);
+    return Boolean(
+        (window as Window & { _wails?: { environment?: unknown } })._wails?.environment ||
+            (window as Window & { chrome?: { webview?: { postMessage?: unknown } } }).chrome?.webview?.postMessage ||
+            (window as Window & { webkit?: { messageHandlers?: { external?: { postMessage?: unknown } } } }).webkit
+                ?.messageHandlers?.external?.postMessage ||
+            (window as Window & { wails?: { invoke?: unknown } }).wails?.invoke,
+    );
 }
 
 export async function openDocument(): Promise<void> {
@@ -56,6 +88,7 @@ export async function openDocument(): Promise<void> {
         }
 
         getHost().loadDocument(await readDocument(selectedPath));
+        rememberLastOpenDocumentPath(selectedPath);
     } catch (error) {
         console.error("Failed to open file:", error);
     } finally {
@@ -108,6 +141,7 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
             documentState.activeFilePath = path;
             documentState.lastSavedContent = content;
             documentState.hasUnsavedChanges = getHost().serializeDocument() !== documentState.lastSavedContent;
+            rememberLastOpenDocumentPath(path);
         }
 
         saved = !documentState.hasUnsavedChanges;
@@ -156,6 +190,18 @@ function normalizeSuggestedFileName(value: string, defaultExtension: string): st
     }
 
     return /\.[^\\/.\s]+$/.test(trimmed) ? trimmed : `${trimmed}.${defaultExtension}`;
+}
+
+function getLastOpenDocumentPath(): string | null {
+    return window.localStorage.getItem(lastOpenDocumentPathStorageKey);
+}
+
+function rememberLastOpenDocumentPath(path: string): void {
+    window.localStorage.setItem(lastOpenDocumentPathStorageKey, path);
+}
+
+function forgetLastOpenDocumentPath(): void {
+    window.localStorage.removeItem(lastOpenDocumentPathStorageKey);
 }
 
 function getHost(): DocumentActionHost {
