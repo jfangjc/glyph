@@ -1,6 +1,6 @@
 import { Call, Dialogs } from "@wailsio/runtime";
 import { getDocumentFileFilters } from "../formats/registry";
-import type { DocumentFile, ImageFile } from "./types";
+import type { DirectoryTree, DocumentFile, ImageFile } from "./types";
 
 const textFileFilters: Dialogs.FileFilter[] = getDocumentFileFilters().map((filter) => ({
     DisplayName: filter.displayName,
@@ -16,6 +16,23 @@ export async function chooseDocumentToOpen(): Promise<string | null> {
         AllowsMultipleSelection: false,
         AllowsOtherFiletypes: true,
         Filters: textFileFilters,
+    });
+
+    if (Array.isArray(selection)) {
+        return selection[0] ?? null;
+    }
+
+    return selection || null;
+}
+
+export async function chooseDirectoryToOpen(): Promise<string | null> {
+    const selection = await Dialogs.OpenFile({
+        Title: "Open directory",
+        ButtonText: "Open",
+        CanChooseFiles: false,
+        CanChooseDirectories: true,
+        AllowsMultipleSelection: false,
+        AllowsOtherFiletypes: true,
     });
 
     if (Array.isArray(selection)) {
@@ -48,6 +65,10 @@ export function saveDocument(path: string, content: string): Promise<void> {
 
 export function renameDocument(oldPath: string, newPath: string): Promise<void> {
     return Call.ByName("glyph/internal/documents.Service.RenameDocument", oldPath, newPath) as Promise<void>;
+}
+
+export function readDirectoryTree(path: string): Promise<DirectoryTree> {
+    return Call.ByName("glyph/internal/documents.Service.ReadDirectoryTree", path) as Promise<DirectoryTree>;
 }
 
 export function readImage(path: string, baseFilePath: string | null): Promise<ImageFile> {

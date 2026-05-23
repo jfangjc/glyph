@@ -9,3 +9,16 @@ export type ImageFile = {
     mimeType: string;
     dataUrl: string;
 };
+
+export type DirectoryTree = {
+    path: string;
+    name: string;
+    children: DirectoryTreeItem[];
+};
+
+export type DirectoryTreeItem = {
+    path: string;
+    name: string;
+    isDir: boolean;
+    children?: DirectoryTreeItem[];
+};

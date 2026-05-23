@@ -2,10 +2,12 @@ import { getSuggestedFileName, syncDocumentWindowTitle } from "../app/window-tit
 import { handleGlobalKeydown as handleGlobalKeydownCommand } from "../app/global-shortcuts";
 import {
     bindDocumentActions,
+    openDocumentPath,
     restoreLastOpenDocument,
     saveCurrentDocument,
     startDocumentAutosave,
 } from "../documents/document-actions";
+import { installFileTree } from "../documents/file-tree";
 import {
     documentState,
     documentStateChangedEvent,
@@ -85,6 +87,8 @@ import {
 
 let isComposingText = false;
 let shouldFlushTypingBatchAfterInput = false;
+let openDirectoryFromShortcut: (() => Promise<void>) | null = null;
+let toggleFileTreeFromShortcut: (() => void) | null = null;
 
 export function installEditorController(): void {
     const surface = getElement<HTMLElement>("document-surface");
@@ -97,6 +101,11 @@ export function installEditorController(): void {
     }
 
     installDocumentOutline(shell, editor);
+    const fileTree = installFileTree(shell, {
+        openDocumentPath,
+    });
+    openDirectoryFromShortcut = fileTree.openDirectory;
+    toggleFileTreeFromShortcut = fileTree.toggle;
     installEditorEventListeners(
         { surface, editor, title },
         {
@@ -171,7 +180,9 @@ function handleDocumentStateChanged(): void {
 
 function handleGlobalKeydown(event: KeyboardEvent): void {
     handleGlobalKeydownCommand(event, {
+        openDirectory: () => openDirectoryFromShortcut?.(),
         saveDocument: saveDocumentFromEditor,
+        toggleFileTree: () => toggleFileTreeFromShortcut?.(),
     });
 }
 

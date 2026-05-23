@@ -99,6 +99,34 @@ export async function openDocument(): Promise<void> {
     }
 }
 
+export async function openDocumentPath(path: string): Promise<void> {
+    if (documentState.isOpeningDocument || !canUseDesktopFileSystem()) {
+        return;
+    }
+
+    documentState.isOpeningDocument = true;
+    notifyDocumentStateChanged();
+
+    try {
+        if (
+            documentState.hasUnsavedChanges &&
+            !(await saveCurrentDocument({
+                promptForPath: !documentState.activeFilePath,
+            }))
+        ) {
+            return;
+        }
+
+        getHost().loadDocument(await readDocument(path));
+        rememberLastOpenDocumentPath(path);
+    } catch (error) {
+        console.error("Failed to open file:", error);
+    } finally {
+        documentState.isOpeningDocument = false;
+        notifyDocumentStateChanged();
+    }
+}
+
 export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Promise<boolean> {
     if (!canUseDesktopFileSystem()) {
         return false;

@@ -11,3 +11,16 @@ type ImageFile struct {
 	MimeType string `json:"mimeType"`
 	DataURL  string `json:"dataUrl"`
 }
+
+type DirectoryTree struct {
+	Path     string               `json:"path"`
+	Name     string               `json:"name"`
+	Children []*DirectoryTreeItem `json:"children"`
+}
+
+type DirectoryTreeItem struct {
+	Path     string               `json:"path"`
+	Name     string               `json:"name"`
+	IsDir    bool                 `json:"isDir"`
+	Children []*DirectoryTreeItem `json:"children,omitempty"`
+}

@@ -1,14 +1,18 @@
 import { canUseDesktopFileSystem, openDocument } from "../documents/document-actions";
 import {
+    isOpenDirectoryShortcut,
     isOpenFileShortcut,
     isSaveFileShortcut,
+    isToggleFileTreeShortcut,
     readZoomShortcut,
 } from "../editor/input/keyboard-shortcuts";
 import { syncLinkOpenIntentFromKeyboard } from "../editor/pointer-interactions";
 import { applyZoomShortcut } from "./zoom";
 
 type GlobalShortcutOptions = {
+    openDirectory: () => void | Promise<void>;
     saveDocument: (promptForPath?: boolean) => void | Promise<void>;
+    toggleFileTree: () => void;
 };
 
 export function handleGlobalKeydown(event: KeyboardEvent, options: GlobalShortcutOptions): void {
@@ -22,6 +26,22 @@ export function handleGlobalKeydown(event: KeyboardEvent, options: GlobalShortcu
     }
 
     if (!canUseDesktopFileSystem()) {
+        if (isToggleFileTreeShortcut(event)) {
+            event.preventDefault();
+            options.toggleFileTree();
+        }
+        return;
+    }
+
+    if (isOpenDirectoryShortcut(event)) {
+        event.preventDefault();
+        void options.openDirectory();
+        return;
+    }
+
+    if (isToggleFileTreeShortcut(event)) {
+        event.preventDefault();
+        options.toggleFileTree();
         return;
     }
 

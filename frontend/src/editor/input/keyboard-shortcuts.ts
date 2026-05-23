@@ -25,8 +25,16 @@ export function isOpenFileShortcut(event: KeyboardEvent): boolean {
     return event.key.toLowerCase() === "o" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
 }
 
+export function isOpenDirectoryShortcut(event: KeyboardEvent): boolean {
+    return event.key.toLowerCase() === "o" && (event.ctrlKey || event.metaKey) && !event.altKey && event.shiftKey;
+}
+
 export function isSaveFileShortcut(event: KeyboardEvent): boolean {
     return event.key.toLowerCase() === "s" && (event.ctrlKey || event.metaKey) && !event.altKey;
+}
+
+export function isToggleFileTreeShortcut(event: KeyboardEvent): boolean {
+    return event.key.toLowerCase() === "e" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
 }
 
 export function isUndoShortcut(event: KeyboardEvent): boolean {
