@@ -274,14 +274,28 @@ function scrollBlockIntoComfortableView(block: HTMLElement, mode: "comfortable" 
         const bottomInset = mode === "comfortable" ? Math.min(112, scrollerRect.height * 0.2) : 36;
         const minimumTop = scrollerRect.top + topInset;
         const maximumBottom = scrollerRect.bottom - bottomInset;
+        const visibleHeight = maximumBottom - minimumTop;
+        const targetRect = blockRect.height > visibleHeight ? getSelectionRectInsideBlock(block) ?? blockRect : blockRect;
 
-        if (blockRect.bottom > maximumBottom) {
-            scroller.scrollTop += blockRect.bottom - maximumBottom;
+        if (targetRect.bottom > maximumBottom) {
+            scroller.scrollTop += targetRect.bottom - maximumBottom;
             return;
         }
 
-        if (blockRect.top < minimumTop) {
-            scroller.scrollTop -= minimumTop - blockRect.top;
+        if (targetRect.top < minimumTop) {
+            scroller.scrollTop -= minimumTop - targetRect.top;
         }
     });
+}
+
+function getSelectionRectInsideBlock(block: HTMLElement): DOMRect | null {
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const content = getBlockContent(block);
+
+    if (!selection?.isCollapsed || !focusNode || (focusNode !== content && !content.contains(focusNode))) {
+        return null;
+    }
+
+    return getCollapsedSelectionRect(selection);
 }

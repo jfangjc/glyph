@@ -34,11 +34,18 @@ export function syncActiveBlockIndicator(block: HTMLElement | null): void {
 }
 
 export function syncBlockSourceReveal(block: HTMLElement | null): void {
-    const nextBlocks = new Set<HTMLElement>();
-    const activeBlock = block?.isConnected ? block : null;
+    syncBlockSourceRevealTargets(block ? [block] : []);
+}
 
-    if (activeBlock) {
-        addBlockSourceRevealTarget(nextBlocks, activeBlock);
+export function syncBlockSourceRevealBlocks(blocks: HTMLElement[]): void {
+    syncBlockSourceRevealTargets(blocks);
+}
+
+function syncBlockSourceRevealTargets(blocks: HTMLElement[]): void {
+    const nextBlocks = new Set<HTMLElement>();
+
+    for (const block of blocks) {
+        addBlockSourceRevealTarget(nextBlocks, block);
     }
 
     for (const revealedBlock of blockSourceRevealBlocks) {

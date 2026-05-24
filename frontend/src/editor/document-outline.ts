@@ -1,5 +1,5 @@
 import { headingTypes, readBlockType } from "./blocks/model";
-import { getBlockText, getEditorBlocks } from "./blocks/view";
+import { findBlock, getBlockText, getEditorBlocks } from "./blocks/view";
 
 type OutlineEntry = {
     block: HTMLElement;
@@ -39,6 +39,23 @@ export function installDocumentOutline(container: HTMLElement, editor: HTMLEleme
     scheduleOutlineSync();
 }
 
+export function syncDocumentOutlineToSelection(): void {
+    const focusBlock = findBlock(document.getSelection()?.focusNode ?? null);
+    if (!focusBlock) {
+        return;
+    }
+
+    syncDocumentOutlineToBlock(focusBlock);
+}
+
+export function syncDocumentOutlineToBlock(block: HTMLElement | null): void {
+    if (!block?.isConnected) {
+        return;
+    }
+
+    setActiveOutlineId(readActiveOutlineIdForBlock(block));
+}
+
 function scheduleOutlineSync(): void {
     if (pendingSync) {
         return;
@@ -58,6 +75,7 @@ function syncDocumentOutline(): void {
     const entries = readOutlineEntries();
     outline.hidden = entries.length === 0;
     list.replaceChildren(...entries.map(renderOutlineEntry));
+    activeId = null;
     updateActiveOutlineItem();
 }
 
@@ -135,14 +153,72 @@ function updateActiveOutlineItem(): void {
         }
     }
 
-    if (nextActive === activeId) {
+    setActiveOutlineId(nextActive);
+}
+
+function readActiveOutlineIdForBlock(activeBlock: HTMLElement): string | null {
+    const blocks = getEditorBlocks();
+    let activeOutlineId: string | null = null;
+
+    for (const block of blocks) {
+        const type = readBlockType(block.dataset.type);
+        if ((type === "heading-1" || type === "heading-2") && getBlockText(block).trim()) {
+            activeOutlineId = block.dataset.outlineId ?? activeOutlineId;
+        }
+
+        if (block === activeBlock) {
+            return activeOutlineId;
+        }
+    }
+
+    return activeOutlineId;
+}
+
+function setActiveOutlineId(nextActive: string | null): void {
+    if (!list || nextActive === activeId) {
         return;
     }
 
     activeId = nextActive;
+    let activeItem: HTMLElement | null = null;
     for (const item of Array.from(list.children)) {
         if (item instanceof HTMLElement) {
-            item.dataset.active = item.dataset.outlineId === activeId ? "true" : "false";
+            const isActive = item.dataset.outlineId === activeId;
+            item.dataset.active = isActive ? "true" : "false";
+            if (isActive) {
+                activeItem = item;
+            }
         }
+    }
+
+    scrollActiveOutlineItemIntoView(activeItem);
+}
+
+function scrollActiveOutlineItemIntoView(activeItem: HTMLElement | null): void {
+    if (!outline || !list || !activeItem) {
+        return;
+    }
+
+    const itemTop = activeItem.offsetTop - list.offsetTop;
+    const itemBottom = itemTop + activeItem.offsetHeight;
+    const viewportTop = outline.scrollTop;
+    const viewportBottom = viewportTop + outline.clientHeight;
+    const outlineStyle = window.getComputedStyle(outline);
+    const paddingTop = Number.parseFloat(outlineStyle.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(outlineStyle.paddingBottom) || 0;
+
+    if (itemTop < viewportTop) {
+        outline.scrollTo({
+            top: itemTop - paddingTop,
+            behavior: "smooth",
+        });
+        return;
+    }
+
+    if (itemBottom > viewportBottom) {
+        outline.scrollTo({
+            top: itemBottom - outline.clientHeight + paddingBottom,
+            behavior: "smooth",
+        });
     }
 }

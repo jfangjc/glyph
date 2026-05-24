@@ -48,7 +48,11 @@ import {
     undoEditorChange,
 } from "./history/undo-history";
 import { installEditorEventListeners } from "./editor-events";
-import { installDocumentOutline } from "./document-outline";
+import {
+    installDocumentOutline,
+    syncDocumentOutlineToBlock,
+    syncDocumentOutlineToSelection,
+} from "./document-outline";
 import { handleEditorKeydown as handleEditorKeydownCommand } from "./input/editor-keydown";
 import {
     isPlainTextKey,
@@ -61,6 +65,7 @@ import {
     configureEditorUiState,
     syncActiveBlockIndicator,
     syncBlockSourceReveal,
+    syncBlockSourceRevealBlocks,
 } from "./editor-ui-state";
 import {
     clearGutterHoverBlock,
@@ -130,7 +135,7 @@ export function installEditorController(): void {
             onTitleInput: handleTitleInput,
             onTitleFocus: handleTitleFocus,
             onTitleBlur: handleTitleBlur,
-            onSelectionChange: handleSelectionChange,
+            onSelectionChange: handleEditorSelectionChange,
             onWindowKeydown: handleGlobalKeydown,
             onWindowKeyup: syncLinkOpenIntentFromKeyboard,
             onWindowBlur: clearLinkOpenIntent,
@@ -142,6 +147,7 @@ export function installEditorController(): void {
         onBlockFocused: (block) => {
             syncActiveBlockIndicator(block);
             syncBlockSourceReveal(block);
+            syncDocumentOutlineToBlock(block);
         },
     });
     configurePointerInteractions({
@@ -170,6 +176,19 @@ export function installEditorController(): void {
     syncBlockViewContext();
     syncFirstBlockPlaceholder();
     syncDocumentWindowTitle();
+}
+
+function handleEditorSelectionChange(): void {
+    handleSelectionChange();
+    syncSelectedBlockSourceReveal();
+    syncDocumentOutlineToSelection();
+}
+
+function syncSelectedBlockSourceReveal(): void {
+    const selectedRange = getSelectedBlockRange();
+    if (selectedRange) {
+        syncBlockSourceRevealBlocks(selectedRange.blocks);
+    }
 }
 
 function handleDocumentStateChanged(): void {

@@ -4,12 +4,10 @@
     "version": "0.0.0",
     "type": "module",
     "scripts": {
-        "dev": "vite --host 127.0.0.1",
+        "dev": "vite",
         "typecheck": "tsc --noEmit",
-        "clean:dist": "node -e \"const fs=require('fs'),path=require('path');fs.mkdirSync('dist',{recursive:true});for(const name of fs.readdirSync('dist')){if(name!=='.gitkeep')fs.rmSync(path.join('dist',name),{recursive:true,force:true});}fs.closeSync(fs.openSync(path.join('dist','.gitkeep'),'a'));\"",
-        "preserve:dist": "node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').closeSync(require('fs').openSync('dist/.gitkeep','a'))\"",
-        "build:dev": "npm run clean:dist && vite build --minify false --mode development && npm run preserve:dist",
-        "build": "npm run typecheck && npm run clean:dist && vite build --mode production && npm run preserve:dist",
+        "build:dev": "vite build --minify false --mode development",
+        "build": "vite build --mode production",
         "preview": "vite preview"
     },
     "dependencies": {

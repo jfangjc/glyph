@@ -102,7 +102,7 @@ export function handleSelectionChange(): void {
     hooks.syncActiveBlockMarkdownSource?.(focusBlock);
 
     if (selection && !selection.isCollapsed) {
-        hooks.syncBlockMarkdownSourceReveal?.(null);
+        hooks.syncBlockMarkdownSourceReveal?.(focusBlock);
         clearPendingMarkdownTokenNavigation();
         setPointerSelecting(true);
         return;
