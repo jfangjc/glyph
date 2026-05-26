@@ -167,12 +167,7 @@ export function rerenderInlineBlockContent(block: HTMLElement, offset: number): 
     return Math.min(offset, getBlockText(block).length);
 }
 
-function renderBlockInnerHtml(
-    block: HTMLElement,
-    type: BlockType,
-    text: string,
-    source: BlockSource,
-): string {
+function renderBlockInnerHtml(block: HTMLElement, type: BlockType, text: string, source: BlockSource): string {
     return (
         renderBlockSourceHtml(source.prefix, "prefix", source.prefixEditable ?? true) +
         renderBlockEditableTextHtml(text, source) +
@@ -197,7 +192,12 @@ function isOpenFencedCodeParagraph(type: BlockType, text: string): boolean {
         return false;
     }
 
-    return Boolean(text.split("\n")[0]?.trim().match(/^(`{3,}|~{3,})(.*)$/));
+    return Boolean(
+        text
+            .split("\n")[0]
+            ?.trim()
+            .match(/^(`{3,}|~{3,})(.*)$/),
+    );
 }
 
 export function setBlockIndent(block: HTMLElement, indent: number): void {
@@ -265,7 +265,11 @@ export function setCodeInfo(block: HTMLElement, codeInfo: string): void {
 }
 
 function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void {
-    if (readBlockType(block.dataset.type) === "rule" && ruleMarker && /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker)) {
+    if (
+        readBlockType(block.dataset.type) === "rule" &&
+        ruleMarker &&
+        /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker)
+    ) {
         block.dataset.ruleMarker = ruleMarker;
         return;
     }
@@ -416,7 +420,13 @@ function usesBulletListMarker(type: BlockType): boolean {
 }
 
 export function shouldResetEmptyBlock(type: BlockType): boolean {
-    return isIndentableListBlockType(type) || type === "quote" || type === "reference" || type === "table" || type === "math";
+    return (
+        isIndentableListBlockType(type) ||
+        type === "quote" ||
+        type === "reference" ||
+        type === "table" ||
+        type === "math"
+    );
 }
 
 export function getBlockContent(block: HTMLElement): HTMLElement {
@@ -487,11 +497,11 @@ export function syncFirstBlockPlaceholder(): void {
     const firstContent = getBlockContent(firstBlock);
     const firstType = readBlockType(firstBlock.dataset.type);
 
-    if (firstType === "paragraph" || firstType === "source") {
-        firstContent.dataset.placeholder = "Start writing";
-    } else {
-        delete firstContent.dataset.placeholder;
-    }
+    // if (firstType === "paragraph" || firstType === "source") {
+    //     firstContent.dataset.placeholder = "";
+    // } else {
+    //     delete firstContent.dataset.placeholder;
+    // }
 
     for (const block of remainingBlocks) {
         delete getBlockContent(block).dataset.placeholder;

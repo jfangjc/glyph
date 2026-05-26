@@ -1,6 +1,6 @@
 import { Call, Dialogs } from "@wailsio/runtime";
 import { getDocumentFileFilters } from "../formats/registry";
-import type { DirectoryTree, DocumentFile, ImageFile } from "./types";
+import type { DirectoryTree, DocumentFile, ImageFile, PastedImageFile } from "./types";
 
 const textFileFilters: Dialogs.FileFilter[] = getDocumentFileFilters().map((filter) => ({
     DisplayName: filter.displayName,
@@ -63,6 +63,10 @@ export function saveDocument(path: string, content: string): Promise<void> {
     return Call.ByName("glyph/internal/documents.Service.SaveDocument", path, content) as Promise<void>;
 }
 
+export function createUntitledMarkdownDocument(baseFilePath: string): Promise<DocumentFile> {
+    return Call.ByName("glyph/internal/documents.Service.CreateUntitledMarkdownDocument", baseFilePath) as Promise<DocumentFile>;
+}
+
 export function renameDocument(oldPath: string, newPath: string): Promise<void> {
     return Call.ByName("glyph/internal/documents.Service.RenameDocument", oldPath, newPath) as Promise<void>;
 }
@@ -73,4 +77,19 @@ export function readDirectoryTree(path: string): Promise<DirectoryTree> {
 
 export function readImage(path: string, baseFilePath: string | null): Promise<ImageFile> {
     return Call.ByName("glyph/internal/documents.Service.ReadImage", path, baseFilePath ?? "") as Promise<ImageFile>;
+}
+
+export function savePastedImage(
+    baseFilePath: string,
+    dataUrl: string,
+    originalName: string,
+    mimeType: string,
+): Promise<PastedImageFile> {
+    return Call.ByName(
+        "glyph/internal/documents.Service.SavePastedImage",
+        baseFilePath,
+        dataUrl,
+        originalName,
+        mimeType,
+    ) as Promise<PastedImageFile>;
 }

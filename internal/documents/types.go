@@ -12,6 +12,11 @@ type ImageFile struct {
 	DataURL  string `json:"dataUrl"`
 }
 
+type PastedImageFile struct {
+	Path         string `json:"path"`
+	RelativePath string `json:"relativePath"`
+}
+
 type DirectoryTree struct {
 	Path     string               `json:"path"`
 	Name     string               `json:"name"`

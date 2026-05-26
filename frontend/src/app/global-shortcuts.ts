@@ -1,5 +1,6 @@
 import { canUseDesktopFileSystem, openDocument } from "../documents/document-actions";
 import {
+    isNewFileShortcut,
     isOpenDirectoryShortcut,
     isOpenFileShortcut,
     isSaveFileShortcut,
@@ -10,6 +11,7 @@ import { syncLinkOpenIntentFromKeyboard } from "../editor/pointer-interactions";
 import { applyZoomShortcut } from "./zoom";
 
 type GlobalShortcutOptions = {
+    newDocument: () => void | Promise<void>;
     openDirectory: () => void | Promise<void>;
     saveDocument: (promptForPath?: boolean) => void | Promise<void>;
     toggleFileTree: () => void;
@@ -36,6 +38,12 @@ export function handleGlobalKeydown(event: KeyboardEvent, options: GlobalShortcu
     if (isOpenDirectoryShortcut(event)) {
         event.preventDefault();
         void options.openDirectory();
+        return;
+    }
+
+    if (isNewFileShortcut(event)) {
+        event.preventDefault();
+        void options.newDocument();
         return;
     }
 

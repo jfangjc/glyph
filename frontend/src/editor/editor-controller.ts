@@ -2,6 +2,7 @@ import { getSuggestedFileName, syncDocumentWindowTitle } from "../app/window-tit
 import { handleGlobalKeydown as handleGlobalKeydownCommand } from "../app/global-shortcuts";
 import {
     bindDocumentActions,
+    createNewMarkdownDocument,
     openDocumentPath,
     restoreLastOpenDocument,
     saveCurrentDocument,
@@ -200,6 +201,7 @@ function handleDocumentStateChanged(): void {
 
 function handleGlobalKeydown(event: KeyboardEvent): void {
     handleGlobalKeydownCommand(event, {
+        newDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
         openDirectory: () => openDirectoryFromShortcut?.(),
         saveDocument: saveDocumentFromEditor,
         toggleFileTree: () => toggleFileTreeFromShortcut?.(),
@@ -354,11 +356,16 @@ function handleEditorInput(event: Event): void {
 
 function handleEditorPaste(event: ClipboardEvent): void {
     beginDiscreteUndoTransaction();
-    handleEditorPasteCommand(event, {
+    void handleEditorPasteCommand(event, {
         getActiveDocumentFormat,
+        getActiveFilePath: () => documentState.activeFilePath,
+        ensureDocumentSaved: () =>
+            saveCurrentDocument({
+                promptForPath: true,
+                suggestedFileName: getSuggestedFileName(),
+            }),
         markEditorDirty,
-    });
-    commitUndoTransaction();
+    }).finally(commitUndoTransaction);
 }
 
 function handleEditorCopy(event: ClipboardEvent): void {

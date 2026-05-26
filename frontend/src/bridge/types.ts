@@ -10,6 +10,11 @@ export type ImageFile = {
     dataUrl: string;
 };
 
+export type PastedImageFile = {
+    path: string;
+    relativePath: string;
+};
+
 export type DirectoryTree = {
     path: string;
     name: string;

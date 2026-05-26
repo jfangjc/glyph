@@ -1,4 +1,11 @@
-import { chooseDocumentToOpen, chooseDocumentToSave, readDocument, renameDocument, saveDocument } from "../bridge/documents";
+import {
+    chooseDocumentToOpen,
+    chooseDocumentToSave,
+    createUntitledMarkdownDocument,
+    readDocument,
+    renameDocument,
+    saveDocument,
+} from "../bridge/documents";
 import type { DocumentFile } from "../bridge/types";
 import { getDocumentFormatById } from "../formats/registry";
 import { titleFromFileName } from "../formats/file-names";
@@ -122,6 +129,41 @@ export async function openDocumentPath(path: string): Promise<void> {
         rememberLastOpenDocumentPath(path);
     } catch (error) {
         console.error("Failed to open file:", error);
+    } finally {
+        documentState.isOpeningDocument = false;
+        notifyDocumentStateChanged();
+    }
+}
+
+export async function createNewMarkdownDocument(suggestedFileName?: string): Promise<void> {
+    if (documentState.isOpeningDocument || !canUseDesktopFileSystem()) {
+        return;
+    }
+
+    documentState.isOpeningDocument = true;
+    notifyDocumentStateChanged();
+
+    try {
+        if (
+            (!documentState.activeFilePath || documentState.hasUnsavedChanges) &&
+            !(await saveCurrentDocument({
+                promptForPath: !documentState.activeFilePath,
+                suggestedFileName,
+            }))
+        ) {
+            return;
+        }
+
+        if (!documentState.activeFilePath) {
+            return;
+        }
+
+        const documentFile = await createUntitledMarkdownDocument(documentState.activeFilePath);
+        getHost().loadDocument(documentFile);
+        rememberLastOpenDocumentPath(documentFile.path);
+        await refreshOpenDirectoryTree();
+    } catch (error) {
+        console.error("Failed to create new markdown file:", error);
     } finally {
         documentState.isOpeningDocument = false;
         notifyDocumentStateChanged();

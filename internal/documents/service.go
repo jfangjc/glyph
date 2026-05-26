@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -36,6 +37,25 @@ func (*Service) SaveDocument(path string, content string) error {
 	return os.WriteFile(resolvedPath, []byte(content), 0o644)
 }
 
+func (*Service) CreateUntitledMarkdownDocument(baseFilePath string) (*DocumentFile, error) {
+	resolvedBasePath, err := resolveFilePath(baseFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	dir := filepath.Dir(resolvedBasePath)
+	path, err := createUniqueUntitledMarkdownFile(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DocumentFile{
+		Path:    path,
+		Name:    filepath.Base(path),
+		Content: "",
+	}, nil
+}
+
 func (*Service) RenameDocument(oldPath string, newPath string) error {
 	resolvedOldPath, err := resolveFilePath(oldPath)
 	if err != nil {
@@ -58,6 +78,25 @@ func (*Service) RenameDocument(oldPath string, newPath string) error {
 	}
 
 	return os.Rename(resolvedOldPath, resolvedNewPath)
+}
+
+func createUniqueUntitledMarkdownFile(dir string) (string, error) {
+	for index := 0; ; index++ {
+		name := "Untitled.md"
+		if index > 0 {
+			name = "Untitled " + strconv.Itoa(index+1) + ".md"
+		}
+
+		path := filepath.Join(dir, name)
+		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			return path, file.Close()
+		}
+
+		if !os.IsExist(err) {
+			return "", err
+		}
+	}
 }
 
 func (*Service) ReadDirectoryTree(path string) (*DirectoryTree, error) {
