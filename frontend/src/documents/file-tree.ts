@@ -16,7 +16,9 @@ let tree: DirectoryTree | null = null;
 let query = "";
 let selectedPath: string | null = null;
 let searchRenderTimer: number | null = null;
+let treeRootElement: HTMLElement | null = null;
 const collapsedDirectories = new Set<string>();
+const lastOpenDirectoryPathStorageKey = "glyph:last-open-directory-path";
 const searchRenderDelayMs = 120;
 const maxSearchResults = 500;
 
@@ -36,6 +38,7 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
     const treeRoot = document.createElement("div");
     treeRoot.className = "file-tree";
     treeRoot.setAttribute("role", "tree");
+    treeRootElement = treeRoot;
 
     frame.content.append(search, treeRoot);
     root.append(frame.element);
@@ -96,12 +99,7 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
                 return;
             }
 
-            tree = await readDirectoryTree(selectedDirectoryPath);
-            collapsedDirectories.clear();
-            query = "";
-            selectedPath = null;
-            search.value = "";
-            renderTree(treeRoot);
+            await openDirectoryPath(selectedDirectoryPath, treeRoot, search);
             frame.show();
             search.focus();
         },
@@ -115,6 +113,45 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
             search.focus();
         },
     };
+}
+
+export async function restoreLastOpenDirectory(): Promise<void> {
+    const path = getLastOpenDirectoryPath();
+    if (!path || !treeRootElement) {
+        return;
+    }
+
+    try {
+        await openDirectoryPath(path, treeRootElement);
+    } catch (error) {
+        forgetLastOpenDirectoryPath();
+        console.error("Failed to restore last open directory:", error);
+    }
+}
+
+export async function refreshOpenDirectoryTree(): Promise<void> {
+    if (!tree?.path || !treeRootElement) {
+        return;
+    }
+
+    try {
+        tree = await readDirectoryTree(tree.path);
+        renderTree(treeRootElement);
+    } catch (error) {
+        console.error("Failed to refresh file tree:", error);
+    }
+}
+
+async function openDirectoryPath(path: string, treeRoot: HTMLElement, search?: HTMLInputElement): Promise<void> {
+    tree = await readDirectoryTree(path);
+    collapsedDirectories.clear();
+    query = "";
+    selectedPath = null;
+    if (search) {
+        search.value = "";
+    }
+    rememberLastOpenDirectoryPath(tree.path);
+    renderTree(treeRoot);
 }
 
 function handleFileTreeKeydown(event: KeyboardEvent, treeRoot: HTMLElement, closeFrame: () => void): void {
@@ -358,4 +395,16 @@ function escapeHtml(value: string): string {
 
 function cssEscape(value: string): string {
     return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+}
+
+function getLastOpenDirectoryPath(): string | null {
+    return window.localStorage.getItem(lastOpenDirectoryPathStorageKey);
+}
+
+function rememberLastOpenDirectoryPath(path: string): void {
+    window.localStorage.setItem(lastOpenDirectoryPathStorageKey, path);
+}
+
+function forgetLastOpenDirectoryPath(): void {
+    window.localStorage.removeItem(lastOpenDirectoryPathStorageKey);
 }

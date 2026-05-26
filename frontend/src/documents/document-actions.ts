@@ -5,6 +5,7 @@ import { titleFromFileName } from "../formats/file-names";
 import { getElement } from "../utils/dom";
 import { fileNameFromPath } from "../utils/text";
 import { documentState, notifyDocumentStateChanged } from "./document-state";
+import { refreshOpenDirectoryTree } from "./file-tree";
 
 type DocumentActionHost = {
     loadDocument: (documentFile: DocumentFile) => void;
@@ -172,6 +173,9 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
         }
 
         await saveDocument(path, content);
+        if (pathChanged) {
+            await refreshOpenDirectoryTree();
+        }
 
         if (documentState.activeFilePath === previousPath || documentState.activeFilePath === path || options.promptForPath) {
             documentState.activeFilePath = path;

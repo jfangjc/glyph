@@ -1,5 +1,5 @@
 import { headingTypes, readBlockType } from "./blocks/model";
-import { findBlock, getBlockText, getEditorBlocks } from "./blocks/view";
+import { getBlockText, getEditorBlocks } from "./blocks/view";
 
 type OutlineEntry = {
     block: HTMLElement;
@@ -34,26 +34,18 @@ export function installDocumentOutline(container: HTMLElement, editor: HTMLEleme
         subtree: true,
     });
 
-    container.addEventListener("scroll", updateActiveOutlineItem, { passive: true });
-    window.addEventListener("resize", updateActiveOutlineItem);
+    container.addEventListener("scroll", () => updateActiveOutlineItem(), { passive: true });
+    window.addEventListener("resize", () => updateActiveOutlineItem());
     scheduleOutlineSync();
 }
 
 export function syncDocumentOutlineToSelection(): void {
-    const focusBlock = findBlock(document.getSelection()?.focusNode ?? null);
-    if (!focusBlock) {
-        return;
-    }
-
-    syncDocumentOutlineToBlock(focusBlock);
+    // The outline is a scroll-position indicator. Selection changes are handled
+    // by the active block indicator instead.
 }
 
 export function syncDocumentOutlineToBlock(block: HTMLElement | null): void {
-    if (!block?.isConnected) {
-        return;
-    }
-
-    setActiveOutlineId(readActiveOutlineIdForBlock(block));
+    void block;
 }
 
 function scheduleOutlineSync(): void {
@@ -75,23 +67,24 @@ function syncDocumentOutline(): void {
     const entries = readOutlineEntries();
     outline.hidden = entries.length === 0;
     list.replaceChildren(...entries.map(renderOutlineEntry));
-    activeId = null;
-    updateActiveOutlineItem();
+
+    if (activeId && entries.some((entry) => entry.id === activeId)) {
+        applyActiveOutlineId();
+        return;
+    }
+
+    updateActiveOutlineItem({ scrollActiveItem: false });
 }
 
 function readOutlineEntries(): OutlineEntry[] {
     return getEditorBlocks()
         .map((block, index): OutlineEntry | null => {
             const type = readBlockType(block.dataset.type);
-            if (!headingTypes.has(type) || (type !== "heading-1" && type !== "heading-2")) {
+            if (!isOutlineHeadingBlock(block)) {
                 return null;
             }
 
             const text = getBlockText(block).trim();
-            if (!text) {
-                return null;
-            }
-
             const id = block.dataset.outlineId ?? `outline-${Date.now().toString(36)}-${index}`;
             block.dataset.outlineId = id;
 
@@ -132,54 +125,60 @@ function renderOutlineEntry(entry: OutlineEntry): HTMLLIElement {
     return item;
 }
 
-function updateActiveOutlineItem(): void {
+function updateActiveOutlineItem(options: { scrollActiveItem?: boolean } = {}): void {
     if (!list || !scrollContainer) {
         return;
     }
 
     const headings = getEditorBlocks().filter((block) => {
-        const type = readBlockType(block.dataset.type);
-        return type === "heading-1" || type === "heading-2";
+        return isOutlineHeadingBlock(block);
     });
-    const containerTop = scrollContainer.getBoundingClientRect().top;
-    const activationLine = containerTop + 96;
+    const containerRect = scrollContainer.getBoundingClientRect();
     let nextActive = headings[0]?.dataset.outlineId ?? null;
 
     for (const heading of headings) {
-        if (heading.getBoundingClientRect().top <= activationLine) {
+        const headingRect = heading.getBoundingClientRect();
+        if (isVisibleInContainer(headingRect, containerRect)) {
             nextActive = heading.dataset.outlineId ?? nextActive;
-        } else {
             break;
         }
-    }
 
-    setActiveOutlineId(nextActive);
-}
-
-function readActiveOutlineIdForBlock(activeBlock: HTMLElement): string | null {
-    const blocks = getEditorBlocks();
-    let activeOutlineId: string | null = null;
-
-    for (const block of blocks) {
-        const type = readBlockType(block.dataset.type);
-        if ((type === "heading-1" || type === "heading-2") && getBlockText(block).trim()) {
-            activeOutlineId = block.dataset.outlineId ?? activeOutlineId;
-        }
-
-        if (block === activeBlock) {
-            return activeOutlineId;
+        if (headingRect.top < containerRect.top) {
+            nextActive = heading.dataset.outlineId ?? nextActive;
         }
     }
 
-    return activeOutlineId;
+    setActiveOutlineId(nextActive, options);
 }
 
-function setActiveOutlineId(nextActive: string | null): void {
-    if (!list || nextActive === activeId) {
+function isVisibleInContainer(elementRect: DOMRect, containerRect: DOMRect): boolean {
+    return elementRect.bottom > containerRect.top && elementRect.top < containerRect.bottom;
+}
+
+function isOutlineHeadingBlock(block: HTMLElement): boolean {
+    const type = readBlockType(block.dataset.type);
+    return (type === "heading-1" || type === "heading-2") && headingTypes.has(type) && Boolean(getBlockText(block).trim());
+}
+
+function setActiveOutlineId(nextActive: string | null, options: { force?: boolean; scrollActiveItem?: boolean } = {}): void {
+    const changed = nextActive !== activeId;
+    if (!list || (!changed && !options.force)) {
         return;
     }
 
     activeId = nextActive;
+    const activeItem = applyActiveOutlineId();
+
+    if (options.scrollActiveItem !== false) {
+        scrollActiveOutlineItemIntoView(activeItem);
+    }
+}
+
+function applyActiveOutlineId(): HTMLElement | null {
+    if (!list) {
+        return null;
+    }
+
     let activeItem: HTMLElement | null = null;
     for (const item of Array.from(list.children)) {
         if (item instanceof HTMLElement) {
@@ -191,7 +190,7 @@ function setActiveOutlineId(nextActive: string | null): void {
         }
     }
 
-    scrollActiveOutlineItemIntoView(activeItem);
+    return activeItem;
 }
 
 function scrollActiveOutlineItemIntoView(activeItem: HTMLElement | null): void {

@@ -7,7 +7,7 @@ import {
     saveCurrentDocument,
     startDocumentAutosave,
 } from "../documents/document-actions";
-import { installFileTree } from "../documents/file-tree";
+import { installFileTree, restoreLastOpenDirectory } from "../documents/file-tree";
 import {
     documentState,
     documentStateChangedEvent,
@@ -169,6 +169,7 @@ export function installEditorController(): void {
         parseFragment: (content) => getActiveDocumentFormat().parseFragment(content),
     });
     bindDocumentActions({ loadDocument, serializeDocument });
+    void restoreLastOpenDirectory();
     void restoreLastOpenDocument();
     startDocumentAutosave();
 
