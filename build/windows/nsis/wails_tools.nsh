@@ -204,23 +204,23 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
 !macro wails.associateFiles
     ; Create file associations
     
-    !insertmacro APP_ASSOCIATE "md" "Markdown" "Markdown document" "$INSTDIR\.ico" "Open with ${INFO_PRODUCTNAME}" "$INSTDIR\${PRODUCT_EXECUTABLE} $\"%1$\""
-    File "..\.ico"
+    !insertmacro APP_ASSOCIATE "md" "Markdown" "Markdown document" "$INSTDIR\icon.ico" "Open with ${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\" $\"%1$\""
+    File "..\icon.ico"
     
-    !insertmacro APP_ASSOCIATE "markdown" "Markdown" "Markdown document" "$INSTDIR\.ico" "Open with ${INFO_PRODUCTNAME}" "$INSTDIR\${PRODUCT_EXECUTABLE} $\"%1$\""
-    File "..\.ico"
+    !insertmacro APP_ASSOCIATE "markdown" "Markdown" "Markdown document" "$INSTDIR\icon.ico" "Open with ${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\" $\"%1$\""
+    File "..\icon.ico"
     
-    !insertmacro APP_ASSOCIATE "tex" "LaTeX" "LaTeX source document" "$INSTDIR\.ico" "Open with ${INFO_PRODUCTNAME}" "$INSTDIR\${PRODUCT_EXECUTABLE} $\"%1$\""
-    File "..\.ico"
+    !insertmacro APP_ASSOCIATE "tex" "LaTeX" "LaTeX source document" "$INSTDIR\icon.ico" "Open with ${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\" $\"%1$\""
+    File "..\icon.ico"
     
-    !insertmacro APP_ASSOCIATE "org" "Org Mode" "Org Mode document" "$INSTDIR\.ico" "Open with ${INFO_PRODUCTNAME}" "$INSTDIR\${PRODUCT_EXECUTABLE} $\"%1$\""
-    File "..\.ico"
+    !insertmacro APP_ASSOCIATE "org" "Org Mode" "Org Mode document" "$INSTDIR\icon.ico" "Open with ${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\" $\"%1$\""
+    File "..\icon.ico"
     
-    !insertmacro APP_ASSOCIATE "typ" "Typst" "Typst source document" "$INSTDIR\.ico" "Open with ${INFO_PRODUCTNAME}" "$INSTDIR\${PRODUCT_EXECUTABLE} $\"%1$\""
-    File "..\.ico"
+    !insertmacro APP_ASSOCIATE "typ" "Typst" "Typst source document" "$INSTDIR\icon.ico" "Open with ${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\" $\"%1$\""
+    File "..\icon.ico"
     
-    !insertmacro APP_ASSOCIATE "txt" "Plain Text" "Plain text document" "$INSTDIR\.ico" "Open with ${INFO_PRODUCTNAME}" "$INSTDIR\${PRODUCT_EXECUTABLE} $\"%1$\""
-    File "..\.ico"
+    !insertmacro APP_ASSOCIATE "txt" "Plain Text" "Plain text document" "$INSTDIR\icon.ico" "Open with ${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\" $\"%1$\""
+    File "..\icon.ico"
     
 !macroend
 
@@ -228,22 +228,22 @@ RequestExecutionLevel "${REQUEST_EXECUTION_LEVEL}"
     ; Delete app associations
     
     !insertmacro APP_UNASSOCIATE "md" "Markdown"
-    Delete "$INSTDIR\.ico"
+    Delete "$INSTDIR\icon.ico"
     
     !insertmacro APP_UNASSOCIATE "markdown" "Markdown"
-    Delete "$INSTDIR\.ico"
+    Delete "$INSTDIR\icon.ico"
     
     !insertmacro APP_UNASSOCIATE "tex" "LaTeX"
-    Delete "$INSTDIR\.ico"
+    Delete "$INSTDIR\icon.ico"
     
     !insertmacro APP_UNASSOCIATE "org" "Org Mode"
-    Delete "$INSTDIR\.ico"
+    Delete "$INSTDIR\icon.ico"
     
     !insertmacro APP_UNASSOCIATE "typ" "Typst"
-    Delete "$INSTDIR\.ico"
+    Delete "$INSTDIR\icon.ico"
     
     !insertmacro APP_UNASSOCIATE "txt" "Plain Text"
-    Delete "$INSTDIR\.ico"
+    Delete "$INSTDIR\icon.ico"
     
 !macroend
 

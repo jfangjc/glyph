@@ -51,31 +51,37 @@ fileAssociations:
   - ext: md
     name: Markdown
     description: Markdown document
+    iconName: icon
     role: Editor
     mimeType: text/markdown
   - ext: markdown
     name: Markdown
     description: Markdown document
+    iconName: icon
     role: Editor
     mimeType: text/markdown
   - ext: tex
     name: LaTeX
     description: LaTeX source document
+    iconName: icon
     role: Editor
     mimeType: text/x-tex
   - ext: org
     name: Org Mode
     description: Org Mode document
+    iconName: icon
     role: Editor
     mimeType: text/org
   - ext: typ
     name: Typst
     description: Typst source document
+    iconName: icon
     role: Editor
     mimeType: text/plain
   - ext: txt
     name: Plain Text
     description: Plain text document
+    iconName: icon
     role: Editor
     mimeType: text/plain
 

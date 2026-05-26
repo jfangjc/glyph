@@ -3,7 +3,9 @@ import { handleGlobalKeydown as handleGlobalKeydownCommand } from "../app/global
 import {
     bindDocumentActions,
     createNewMarkdownDocument,
+    installOpenDocumentRequests,
     openDocumentPath,
+    openPendingLaunchDocuments,
     restoreLastOpenDocument,
     saveCurrentDocument,
     startDocumentAutosave,
@@ -170,14 +172,21 @@ export function installEditorController(): void {
         parseFragment: (content) => getActiveDocumentFormat().parseFragment(content),
     });
     bindDocumentActions({ loadDocument, serializeDocument });
+    installOpenDocumentRequests();
     void restoreLastOpenDirectory();
-    void restoreLastOpenDocument();
+    void restoreStartupDocument();
     startDocumentAutosave();
 
     syncDocumentFormatUi();
     syncBlockViewContext();
     syncFirstBlockPlaceholder();
     syncDocumentWindowTitle();
+}
+
+async function restoreStartupDocument(): Promise<void> {
+    if (!(await openPendingLaunchDocuments())) {
+        await restoreLastOpenDocument();
+    }
 }
 
 function handleEditorSelectionChange(): void {

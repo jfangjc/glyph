@@ -6,6 +6,7 @@ import {
     renameDocument,
     saveDocument,
 } from "../bridge/documents";
+import { onOpenDocumentRequested, takePendingOpenDocumentPaths } from "../bridge/launch";
 import type { DocumentFile } from "../bridge/types";
 import { getDocumentFormatById } from "../formats/registry";
 import { titleFromFileName } from "../formats/file-names";
@@ -28,11 +29,29 @@ const autoSaveIntervalMs = 30_000;
 const lastOpenDocumentPathStorageKey = "glyph:last-open-document-path";
 
 let host: DocumentActionHost | null = null;
+let pendingOpenDocumentDrain: Promise<boolean> | null = null;
 
 export function bindDocumentActions(nextHost: DocumentActionHost): void {
     host = nextHost;
     documentState.lastSavedContent = nextHost.serializeDocument();
     notifyDocumentStateChanged();
+}
+
+export function installOpenDocumentRequests(): void {
+    onOpenDocumentRequested(() => void openPendingLaunchDocuments());
+}
+
+export async function openPendingLaunchDocuments(): Promise<boolean> {
+    if (pendingOpenDocumentDrain) {
+        return pendingOpenDocumentDrain;
+    }
+
+    pendingOpenDocumentDrain = drainPendingLaunchDocuments();
+    try {
+        return await pendingOpenDocumentDrain;
+    } finally {
+        pendingOpenDocumentDrain = null;
+    }
 }
 
 export function startDocumentAutosave(): void {
@@ -62,6 +81,26 @@ export async function restoreLastOpenDocument(): Promise<void> {
         documentState.isOpeningDocument = false;
         notifyDocumentStateChanged();
     }
+}
+
+async function drainPendingLaunchDocuments(): Promise<boolean> {
+    if (!canUseDesktopFileSystem()) {
+        return false;
+    }
+
+    if (documentState.isOpeningDocument) {
+        window.setTimeout(() => void openPendingLaunchDocuments(), 100);
+        return false;
+    }
+
+    const paths = await takePendingOpenDocumentPaths();
+    const path = paths[paths.length - 1];
+    if (!path) {
+        return false;
+    }
+
+    await openDocumentPath(path);
+    return true;
 }
 
 export function canUseDesktopFileSystem(): boolean {

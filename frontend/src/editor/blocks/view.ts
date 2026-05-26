@@ -494,9 +494,6 @@ export function syncFirstBlockPlaceholder(): void {
         return;
     }
 
-    const firstContent = getBlockContent(firstBlock);
-    const firstType = readBlockType(firstBlock.dataset.type);
-
     // if (firstType === "paragraph" || firstType === "source") {
     //     firstContent.dataset.placeholder = "";
     // } else {
