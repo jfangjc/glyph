@@ -308,6 +308,11 @@ export function getBlockText(block: HTMLElement): string {
         }
     }
 
+    if (type === "html") {
+        const source = getBlockSourceElement(content, "atomic");
+        return source?.textContent ?? "";
+    }
+
     if (isPlainTextBlockType(type)) {
         return getRenderedContentText(content);
     }
@@ -400,7 +405,7 @@ export function isRichTextBlockType(type: BlockType): boolean {
 }
 
 function isStandaloneBlockType(type: BlockType): boolean {
-    return isPlainTextBlockType(type) || isAtomicBlockType(type) || type === "table" || type === "math";
+    return isPlainTextBlockType(type) || isAtomicBlockType(type) || type === "table" || type === "math" || type === "html";
 }
 
 function isPlainTextBlockType(type: BlockType): boolean {
@@ -429,7 +434,8 @@ export function shouldResetEmptyBlock(type: BlockType): boolean {
         type === "quote" ||
         type === "reference" ||
         type === "table" ||
-        type === "math"
+        type === "math" ||
+        type === "html"
     );
 }
 

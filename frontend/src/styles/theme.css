@@ -480,6 +480,35 @@
     display: none;
 }
 
+.block[data-type="html"] {
+    padding: 6px 0;
+}
+
+.block[data-type="html"] .block-content {
+    overflow-x: auto;
+    white-space: normal;
+}
+
+.block[data-type="html"] .format-block-source {
+    font-family: var(--glyph-font-code);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+
+.block[data-block-source-active="true"][data-type="html"] .format-block-source {
+    display: block;
+}
+
+.block[data-block-source-active="true"][data-type="html"] .markdown-html-preview {
+    display: none;
+}
+
+.markdown-html-preview {
+    display: block;
+    width: 100%;
+}
+
 .format-block-source {
     display: none;
     color: #767676;

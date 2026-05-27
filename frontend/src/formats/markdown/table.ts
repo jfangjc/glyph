@@ -1,6 +1,7 @@
 import type { BlockType, ParsedBlock } from "../../editor/blocks/model";
 import type { DocumentReferenceMap } from "../types";
 import { escapeHtml } from "../../utils/text";
+import { renderMarkdownHtmlBlock } from "./html";
 import { renderLatexMath } from "./math";
 
 export type MarkdownTableBlock = {
@@ -116,6 +117,10 @@ export function renderMarkdownBlock(
 ): string | null {
     if (type === "math") {
         return renderLatexMath(text, true);
+    }
+
+    if (type === "html") {
+        return renderMarkdownHtmlBlock(text);
     }
 
     if (type !== "table") {

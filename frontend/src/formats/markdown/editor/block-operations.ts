@@ -26,6 +26,7 @@ import { caretSpacerCharacter, getRenderedContentText } from "../../../editor/se
 import { insertTextAtCaret } from "../../../editor/selection/commands";
 import { parseMarkdownReferenceDefinition } from "../references";
 import { markdownShortcuts } from "../shortcuts";
+import { readSingleLineMarkdownHtmlBlock } from "../html";
 import { createMarkdownTableFromHeader } from "../table";
 
 export function startCodeBlockFromFence(block: HTMLElement): boolean {
@@ -136,6 +137,15 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
         return true;
     }
 
+    const htmlBlock = readSingleLineMarkdownHtmlBlock(text);
+    if (htmlBlock) {
+        setBlockType(block, "html");
+        setBlockText(block, htmlBlock.text);
+        ensureEditableBlockAfter(block);
+        focusHtmlBlockSource(block);
+        return true;
+    }
+
     const orderedListShortcut = readOrderedListShortcut(text);
     if (orderedListShortcut) {
         setBlockType(block, "ordered-list");
@@ -219,6 +229,17 @@ function readMathShortcutCaretOffset(source: HTMLElement): number {
     const text = source.textContent ?? "";
     const openingDelimiterEnd = text.indexOf("\n");
     return openingDelimiterEnd >= 0 ? openingDelimiterEnd + 1 : text.length;
+}
+
+function focusHtmlBlockSource(block: HTMLElement): void {
+    const source = getBlockSourceElement(getBlockContent(block), "atomic");
+    if (!source) {
+        focusBlock(block);
+        return;
+    }
+
+    block.dataset.blockSourceActive = "true";
+    focusPlainTextElement(source, source.textContent?.length ?? 0);
 }
 
 export function findVerticalMarkdownImageToken(

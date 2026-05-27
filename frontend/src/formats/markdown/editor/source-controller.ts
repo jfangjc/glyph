@@ -827,6 +827,13 @@ function parseEditedRawMarkdownBlock(
         };
     }
 
+    if (type === "html") {
+        return {
+            type: "html",
+            text: rawMarkdown,
+        };
+    }
+
     const parsedBlocks = parseMarkdownFragment(rawMarkdown).blocks;
     return parsedBlocks.length === 1 ? parsedBlocks[0] : { type: "paragraph", text: rawMarkdown };
 }

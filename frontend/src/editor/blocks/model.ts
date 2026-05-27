@@ -15,6 +15,7 @@ export type BlockType =
     | "rule"
     | "table"
     | "math"
+    | "html"
     | "reference";
 
 export type ParsedBlock = {
@@ -55,6 +56,7 @@ export const blockLabels: Record<BlockType, string> = {
     rule: "Horizontal rule",
     table: "Table",
     math: "Math",
+    html: "HTML",
     reference: "Reference",
 };
 

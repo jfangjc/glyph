@@ -3,6 +3,7 @@ import { titleFromFileName } from "../file-names";
 import type { DocumentFileLike, DocumentFormat, DocumentReferenceMap } from "../types";
 import { hasMarkdownBlockSource, readMarkdownBlockSource } from "./block-source";
 import { createCodeFence } from "./code-fence";
+import { isMarkdownHtmlBlockStart, readMarkdownHtmlBlock } from "./html";
 import { hydrateMarkdownImagePreviews } from "./images";
 import { renderInlineMarkdown } from "./inline";
 import { parseMarkdownReferenceDefinition } from "./references";
@@ -103,6 +104,13 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
         if (mathBlock) {
             blocks.push(mathBlock.block);
             index += mathBlock.consumedLines - 1;
+            continue;
+        }
+
+        const htmlBlock = readMarkdownHtmlBlock(lines, index);
+        if (htmlBlock) {
+            blocks.push(htmlBlock.block);
+            index += htmlBlock.consumedLines - 1;
             continue;
         }
 
@@ -283,6 +291,10 @@ function serializeMarkdownBlock(block: ParsedBlock): string {
         return block.mathSource ?? `$$\n${block.text}\n$$`;
     }
 
+    if (block.type === "html") {
+        return block.text;
+    }
+
     return block.text;
 }
 
@@ -370,6 +382,7 @@ function isPlainParagraphLine(line: string): boolean {
         line.trim() !== "" &&
         !readCodeFence(line) &&
         !isIndentedCodeLine(line, null) &&
+        !isMarkdownHtmlBlockStart(line) &&
         !parseMarkdownReferenceDefinition(line) &&
         !isHorizontalRule(line) &&
         parseMarkdownLine(line).type === "paragraph"

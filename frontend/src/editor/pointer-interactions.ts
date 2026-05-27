@@ -176,7 +176,7 @@ function isWindowChromeEvent(event: MouseEvent): boolean {
 }
 
 function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
-    if (target.closest(".markdown-table-preview, .markdown-math-preview")) {
+    if (target.closest(".markdown-table-preview, .markdown-math-preview, .markdown-html-preview")) {
         return false;
     }
 
@@ -296,7 +296,8 @@ function focusPointerTargetBlock(pointerTarget: PointerBlockTarget): void {
 }
 
 function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
-    if (readBlockType(pointerTarget.block.dataset.type) !== "math") {
+    const type = readBlockType(pointerTarget.block.dataset.type);
+    if (type !== "math" && type !== "html") {
         return false;
     }
 
