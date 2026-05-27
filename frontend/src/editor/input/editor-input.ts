@@ -95,7 +95,7 @@ export function handleEditorInput(event: Event, options: EditorInputOptions): vo
     }
 
     if (!completeFencedParagraph(block, options) && !applyMarkdownShortcut(block)) {
-        renderBlockContent(block);
+        renderBlockContent(block, getCurrentBlockOffset(block));
     }
 
     options.markEditorDirty();
@@ -110,14 +110,15 @@ function completeFencedParagraph(block: HTMLElement, options: EditorInputOptions
     return true;
 }
 
-function renderBlockContent(block: HTMLElement): void {
-    const focusOffset = rerenderInlineBlockContent(block, getCurrentBlockOffset(block));
+function renderBlockContent(block: HTMLElement, currentOffset: number): void {
+    const focusOffset = rerenderInlineBlockContent(block, currentOffset);
 
     if (focusOffset === null) {
         return;
     }
 
     focusBlockAtOffset(block, focusOffset);
-    suppressAdjacentFormatTokenActivation(block, focusOffset);
-    activateMarkdownTokenAtCaret();
+    if (!suppressAdjacentFormatTokenActivation(block, focusOffset)) {
+        activateMarkdownTokenAtCaret();
+    }
 }

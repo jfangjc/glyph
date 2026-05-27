@@ -21,6 +21,8 @@ import type { DocumentFormat, DocumentReferenceMap } from "../formats/types";
 import { documentState, markDocumentDirty, notifyDocumentStateChanged } from "./document-state";
 
 let documentReferences: DocumentReferenceMap = {};
+let documentReferencesSnapshot = "{}";
+let referenceRerenderRequestId = 0;
 
 export function getActiveDocumentFormat(): DocumentFormat {
     return getDocumentFormatById(documentState.activeFormatId);
@@ -35,6 +37,7 @@ export function loadDocument(documentFile: DocumentFile): void {
     documentState.activeFormatId = format.id;
     documentState.usesTitle = format.supportsTitle && parsedDocument.usesTitle;
     documentReferences = parsedDocument.references ?? {};
+    documentReferencesSnapshot = JSON.stringify(documentReferences);
     syncDocumentFormatUi();
     syncBlockViewContext();
     title.value = parsedDocument.title;
@@ -86,28 +89,72 @@ export function syncDocumentFormatUi(): void {
 
 function syncDocumentReferences(): void {
     const nextReferences = getActiveDocumentFormat().readReferences?.(getEditorBlocks().map(readEditorBlock)) ?? {};
-    if (JSON.stringify(nextReferences) === JSON.stringify(documentReferences)) {
+    const nextReferencesSnapshot = JSON.stringify(nextReferences);
+    if (nextReferencesSnapshot === documentReferencesSnapshot) {
         return;
     }
 
     documentReferences = nextReferences;
+    documentReferencesSnapshot = nextReferencesSnapshot;
     syncBlockViewContext();
     rerenderInlineContentBlocks();
 }
 
 function rerenderInlineContentBlocks(): void {
+    const requestId = referenceRerenderRequestId + 1;
+    referenceRerenderRequestId = requestId;
+
     const selection = document.getSelection();
     const activeBlock = findBlock(selection?.focusNode ?? null);
     const activeOffset = activeBlock ? getCurrentBlockOffset(activeBlock) : null;
+    const richTextBlocks = getEditorBlocks().filter((block) => isRichTextBlockType(readBlockType(block.dataset.type)));
 
-    for (const block of getEditorBlocks()) {
-        if (isRichTextBlockType(readBlockType(block.dataset.type))) {
+    if (richTextBlocks.length <= 100) {
+        for (const block of richTextBlocks) {
             setBlockText(block, getBlockText(block));
         }
+
+        restoreActiveBlockFocus(activeBlock, activeOffset);
+        return;
     }
 
+    if (activeBlock && richTextBlocks.includes(activeBlock)) {
+        setBlockText(activeBlock, getBlockText(activeBlock));
+        restoreActiveBlockFocus(activeBlock, activeOffset);
+    }
+
+    const remainingBlocks = richTextBlocks.filter((block) => block !== activeBlock);
+    rerenderInlineContentBlocksInChunks(remainingBlocks, requestId);
+}
+
+function rerenderInlineContentBlocksInChunks(blocks: HTMLElement[], requestId: number): void {
+    const chunkSize = 50;
+    let cursor = 0;
+
+    const renderNextChunk = () => {
+        if (requestId !== referenceRerenderRequestId) {
+            return;
+        }
+
+        const end = Math.min(blocks.length, cursor + chunkSize);
+        for (; cursor < end; cursor += 1) {
+            const block = blocks[cursor];
+            if (block.isConnected) {
+                setBlockText(block, getBlockText(block));
+            }
+        }
+
+        if (cursor < blocks.length) {
+            window.requestAnimationFrame(renderNextChunk);
+        }
+    };
+
+    window.requestAnimationFrame(renderNextChunk);
+}
+
+function restoreActiveBlockFocus(activeBlock: HTMLElement | null, activeOffset: number | null): void {
     if (activeBlock?.isConnected && activeOffset !== null) {
-        focusBlockAtOffset(activeBlock, Math.min(activeOffset, getBlockText(activeBlock).length));
+        focusBlockAtOffset(activeBlock, Math.min(activeOffset, getBlockText(activeBlock).length), { scroll: "none" });
     }
 }
 

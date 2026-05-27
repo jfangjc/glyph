@@ -37,6 +37,8 @@ let pendingHorizontalNavigationTarget: { token: HTMLElement; edge: MarkdownToken
 let pendingHorizontalNavigationRequestId = 0;
 let pendingVerticalLeadingTokenNavigationRequestId = 0;
 let pendingVerticalLeadingTokenNavigationTarget: { requestId: number } | null = null;
+let activeMarkdownTokens = new Set<HTMLElement>();
+let selectedSourceMarkdownTokens = new Set<HTMLElement>();
 
 export function configureMarkdownTokenController(nextHooks: MarkdownTokenHooks): void {
     hooks = { ...hooks, ...nextHooks };
@@ -104,16 +106,22 @@ export function handleSelectionChange(): void {
     if (selection && !selection.isCollapsed) {
         hooks.syncBlockMarkdownSourceReveal?.(focusBlock);
         clearPendingMarkdownTokenNavigation();
+        syncSelectedMathTokenSources(selection);
         setPointerSelecting(true);
         return;
     }
 
+    clearSelectedMathTokenSources();
     hooks.syncBlockMarkdownSourceReveal?.(focusBlock);
 
     const source = getFocusedMarkdownTokenSource();
     const sourceToken = source ? getMarkdownTokenForSource(source) : null;
 
     if (sourceToken) {
+        if (selection && sourceToken.dataset.active !== "true" && shouldSuppressMarkdownTokenActivation(selection)) {
+            return;
+        }
+
         setActiveMarkdownToken(sourceToken);
         return;
     }
@@ -150,8 +158,7 @@ export function getFocusedMarkdownTokenSource(): HTMLElement | null {
 }
 
 function setActiveMarkdownToken(token: HTMLElement): void {
-    const editor = getElement<HTMLElement>("editor");
-    const activeTokens = Array.from(editor.querySelectorAll<HTMLElement>(".markdown-token[data-active]"));
+    const activeTokens = getActiveMarkdownTokens();
 
     if (activeTokens.length === 1 && activeTokens[0] === token && token.dataset.active === "true") {
         return;
@@ -168,6 +175,7 @@ function setActiveMarkdownToken(token: HTMLElement): void {
     }
 
     token.dataset.active = "true";
+    activeMarkdownTokens.add(token);
 }
 
 function activateMarkdownTokenSource(
@@ -192,7 +200,7 @@ export function activateMarkdownTokenAtCaret(): boolean {
         return false;
     }
 
-    const tokenPosition = findMarkdownTokenAtCaret(focusNode, selection.focusOffset, isEditableMarkdownToken);
+    const tokenPosition = findMarkdownTokenAtCaret(focusNode, selection.focusOffset, isAutoActivatableMarkdownToken);
     if (!tokenPosition) {
         return false;
     }
@@ -210,8 +218,7 @@ function clearActiveMarkdownToken(
         suppressTokenActivationAtFocus?: boolean;
     } = {},
 ): void {
-    const editor = getElement<HTMLElement>("editor");
-    const activeTokens = Array.from(editor.querySelectorAll<HTMLElement>(".markdown-token[data-active]"));
+    const activeTokens = getActiveMarkdownTokens();
 
     if (activeTokens.length === 0) {
         return;
@@ -274,6 +281,10 @@ function clearActiveMarkdownToken(
 
 function isEditableMarkdownToken(token: HTMLElement): boolean {
     return getMarkdownTokenSource(token) !== null;
+}
+
+function isAutoActivatableMarkdownToken(token: HTMLElement): boolean {
+    return isEditableMarkdownToken(token) && !isFormatMarkdownToken(token);
 }
 
 function getMarkdownTokenForSource(source: HTMLElement): HTMLElement | null {
@@ -464,20 +475,16 @@ export function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
     focusBlockAtOffset(block, Math.min(offset, getBlockText(block).length));
 }
 
-export function suppressAdjacentFormatTokenActivation(block: HTMLElement, offset: number): void {
+export function suppressAdjacentFormatTokenActivation(block: HTMLElement, offset: number): boolean {
     const position = getTextPosition(getBlockContent(block), offset);
     const tokenPosition = findMarkdownTokenAtCaret(position.node, position.offset, isFormatMarkdownToken);
 
     if (tokenPosition) {
-        const suppression = { block, offset };
-
-        suppressedMarkdownTokenActivation = suppression;
-        window.requestAnimationFrame(() => {
-            if (suppressedMarkdownTokenActivation === suppression) {
-                suppressedMarkdownTokenActivation = null;
-            }
-        });
+        suppressedMarkdownTokenActivation = { block, offset };
+        return true;
     }
+
+    return false;
 }
 
 function findClickedMarkdownToken(target: Element): HTMLElement | null {
@@ -711,4 +718,61 @@ function isFormatMarkdownToken(token: HTMLElement): boolean {
 function deactivateMarkdownToken(token: HTMLElement): void {
     delete token.dataset.active;
     delete token.dataset.sourceBeforeActivation;
+    activeMarkdownTokens.delete(token);
+}
+
+function getActiveMarkdownTokens(): HTMLElement[] {
+    for (const token of Array.from(activeMarkdownTokens)) {
+        if (!token.isConnected || token.dataset.active !== "true") {
+            activeMarkdownTokens.delete(token);
+        }
+    }
+
+    return Array.from(activeMarkdownTokens);
+}
+
+function syncSelectedMathTokenSources(selection: Selection): void {
+    const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    if (!range) {
+        clearSelectedMathTokenSources();
+        return;
+    }
+
+    const root = getSelectionTokenSearchRoot(range);
+    const nextTokens = new Set(
+        Array.from(root.querySelectorAll<HTMLElement>(".markdown-math-token")).filter((token) => {
+            try {
+                return range.intersectsNode(token);
+            } catch {
+                return false;
+            }
+        }),
+    );
+
+    for (const token of Array.from(selectedSourceMarkdownTokens)) {
+        if (!nextTokens.has(token)) {
+            delete token.dataset.selectedSource;
+        }
+    }
+
+    for (const token of Array.from(nextTokens)) {
+        token.dataset.selectedSource = "true";
+    }
+
+    selectedSourceMarkdownTokens = nextTokens;
+}
+
+function clearSelectedMathTokenSources(): void {
+    for (const token of Array.from(selectedSourceMarkdownTokens)) {
+        delete token.dataset.selectedSource;
+    }
+
+    selectedSourceMarkdownTokens.clear();
+}
+
+function getSelectionTokenSearchRoot(range: Range): HTMLElement {
+    const container = range.commonAncestorContainer;
+    const element = container instanceof HTMLElement ? container : container.parentElement;
+    const block = findBlock(element ?? null);
+    return block ? getBlockContent(block) : getElement<HTMLElement>("editor");
 }

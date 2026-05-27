@@ -224,7 +224,7 @@
 .block[data-type="code"] .block-content {
     border: 1px solid #dedede;
     border-radius: 6px;
-    padding: 10px 12px;
+    padding: 9px 12px 7px;
     background: #f6f6f6;
     font-family: var(--glyph-font-code);
     font-size: 0.9rem;
@@ -570,7 +570,22 @@
     display: none;
 }
 
+.markdown-token.markdown-math-token[data-selected-source="true"] [data-source-ignore="true"] {
+    display: none;
+}
+
 .markdown-token.markdown-math-token[data-active="true"]:not(.markdown-image-token) .markdown-token-source {
+    display: inline;
+    position: static;
+    max-width: none;
+    overflow: visible;
+    padding: 0 0.08em;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 5%);
+    transform: none;
+    white-space: pre;
+}
+
+.markdown-token.markdown-math-token[data-selected-source="true"]:not(.markdown-image-token) .markdown-token-source {
     display: inline;
     position: static;
     max-width: none;

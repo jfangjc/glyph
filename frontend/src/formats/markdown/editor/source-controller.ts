@@ -1,6 +1,7 @@
 import { parseMarkdownFragment } from "../document";
 import {
     applyBlockProperties,
+    createBlock,
     ensureEditableBlockAfter,
     findBlock,
     getBlockContent,
@@ -608,6 +609,10 @@ function splitAfterBlockMarkdownSource(source: HTMLElement): boolean {
         return false;
     }
 
+    if (insertParagraphBeforeBlockSourceStart(source, block)) {
+        return true;
+    }
+
     commitActiveBlockMarkdownSource(null);
 
     const type = readBlockType(block.dataset.type);
@@ -624,6 +629,18 @@ function splitAfterBlockMarkdownSource(source: HTMLElement): boolean {
 
     focusBlockAtOffset(block, getBlockText(block).length, { scroll: "none" });
     splitBlock(block);
+    return true;
+}
+
+function insertParagraphBeforeBlockSourceStart(source: HTMLElement, block: HTMLElement): boolean {
+    if (readBlockSourcePosition(source) !== "prefix" || !isCaretAtPlainTextEdge(source, "start")) {
+        return false;
+    }
+
+    commitActiveBlockMarkdownSource(null);
+    const previousBlock = createBlock("paragraph");
+    block.before(previousBlock);
+    focusBlockAtOffset(previousBlock, 0, { scroll: "minimal" });
     return true;
 }
 

@@ -7,6 +7,7 @@ import {
 import {
     findBlock,
     getBlockContent,
+    getEditorBlockRange,
     getBlockText,
     getEditorBlocks,
 } from "../blocks/view";
@@ -25,6 +26,8 @@ type CaretHooks = {
 };
 
 let caretHooks: CaretHooks = {};
+let pendingScrollReveal: { block: HTMLElement; mode: "comfortable" | "minimal" } | null = null;
+let pendingScrollRevealFrame = 0;
 
 export function configureCaret(hooks: CaretHooks): void {
     caretHooks = { ...caretHooks, ...hooks };
@@ -133,16 +136,14 @@ export function getSelectedBlockRange(): SelectedBlockRange | null {
     const range = selection.getRangeAt(0);
     const startBlock = findBlockFromBoundary(range.startContainer, range.startOffset, "start");
     const endBlock = findBlockFromBoundary(range.endContainer, range.endOffset, "end");
-    const allBlocks = getEditorBlocks();
-    const startIndex = startBlock ? allBlocks.indexOf(startBlock) : -1;
-    const endIndex = endBlock ? allBlocks.indexOf(endBlock) : -1;
+    const blocks = startBlock && endBlock ? getEditorBlockRange(startBlock, endBlock) : [];
 
-    if (!startBlock || !endBlock || startIndex < 0 || endIndex < 0) {
+    if (!startBlock || !endBlock || blocks.length === 0) {
         return null;
     }
 
     return {
-        blocks: allBlocks.slice(startIndex, endIndex + 1),
+        blocks,
         startBlock,
         endBlock,
         startOffset: getBoundaryOffset(startBlock, range.startContainer, range.startOffset, "start"),
@@ -258,34 +259,47 @@ function getBoundaryOffset(block: HTMLElement, container: Node, offset: number, 
 }
 
 function scrollBlockIntoComfortableView(block: HTMLElement, mode: "comfortable" | "minimal"): void {
-    window.requestAnimationFrame(() => {
-        if (!block.isConnected) {
-            return;
-        }
+    pendingScrollReveal = { block, mode };
 
-        const scroller = document.querySelector<HTMLElement>(".editor-shell");
-        if (!scroller) {
-            return;
-        }
+    if (pendingScrollRevealFrame) {
+        return;
+    }
 
-        const blockRect = block.getBoundingClientRect();
-        const scrollerRect = scroller.getBoundingClientRect();
-        const topInset = mode === "comfortable" ? Math.min(64, scrollerRect.height * 0.12) : 18;
-        const bottomInset = mode === "comfortable" ? Math.min(112, scrollerRect.height * 0.2) : 36;
-        const minimumTop = scrollerRect.top + topInset;
-        const maximumBottom = scrollerRect.bottom - bottomInset;
-        const visibleHeight = maximumBottom - minimumTop;
-        const targetRect = blockRect.height > visibleHeight ? getSelectionRectInsideBlock(block) ?? blockRect : blockRect;
+    pendingScrollRevealFrame = window.requestAnimationFrame(flushPendingScrollReveal);
+}
 
-        if (targetRect.bottom > maximumBottom) {
-            scroller.scrollTop += targetRect.bottom - maximumBottom;
-            return;
-        }
+function flushPendingScrollReveal(): void {
+    pendingScrollRevealFrame = 0;
+    const request = pendingScrollReveal;
+    pendingScrollReveal = null;
 
-        if (targetRect.top < minimumTop) {
-            scroller.scrollTop -= minimumTop - targetRect.top;
-        }
-    });
+    if (!request?.block.isConnected) {
+        return;
+    }
+
+    const scroller = document.querySelector<HTMLElement>(".editor-shell");
+    if (!scroller) {
+        return;
+    }
+
+    const blockRect = request.block.getBoundingClientRect();
+    const scrollerRect = scroller.getBoundingClientRect();
+    const topInset = request.mode === "comfortable" ? Math.min(64, scrollerRect.height * 0.12) : 18;
+    const bottomInset = request.mode === "comfortable" ? Math.min(112, scrollerRect.height * 0.2) : 36;
+    const minimumTop = scrollerRect.top + topInset;
+    const maximumBottom = scrollerRect.bottom - bottomInset;
+    const visibleHeight = maximumBottom - minimumTop;
+    const targetRect =
+        blockRect.height > visibleHeight ? getSelectionRectInsideBlock(request.block) ?? blockRect : blockRect;
+
+    if (targetRect.bottom > maximumBottom) {
+        scroller.scrollTop += targetRect.bottom - maximumBottom;
+        return;
+    }
+
+    if (targetRect.top < minimumTop) {
+        scroller.scrollTop -= minimumTop - targetRect.top;
+    }
 }
 
 function getSelectionRectInsideBlock(block: HTMLElement): DOMRect | null {

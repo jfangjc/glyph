@@ -12,6 +12,7 @@ let outline: HTMLElement | null = null;
 let list: HTMLUListElement | null = null;
 let scrollContainer: HTMLElement | null = null;
 let pendingSync = 0;
+let pendingActiveOutlineFrame = 0;
 let activeId: string | null = null;
 
 export function installDocumentOutline(container: HTMLElement, editor: HTMLElement): void {
@@ -29,13 +30,12 @@ export function installDocumentOutline(container: HTMLElement, editor: HTMLEleme
     observer.observe(editor, {
         attributes: true,
         attributeFilter: ["data-type"],
-        characterData: true,
         childList: true,
         subtree: true,
     });
 
-    container.addEventListener("scroll", () => updateActiveOutlineItem(), { passive: true });
-    window.addEventListener("resize", () => updateActiveOutlineItem());
+    container.addEventListener("scroll", () => scheduleActiveOutlineItemUpdate(), { passive: true });
+    window.addEventListener("resize", () => scheduleActiveOutlineItemUpdate());
     scheduleOutlineSync();
 }
 
@@ -66,7 +66,7 @@ function syncDocumentOutline(): void {
 
     const entries = readOutlineEntries();
     outline.hidden = entries.length === 0;
-    list.replaceChildren(...entries.map(renderOutlineEntry));
+    syncOutlineEntryElements(entries);
 
     if (activeId && entries.some((entry) => entry.id === activeId)) {
         applyActiveOutlineId();
@@ -125,6 +125,48 @@ function renderOutlineEntry(entry: OutlineEntry): HTMLLIElement {
     return item;
 }
 
+function syncOutlineEntryElements(entries: OutlineEntry[]): void {
+    if (!list) {
+        return;
+    }
+
+    const existingItems = Array.from(list.children);
+    if (!canUpdateOutlineEntriesInPlace(existingItems, entries)) {
+        list.replaceChildren(...entries.map(renderOutlineEntry));
+        return;
+    }
+
+    for (let index = 0; index < entries.length; index += 1) {
+        const item = existingItems[index] as HTMLElement;
+        const entry = entries[index];
+        const button = item.querySelector<HTMLButtonElement>(".document-outline-button");
+        const text = item.querySelector<HTMLElement>(".document-outline-text");
+
+        if (button && button.title !== entry.text) {
+            button.title = entry.text;
+        }
+
+        if (text && text.textContent !== entry.text) {
+            text.textContent = entry.text;
+        }
+    }
+}
+
+function canUpdateOutlineEntriesInPlace(items: Element[], entries: OutlineEntry[]): boolean {
+    if (items.length !== entries.length) {
+        return false;
+    }
+
+    return items.every((item, index) => {
+        if (!(item instanceof HTMLElement)) {
+            return false;
+        }
+
+        const entry = entries[index];
+        return item.dataset.outlineId === entry.id && item.dataset.level === String(entry.level);
+    });
+}
+
 function updateActiveOutlineItem(options: { scrollActiveItem?: boolean } = {}): void {
     if (!list || !scrollContainer) {
         return;
@@ -149,6 +191,17 @@ function updateActiveOutlineItem(options: { scrollActiveItem?: boolean } = {}): 
     }
 
     setActiveOutlineId(nextActive, options);
+}
+
+function scheduleActiveOutlineItemUpdate(): void {
+    if (pendingActiveOutlineFrame) {
+        return;
+    }
+
+    pendingActiveOutlineFrame = window.requestAnimationFrame(() => {
+        pendingActiveOutlineFrame = 0;
+        updateActiveOutlineItem();
+    });
 }
 
 function isVisibleInContainer(elementRect: DOMRect, containerRect: DOMRect): boolean {
@@ -209,7 +262,7 @@ function scrollActiveOutlineItemIntoView(activeItem: HTMLElement | null): void {
     if (itemTop < viewportTop) {
         outline.scrollTo({
             top: itemTop - paddingTop,
-            behavior: "smooth",
+            behavior: "auto",
         });
         return;
     }
@@ -217,7 +270,7 @@ function scrollActiveOutlineItemIntoView(activeItem: HTMLElement | null): void {
     if (itemBottom > viewportBottom) {
         outline.scrollTo({
             top: itemBottom - outline.clientHeight + paddingBottom,
-            behavior: "smooth",
+            behavior: "auto",
         });
     }
 }

@@ -27,6 +27,8 @@ import {
 import { configureBlockOperations } from "./blocks/operations";
 import {
     findBlock,
+    getBlockContent,
+    getBlockIndex,
     getBlockText,
     setBlockText,
     syncFirstBlockPlaceholder,
@@ -64,6 +66,7 @@ import {
     readInlineFormatShortcut,
 } from "./input/keyboard-shortcuts";
 import { getSelectedBlockRange } from "./selection/caret";
+import { getCaretOffset } from "./selection/caret";
 import {
     configureEditorUiState,
     syncActiveBlockIndicator,
@@ -97,6 +100,7 @@ let isComposingText = false;
 let shouldFlushTypingBatchAfterInput = false;
 let openDirectoryFromShortcut: (() => Promise<void>) | null = null;
 let toggleFileTreeFromShortcut: (() => void) | null = null;
+let lastSelectionSignature = "";
 
 export function installEditorController(): void {
     const surface = getElement<HTMLElement>("document-surface");
@@ -190,6 +194,13 @@ async function restoreStartupDocument(): Promise<void> {
 }
 
 function handleEditorSelectionChange(): void {
+    const selectionState = readSelectionState();
+    if (selectionState.signature === lastSelectionSignature) {
+        return;
+    }
+
+    lastSelectionSignature = selectionState.signature;
+    syncActiveBlockIndicator(selectionState.focusBlock);
     handleSelectionChange();
     syncSelectedBlockSourceReveal();
     syncDocumentOutlineToSelection();
@@ -203,6 +214,7 @@ function syncSelectedBlockSourceReveal(): void {
 }
 
 function handleDocumentStateChanged(): void {
+    lastSelectionSignature = "";
     syncDocumentFormatUi();
     syncBlockViewContext();
     syncDocumentWindowTitle();
@@ -475,4 +487,38 @@ function flushTypingBatchAfterInputIfNeeded(): void {
 
     shouldFlushTypingBatchAfterInput = false;
     flushPendingUndoTransaction();
+}
+
+function readSelectionState(): { signature: string; focusBlock: HTMLElement | null } {
+    const selection = document.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+        return { signature: "none", focusBlock: null };
+    }
+
+    const anchorBlock = findBlock(selection.anchorNode ?? null);
+    const focusBlock = findBlock(selection.focusNode ?? null);
+    const anchorOffset = readSelectionBoundaryOffset(anchorBlock, selection.anchorNode, selection.anchorOffset);
+    const focusOffset = readSelectionBoundaryOffset(focusBlock, selection.focusNode, selection.focusOffset);
+    const signature = [
+        selection.isCollapsed ? "caret" : "range",
+        anchorBlock ? getBlockIndex(anchorBlock) : -1,
+        focusBlock ? getBlockIndex(focusBlock) : -1,
+        anchorOffset,
+        focusOffset,
+    ].join(":");
+
+    return { signature, focusBlock };
+}
+
+function readSelectionBoundaryOffset(block: HTMLElement | null, node: Node | null, offset: number): number {
+    if (!block || !node) {
+        return offset;
+    }
+
+    const content = getBlockContent(block);
+    if (node !== content && !content.contains(node)) {
+        return offset;
+    }
+
+    return getCaretOffset(content, node, offset);
 }

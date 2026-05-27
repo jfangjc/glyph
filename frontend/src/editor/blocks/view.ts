@@ -135,6 +135,10 @@ export function setBlockText(block: HTMLElement, text: string): void {
 
     const html = renderBlockInnerHtml(block, type, text, source);
 
+    if (content.dataset.renderedMarkdown === html) {
+        return;
+    }
+
     content.innerHTML = html;
     content.dataset.renderedMarkdown = html;
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
@@ -457,7 +461,27 @@ export function findBlock(target: EventTarget | Node | null): HTMLElement | null
 
 export function getEditorBlocks(): HTMLElement[] {
     const editor = getElement<HTMLElement>("editor");
-    return Array.from(editor.querySelectorAll<HTMLElement>("[data-block]"));
+    return Array.from(editor.children).filter(
+        (child): child is HTMLElement => child instanceof HTMLElement && child.matches("[data-block]"),
+    );
+}
+
+export function getBlockIndex(block: HTMLElement): number {
+    return getEditorBlocks().indexOf(block);
+}
+
+export function getEditorBlockRange(startBlock: HTMLElement, endBlock: HTMLElement): HTMLElement[] {
+    const blocks = getEditorBlocks();
+    const startIndex = blocks.indexOf(startBlock);
+    const endIndex = blocks.indexOf(endBlock);
+
+    if (startIndex < 0 || endIndex < 0) {
+        return [];
+    }
+
+    const rangeStart = Math.min(startIndex, endIndex);
+    const rangeEnd = Math.max(startIndex, endIndex);
+    return blocks.slice(rangeStart, rangeEnd + 1);
 }
 
 export function getSiblingBlock(block: HTMLElement, direction: "previous" | "next"): HTMLElement | null {
@@ -493,12 +517,6 @@ export function syncFirstBlockPlaceholder(): void {
     if (!firstBlock) {
         return;
     }
-
-    // if (firstType === "paragraph" || firstType === "source") {
-    //     firstContent.dataset.placeholder = "";
-    // } else {
-    //     delete firstContent.dataset.placeholder;
-    // }
 
     for (const block of remainingBlocks) {
         delete getBlockContent(block).dataset.placeholder;

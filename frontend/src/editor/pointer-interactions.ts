@@ -9,9 +9,11 @@ import {
 import { readBlockType } from "./blocks/model";
 import {
     focusBlockAtOffset,
+    focusPlainTextElement,
     getCaretOffset,
     getCaretPositionFromPoint,
 } from "./selection/caret";
+import { getBlockSourceElement } from "./blocks/rendering";
 import { getElement } from "../utils/dom";
 import { clamp } from "../utils/text";
 
@@ -29,6 +31,8 @@ let gutterHoverBlock: HTMLElement | null = null;
 let gutterHoverTimer = 0;
 let pointerDownSelectionStart: { x: number; y: number } | null = null;
 let isPointerSelecting = false;
+let pendingGutterHoverEvent: { x: number; y: number } | null = null;
+let pendingGutterHoverFrame = 0;
 
 export function configurePointerInteractions(nextHooks: PointerInteractionHooks): void {
     hooks = { ...hooks, ...nextHooks };
@@ -57,7 +61,7 @@ export function handleDocumentSurfaceMouseDown(event: MouseEvent): void {
     }
 
     event.preventDefault();
-    focusBlockAtOffset(pointerTarget.block, pointerTarget.offset, { scroll: "minimal" });
+    focusPointerTargetBlock(pointerTarget);
 }
 
 export function handleEditorMouseDown(event: MouseEvent): void {
@@ -109,7 +113,7 @@ export function handleDocumentSurfaceMouseMove(event: MouseEvent): void {
     }
 
     syncLinkOpenIntentFromMouse(event);
-    scheduleGutterHover(event);
+    requestGutterHover(event);
 }
 
 export function handleDocumentSurfaceMouseOver(event: MouseEvent): void {
@@ -140,6 +144,12 @@ export function setPointerSelecting(selecting: boolean): void {
 }
 
 export function clearGutterHoverBlock(): void {
+    pendingGutterHoverEvent = null;
+    if (pendingGutterHoverFrame) {
+        window.cancelAnimationFrame(pendingGutterHoverFrame);
+        pendingGutterHoverFrame = 0;
+    }
+
     if (gutterHoverTimer) {
         window.clearTimeout(gutterHoverTimer);
         gutterHoverTimer = 0;
@@ -183,6 +193,15 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
         return {
             block: directBlock,
             offset: getPointerCaretOffset(directBlock, clientX, clientY),
+        };
+    }
+
+    const pointTarget = document.elementFromPoint(clientX, clientY);
+    const pointBlock = pointTarget instanceof Element ? findBlock(pointTarget) : null;
+    if (pointBlock) {
+        return {
+            block: pointBlock,
+            offset: getPointerCaretOffset(pointBlock, clientX, clientY),
         };
     }
 
@@ -268,13 +287,56 @@ function getPointerCaretOffset(block: HTMLElement, clientX: number, clientY: num
     return getBlockText(block).length;
 }
 
-function scheduleGutterHover(event: MouseEvent): void {
+function focusPointerTargetBlock(pointerTarget: PointerBlockTarget): void {
+    if (focusAtomicPreviewSource(pointerTarget)) {
+        return;
+    }
+
+    focusBlockAtOffset(pointerTarget.block, pointerTarget.offset, { scroll: "minimal" });
+}
+
+function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
+    if (readBlockType(pointerTarget.block.dataset.type) !== "math") {
+        return false;
+    }
+
+    const source = getBlockSourceElement(getBlockContent(pointerTarget.block), "atomic");
+    if (!source) {
+        return false;
+    }
+
+    pointerTarget.block.dataset.blockSourceActive = "true";
+    const sourceLength = source.textContent?.length ?? 0;
+    focusPlainTextElement(source, pointerTarget.offset <= 0 ? 0 : sourceLength);
+    hooks.onBlockActivated?.(pointerTarget.block);
+    return true;
+}
+
+function requestGutterHover(event: MouseEvent): void {
+    pendingGutterHoverEvent = { x: event.clientX, y: event.clientY };
+
+    if (pendingGutterHoverFrame) {
+        return;
+    }
+
+    pendingGutterHoverFrame = window.requestAnimationFrame(() => {
+        pendingGutterHoverFrame = 0;
+        const pending = pendingGutterHoverEvent;
+        pendingGutterHoverEvent = null;
+
+        if (pending) {
+            scheduleGutterHover(pending.x, pending.y);
+        }
+    });
+}
+
+function scheduleGutterHover(clientX: number, clientY: number): void {
     if (isPointerSelecting) {
         clearGutterHoverBlock();
         return;
     }
 
-    const block = findGutterHoverBlock(event.clientX, event.clientY);
+    const block = findGutterHoverBlock(clientX, clientY);
     if (!block) {
         clearGutterHoverBlock();
         return;
@@ -295,19 +357,43 @@ function scheduleGutterHover(event: MouseEvent): void {
 }
 
 function findGutterHoverBlock(clientX: number, clientY: number): HTMLElement | null {
+    if (!isPointerNearGutterBand(clientX)) {
+        return null;
+    }
+
+    const pointTarget = document.elementFromPoint(clientX + 34, clientY);
+    const pointBlock = pointTarget instanceof Element ? findBlock(pointTarget) : null;
+    if (pointBlock) {
+        return isPointInBlockGutter(pointBlock, clientX, clientY) ? pointBlock : null;
+    }
+
     for (const block of getEditorBlocks()) {
         const blockRect = block.getBoundingClientRect();
         if (clientY < blockRect.top || clientY > blockRect.bottom) {
             continue;
         }
 
-        const contentRect = getBlockContent(block).getBoundingClientRect();
-        if (clientX >= contentRect.left - 34 && clientX <= contentRect.left - 4) {
+        if (isPointInBlockGutter(block, clientX, clientY)) {
             return block;
         }
     }
 
     return null;
+}
+
+function isPointerNearGutterBand(clientX: number): boolean {
+    const editorRect = getElement<HTMLElement>("editor").getBoundingClientRect();
+    return clientX >= editorRect.left - 48 && clientX <= editorRect.left + 64;
+}
+
+function isPointInBlockGutter(block: HTMLElement, clientX: number, clientY: number): boolean {
+    const blockRect = block.getBoundingClientRect();
+    if (clientY < blockRect.top || clientY > blockRect.bottom) {
+        return false;
+    }
+
+    const contentRect = getBlockContent(block).getBoundingClientRect();
+    return clientX >= contentRect.left - 34 && clientX <= contentRect.left - 4;
 }
 
 function syncGutterHoverBlock(block: HTMLElement | null): void {

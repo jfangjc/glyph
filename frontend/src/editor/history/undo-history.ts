@@ -3,6 +3,7 @@ import { type ParsedBlock } from "../blocks/model";
 import {
     createBlock,
     findBlock,
+    getBlockIndex,
     getBlockContent,
     getEditorBlocks,
     getSerializableEditorBlocks,
@@ -248,10 +249,6 @@ function snapshotsHaveSameDocument(left: EditorSnapshot, right: EditorSnapshot):
 
 function cloneBlocks(blocks: ParsedBlock[]): ParsedBlock[] {
     return blocks.map((block) => ({ ...block }));
-}
-
-function getBlockIndex(block: HTMLElement): number {
-    return Math.max(0, getEditorBlocks().indexOf(block));
 }
 
 function clampIndex(index: number, length: number): number {
