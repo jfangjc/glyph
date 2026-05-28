@@ -12,6 +12,12 @@ type ImageFile struct {
 	DataURL  string `json:"dataUrl"`
 }
 
+type PdfPreviewFile struct {
+	Path     string `json:"path"`
+	MimeType string `json:"mimeType"`
+	DataURL  string `json:"dataUrl"`
+}
+
 type PastedImageFile struct {
 	Path         string `json:"path"`
 	RelativePath string `json:"relativePath"`

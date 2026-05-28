@@ -54,9 +54,32 @@ body.windows-host .editor-shell {
     zoom: var(--glyph-editor-zoom, 1);
 }
 
+.editor-shell[data-document-format="latex"][data-latex-preview="active"] {
+    overflow: hidden;
+    scrollbar-gutter: auto;
+}
+
+.document-surface[data-document-format="latex"][data-latex-preview="active"] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    min-height: 100vh;
+    margin: 0;
+    padding: 0;
+    cursor: default;
+    zoom: 1;
+}
+
 body.windows-host .document-surface {
     min-height: calc(100vh - var(--windows-titlebar-height, 37px));
     padding-top: calc(72px - var(--windows-titlebar-height, 37px));
+}
+
+body.windows-host .document-surface[data-document-format="latex"][data-latex-preview="active"] {
+    min-height: 100%;
+    padding-top: 0;
 }
 
 .document-title {
@@ -78,6 +101,84 @@ body.windows-host .document-surface {
     margin-top: 20px;
     cursor: text;
     outline: 0;
+}
+
+.document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor {
+    min-height: 0;
+    height: 100%;
+    margin-top: 0;
+    padding: 72px 48px 120px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    background: #ffffff;
+    cursor: text;
+    scrollbar-color: #b8b8b8 transparent;
+    scrollbar-width: thin;
+    zoom: var(--glyph-editor-zoom, 1);
+}
+
+body.windows-host .document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor {
+    padding-top: calc(72px - var(--windows-titlebar-height, 37px));
+}
+
+.document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor::-webkit-scrollbar {
+    width: 10px;
+}
+
+.document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor::-webkit-scrollbar-thumb {
+    border: 3px solid #ffffff;
+    border-radius: 999px;
+    background: #b8b8b8;
+}
+
+.document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor::-webkit-scrollbar-thumb:hover {
+    background: #8d8d8d;
+}
+
+.latex-preview {
+    display: none;
+}
+
+.document-surface[data-document-format="latex"][data-latex-preview="active"] .latex-preview {
+    position: relative;
+    display: block;
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.latex-pdf-frame {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #ffffff;
+}
+
+.latex-preview-status {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 48px;
+    color: #777b80;
+    font-size: 0.92rem;
+    line-height: 1.35;
+    text-align: center;
+    pointer-events: none;
+}
+
+.latex-preview[data-state="ready"] .latex-preview-status {
+    display: none;
+}
+
+.latex-preview:not([data-state="ready"]) .latex-pdf-frame {
+    visibility: hidden;
 }
 
 .document-outline {

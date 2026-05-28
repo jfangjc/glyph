@@ -10,6 +10,12 @@ export type ImageFile = {
     dataUrl: string;
 };
 
+export type PdfPreviewFile = {
+    path: string;
+    mimeType: string;
+    dataUrl: string;
+};
+
 export type PastedImageFile = {
     path: string;
     relativePath: string;

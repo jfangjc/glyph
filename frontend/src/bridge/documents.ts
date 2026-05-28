@@ -1,6 +1,6 @@
 import { Call, Dialogs } from "@wailsio/runtime";
 import { getDocumentFileFilters } from "../formats/registry";
-import type { DirectoryTree, DocumentFile, ImageFile, PastedImageFile } from "./types";
+import type { DirectoryTree, DocumentFile, ImageFile, PastedImageFile, PdfPreviewFile } from "./types";
 
 const textFileFilters: Dialogs.FileFilter[] = getDocumentFileFilters().map((filter) => ({
     DisplayName: filter.displayName,
@@ -61,6 +61,13 @@ export function readDocument(path: string): Promise<DocumentFile> {
 
 export function saveDocument(path: string, content: string): Promise<void> {
     return Call.ByName("glyph/internal/documents.Service.SaveDocument", path, content) as Promise<void>;
+}
+
+export function readSiblingPdfPreview(sourcePath: string): Promise<PdfPreviewFile> {
+    return Call.ByName(
+        "glyph/internal/documents.Service.ReadSiblingPdfPreview",
+        sourcePath,
+    ) as Promise<PdfPreviewFile>;
 }
 
 export function createUntitledMarkdownDocument(baseFilePath: string): Promise<DocumentFile> {
