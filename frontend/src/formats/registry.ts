@@ -1,4 +1,5 @@
 import { extensionFromPath } from "./file-names";
+import { latexDocumentFormat } from "./latex/document";
 import { markdownDocumentFormat } from "./markdown/document";
 import { createSourceDocumentFormat } from "./source/document";
 import type { DocumentFormat } from "./types";
@@ -7,14 +8,6 @@ type DocumentFileFilter = {
     displayName: string;
     patterns: string[];
 };
-
-const latexDocumentFormat = createSourceDocumentFormat({
-    id: "latex",
-    label: "LaTeX",
-    extensions: ["tex"],
-    defaultExtension: "tex",
-    defaultFileName: "Untitled.tex",
-});
 
 const orgDocumentFormat = createSourceDocumentFormat({
     id: "org",

@@ -238,6 +238,39 @@
     tab-size: 4;
 }
 
+.source-highlighted-text {
+    font: inherit;
+    white-space: inherit;
+}
+
+.latex-source-keyword {
+    color: #174ea6;
+    font-weight: 650;
+}
+
+.latex-source-command {
+    color: #0a66c2;
+}
+
+.latex-source-environment {
+    color: #146c43;
+    font-weight: 650;
+}
+
+.latex-source-comment {
+    color: #777b80;
+    font-style: italic;
+}
+
+.latex-source-math-delimiter {
+    color: #7a4cc2;
+    font-weight: 650;
+}
+
+.latex-source-punctuation {
+    color: #6f7377;
+}
+
 .block[data-type="code"][data-code-info] .block-content::after {
     content: attr(data-code-info);
     position: absolute;

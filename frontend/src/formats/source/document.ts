@@ -1,4 +1,4 @@
-import type { ParsedBlock, ParsedDocument } from "../../editor/blocks/model";
+import type { BlockType, ParsedBlock, ParsedDocument } from "../../editor/blocks/model";
 import { titleFromFileName } from "../file-names";
 import type { DocumentFileLike, DocumentFormat, ParsedDocumentFragment } from "../types";
 
@@ -8,6 +8,7 @@ type SourceDocumentFormatOptions = {
     extensions: string[];
     defaultExtension: string;
     defaultFileName: string;
+    renderPlainTextContent?: (type: BlockType, text: string) => string | null;
 };
 
 export function createSourceDocumentFormat(options: SourceDocumentFormatOptions): DocumentFormat {
@@ -17,6 +18,7 @@ export function createSourceDocumentFormat(options: SourceDocumentFormatOptions)
         parseDocument: parseSourceDocument,
         parseFragment: parseSourceFragment,
         serializeDocument: serializeSourceDocument,
+        renderPlainTextContent: options.renderPlainTextContent,
     };
 }
 

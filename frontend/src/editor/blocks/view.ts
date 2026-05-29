@@ -18,6 +18,7 @@ type BlockRenderContext = {
     references: DocumentReferenceMap;
     activeFilePath: string | null;
     renderInlineContent: (text: string, references: DocumentReferenceMap) => string;
+    renderPlainTextContent?: (type: BlockType, text: string) => string | null;
     renderBlockContent?: (type: BlockType, text: string, references: DocumentReferenceMap) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
@@ -122,7 +123,9 @@ export function setBlockText(block: HTMLElement, text: string): void {
     }
 
     if (isPlainTextBlockType(type) || isOpenFencedCodeParagraph(type, text)) {
-        renderPlainTextBlockContent(content, text, source);
+        const highlightedHtml = readPlainTextHighlightHtml(type, text);
+        renderPlainTextBlockContent(content, text, source, highlightedHtml);
+        syncPlainTextHighlightCache(content, highlightedHtml);
         delete content.dataset.renderedMarkdown;
         return;
     }
@@ -169,6 +172,44 @@ export function rerenderInlineBlockContent(block: HTMLElement, offset: number): 
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
 
     return Math.min(offset, getBlockText(block).length);
+}
+
+export function rerenderPlainTextBlockContent(block: HTMLElement, offset: number): number | null {
+    const type = readBlockType(block.dataset.type);
+    if (!isPlainTextBlockType(type)) {
+        return null;
+    }
+
+    const content = getBlockContent(block);
+    const text = getBlockText(block);
+    const highlightedHtml = readPlainTextHighlightHtml(type, text);
+    if (highlightedHtml === null || content.dataset.renderedPlainText === highlightedHtml) {
+        return null;
+    }
+
+    renderPlainTextBlockContent(
+        content,
+        text,
+        renderContext.readBlockSource?.(block, type, text) ?? {},
+        highlightedHtml,
+    );
+    syncPlainTextHighlightCache(content, highlightedHtml);
+    delete content.dataset.renderedMarkdown;
+
+    return Math.min(offset, text.length);
+}
+
+function readPlainTextHighlightHtml(type: BlockType, text: string): string | null {
+    return renderContext.renderPlainTextContent?.(type, text) ?? null;
+}
+
+function syncPlainTextHighlightCache(content: HTMLElement, highlightedHtml: string | null): void {
+    if (highlightedHtml === null) {
+        delete content.dataset.renderedPlainText;
+        return;
+    }
+
+    content.dataset.renderedPlainText = highlightedHtml;
 }
 
 function renderBlockInnerHtml(block: HTMLElement, type: BlockType, text: string, source: BlockSource): string {

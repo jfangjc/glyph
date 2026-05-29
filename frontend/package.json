@@ -4,7 +4,7 @@
     "version": "0.0.0",
     "type": "module",
     "scripts": {
-        "dev": "vite",
+        "dev": "vite --host 127.0.0.1",
         "typecheck": "tsc --noEmit",
         "build:dev": "vite build --minify false --mode development",
         "build": "vite build --mode production",

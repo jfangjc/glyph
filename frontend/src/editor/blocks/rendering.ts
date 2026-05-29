@@ -10,10 +10,15 @@ export type BlockSource = {
 
 export type BlockSourcePosition = "prefix" | "suffix" | "atomic";
 
-export function renderPlainTextBlockContent(content: HTMLElement, text: string, source: BlockSource): void {
+export function renderPlainTextBlockContent(
+    content: HTMLElement,
+    text: string,
+    source: BlockSource,
+    highlightedHtml: string | null = null,
+): void {
     content.replaceChildren();
     appendBlockSourceElement(content, source.prefix, "prefix", false, source.prefixEditable);
-    content.append(document.createTextNode(renderPlainTextContentText(text)));
+    appendPlainTextBodyElement(content, text, highlightedHtml);
     appendBlockSourceElement(content, source.suffix, "suffix");
 }
 
@@ -105,6 +110,19 @@ function appendCodeBlockBodyElement(content: HTMLElement, text: string): void {
     body.className = "markdown-code-block-body";
     body.spellcheck = false;
     body.append(document.createTextNode(renderCodeBlockBodyText(text)));
+    content.append(body);
+}
+
+function appendPlainTextBodyElement(content: HTMLElement, text: string, highlightedHtml: string | null): void {
+    if (highlightedHtml === null) {
+        content.append(document.createTextNode(renderPlainTextContentText(text)));
+        return;
+    }
+
+    const body = document.createElement("span");
+    body.className = "source-highlighted-text";
+    body.spellcheck = false;
+    body.innerHTML = text.endsWith("\n") ? `${highlightedHtml}${caretSpacerCharacter}` : highlightedHtml;
     content.append(body);
 }
 

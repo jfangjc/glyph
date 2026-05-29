@@ -76,6 +76,7 @@ export function syncBlockViewContext(): void {
         references: documentReferences,
         activeFilePath: documentState.activeFilePath,
         renderInlineContent: format.renderInline,
+        renderPlainTextContent: format.renderPlainTextContent,
         renderBlockContent: format.renderBlock,
         hydrateRenderedContent: format.hydrateRenderedContent,
         readBlockSource: format.readBlockSource,

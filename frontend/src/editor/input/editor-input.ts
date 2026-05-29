@@ -17,6 +17,7 @@ import {
     commitTransientBlock,
     getBlockText,
     rerenderInlineBlockContent,
+    rerenderPlainTextBlockContent,
     setBlockText,
 } from "../blocks/view";
 import { readBlockType } from "../blocks/model";
@@ -94,6 +95,11 @@ export function handleEditorInput(event: Event, options: EditorInputOptions): vo
         return;
     }
 
+    if (renderPlainTextBlockContent(block, getCurrentBlockOffset(block))) {
+        options.markEditorDirty();
+        return;
+    }
+
     if (!completeFencedParagraph(block, options) && !applyMarkdownShortcut(block)) {
         renderBlockContent(block, getCurrentBlockOffset(block));
     }
@@ -121,4 +127,14 @@ function renderBlockContent(block: HTMLElement, currentOffset: number): void {
     if (!suppressAdjacentFormatTokenActivation(block, focusOffset)) {
         activateMarkdownTokenAtCaret();
     }
+}
+
+function renderPlainTextBlockContent(block: HTMLElement, currentOffset: number): boolean {
+    const focusOffset = rerenderPlainTextBlockContent(block, currentOffset);
+    if (focusOffset === null) {
+        return false;
+    }
+
+    focusBlockAtOffset(block, focusOffset);
+    return true;
 }

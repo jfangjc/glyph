@@ -32,6 +32,7 @@ export type DocumentFormat = {
     hasBlockSource?: (type: BlockType) => boolean;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
     renderInline?: (text: string, references: DocumentReferenceMap) => string;
+    renderPlainTextContent?: (type: BlockType, text: string) => string | null;
     renderBlock?: (type: BlockType, text: string, references: DocumentReferenceMap) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
 };
