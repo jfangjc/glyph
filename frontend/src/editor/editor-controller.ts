@@ -4,6 +4,7 @@ import {
     bindDocumentActions,
     createNewMarkdownDocument,
     installOpenDocumentRequests,
+    openDocument,
     openDocumentPath,
     openPendingLaunchDocuments,
     restoreLastOpenDocument,
@@ -95,6 +96,11 @@ import {
     configureMarkdownSourceController,
     syncActiveBlockMarkdownSource,
 } from "../formats/markdown/editor/source-controller";
+import { applyZoomShortcut } from "../app/zoom";
+import {
+    appMenuCommandEvent,
+    type AppMenuCommandDetail,
+} from "../platform/window-controls/window-controls";
 
 let isComposingText = false;
 let shouldFlushTypingBatchAfterInput = false;
@@ -150,6 +156,7 @@ export function installEditorController(): void {
         },
         documentStateChangedEvent,
     );
+    window.addEventListener(appMenuCommandEvent, handleAppMenuCommand as EventListener);
     configureCaret({
         onBlockFocused: (block) => {
             syncActiveBlockIndicator(block);
@@ -234,6 +241,96 @@ async function saveDocumentFromEditor(promptForPath = false): Promise<void> {
         promptForPath: promptForPath || !documentState.activeFilePath,
         suggestedFileName: getSuggestedFileName(),
     });
+}
+
+function handleAppMenuCommand(event: CustomEvent<AppMenuCommandDetail>): void {
+    switch (event.detail.command) {
+        case "file:new":
+            void createNewMarkdownDocument(getSuggestedFileName());
+            return;
+        case "file:open":
+            void openDocument();
+            return;
+        case "file:open-directory":
+            void openDirectoryFromShortcut?.();
+            return;
+        case "file:save":
+            void saveDocumentFromEditor();
+            return;
+        case "file:save-as":
+            void saveDocumentFromEditor(true);
+            return;
+        case "file:export":
+            return;
+        case "edit:undo":
+            undoFromMenu();
+            return;
+        case "edit:redo":
+            redoFromMenu();
+            return;
+        case "edit:cut":
+            runEditableCommand("cut");
+            return;
+        case "edit:copy":
+            runEditableCommand("copy");
+            return;
+        case "edit:paste":
+            runEditableCommand("paste");
+            return;
+        case "edit:select-all":
+            selectAllFromMenu();
+            return;
+        case "view:toggle-file-tree":
+            toggleFileTreeFromShortcut?.();
+            return;
+        case "view:zoom-in":
+            void applyZoomShortcut("in");
+            return;
+        case "view:zoom-out":
+            void applyZoomShortcut("out");
+            return;
+        case "view:zoom-reset":
+            void applyZoomShortcut("reset");
+            return;
+        case "help:about":
+            window.alert("Glyph\nA lightweight, minimalistic cross-platform document editor.");
+            return;
+        default:
+            assertUnhandledMenuCommand(event.detail.command);
+    }
+}
+
+function undoFromMenu(): void {
+    flushPendingUndoTransaction();
+    if (undoEditorChange()) {
+        markEditorDirty();
+    }
+}
+
+function redoFromMenu(): void {
+    flushPendingUndoTransaction();
+    if (redoEditorChange()) {
+        markEditorDirty();
+    }
+}
+
+function runEditableCommand(command: "cut" | "copy" | "paste"): void {
+    document.execCommand(command);
+}
+
+function selectAllFromMenu(): void {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+        activeElement.select();
+        return;
+    }
+
+    getElement<HTMLElement>("editor").focus();
+    document.execCommand("selectAll");
+}
+
+function assertUnhandledMenuCommand(command: never): never {
+    throw new Error(`Unhandled app menu command: ${command}`);
 }
 
 function handleTitleInput(): void {

@@ -21,18 +21,18 @@
     background: transparent;
 }
 
-body.windows-host .editor-shell::-webkit-scrollbar-track {
+body.app-titlebar-host .editor-shell::-webkit-scrollbar-track {
     background: transparent;
 }
 
-body.windows-host .editor-shell {
+body.app-titlebar-host .editor-shell {
     position: fixed;
-    top: var(--windows-titlebar-height, 37px);
+    top: var(--glyph-titlebar-height, 37px);
     right: 0;
     bottom: 0;
     left: 0;
     height: auto;
-    scroll-padding-top: calc(72px - var(--windows-titlebar-height, 37px));
+    scroll-padding-top: calc(72px - var(--glyph-titlebar-height, 37px));
 }
 
 .editor-shell::-webkit-scrollbar-thumb {
@@ -72,12 +72,12 @@ body.windows-host .editor-shell {
     zoom: 1;
 }
 
-body.windows-host .document-surface {
-    min-height: calc(100vh - var(--windows-titlebar-height, 37px));
-    padding-top: calc(72px - var(--windows-titlebar-height, 37px));
+body.app-titlebar-host .document-surface {
+    min-height: calc(100vh - var(--glyph-titlebar-height, 37px));
+    padding-top: calc(72px - var(--glyph-titlebar-height, 37px));
 }
 
-body.windows-host .document-surface[data-document-format="latex"][data-latex-preview="active"] {
+body.app-titlebar-host .document-surface[data-document-format="latex"][data-latex-preview="active"] {
     min-height: 100%;
     padding-top: 0;
 }
@@ -117,8 +117,8 @@ body.windows-host .document-surface[data-document-format="latex"][data-latex-pre
     zoom: var(--glyph-editor-zoom, 1);
 }
 
-body.windows-host .document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor {
-    padding-top: calc(72px - var(--windows-titlebar-height, 37px));
+body.app-titlebar-host .document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor {
+    padding-top: calc(72px - var(--glyph-titlebar-height, 37px));
 }
 
 .document-surface[data-document-format="latex"][data-latex-preview="active"] .block-editor::-webkit-scrollbar {

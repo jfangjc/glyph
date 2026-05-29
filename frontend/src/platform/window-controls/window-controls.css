@@ -1,5 +1,5 @@
 :root {
-    --windows-titlebar-height: 37px;
+    --glyph-titlebar-height: 37px;
     --windows-caption-button-width: 47px;
     --windows-caption-icon-size: 10px;
     --windows-caption-fg: #1f1f1f;
@@ -7,24 +7,177 @@
     --windows-caption-hover-bg: rgb(0 0 0 / 9%);
     --windows-caption-close-hover-bg: #e90924;
     --windows-caption-close-hover-fg: #fffcff;
+    --app-menu-panel-width: 288px;
 }
 
-.windows-titlebar {
+body.mac-host {
+    --glyph-titlebar-height: 50px;
+}
+
+body.mac-host .app-titlebar {
+    pointer-events: none;
+}
+
+.app-titlebar {
     position: fixed;
     top: 0;
     right: 0;
     left: 0;
-    z-index: 20;
+    z-index: 60;
     display: flex;
-    justify-content: flex-end;
-    height: var(--windows-titlebar-height);
+    align-items: stretch;
+    height: var(--glyph-titlebar-height);
     background: transparent;
     color: var(--windows-caption-fg);
-    pointer-events: none;
+    pointer-events: auto;
     user-select: none;
 }
 
-.windows-drag-region {
+.app-titlebar[hidden] {
+    display: none;
+}
+
+.app-menu-bar {
+    position: relative;
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 1px;
+    height: 100%;
+    max-width: calc(100vw - (var(--windows-caption-button-width) * 3) - 8px);
+    overflow: visible;
+    padding: 0 8px 0 14px;
+    pointer-events: auto;
+    transition:
+        opacity 160ms ease,
+        transform 160ms ease;
+    --wails-draggable: no-drag;
+}
+
+body.mac-host .app-menu-bar {
+    max-width: calc(100vw - 90px);
+    margin-left: 88px;
+}
+
+body.windows-host .app-menu-bar,
+body.linux-host .app-menu-bar {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-4px);
+}
+
+body.windows-host .app-titlebar:hover .app-menu-bar,
+body.windows-host .app-titlebar:focus-within .app-menu-bar,
+body.windows-host .app-titlebar[data-menu-open="true"] .app-menu-bar,
+body.linux-host .app-titlebar:hover .app-menu-bar,
+body.linux-host .app-titlebar:focus-within .app-menu-bar,
+body.linux-host .app-titlebar[data-menu-open="true"] .app-menu-bar {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+.app-menu {
+    position: relative;
+}
+
+.app-menu-button {
+    min-width: 0;
+    min-height: 26px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: default;
+    font: 500 13px/1 var(--glyph-font-text);
+    white-space: nowrap;
+}
+
+.app-menu-button:hover,
+.app-menu-button:focus-visible,
+.app-menu-button[aria-expanded="true"] {
+    background: rgb(0 0 0 / 9%);
+    outline: 0;
+}
+
+.app-menu-panel {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    display: grid;
+    width: min(var(--app-menu-panel-width), calc(100vw - 16px));
+    max-height: calc(100vh - var(--glyph-titlebar-height) - 10px);
+    padding: 5px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border: 1px solid #d8d8d8;
+    border-radius: 6px;
+    background: #ffffff;
+    box-shadow: 0 14px 36px rgb(15 18 22 / 15%);
+    color: #202124;
+    --wails-draggable: no-drag;
+}
+
+.app-menu-panel[hidden] {
+    display: none;
+}
+
+.app-menu-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    min-height: 28px;
+    gap: 14px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: default;
+    font: 400 13px/1.2 var(--glyph-font-text);
+    text-align: left;
+}
+
+.app-menu-item > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.app-menu-item:hover,
+.app-menu-item:focus-visible {
+    background: #f1f3f4;
+    outline: 0;
+}
+
+.app-menu-item:disabled {
+    color: #9aa0a6;
+}
+
+.app-menu-item:disabled:hover,
+.app-menu-item:disabled:focus-visible {
+    background: transparent;
+}
+
+.app-menu-shortcut {
+    color: #777b80;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.app-menu-item:disabled .app-menu-shortcut {
+    color: inherit;
+}
+
+.app-menu-separator {
+    height: 1px;
+    margin: 4px;
+    background: #e4e4e4;
+}
+
+.app-drag-region {
     flex: 1 1 auto;
     height: 100%;
     background: transparent;
@@ -32,7 +185,7 @@
     --wails-draggable: drag;
 }
 
-.windows-window-controls {
+.app-window-controls {
     display: flex;
     flex: 0 0 auto;
     height: 100%;
@@ -40,11 +193,15 @@
     --wails-draggable: no-drag;
 }
 
+.app-window-controls[hidden] {
+    display: none;
+}
+
 .window-control {
     display: grid;
     place-items: center;
     width: var(--windows-caption-button-width);
-    height: var(--windows-titlebar-height);
+    height: var(--glyph-titlebar-height);
     margin: 0;
     padding: 1px 0 0;
     border: 0;
@@ -65,6 +222,14 @@
     font-weight: 400;
     line-height: var(--windows-caption-icon-size);
     text-align: center;
+}
+
+body.linux-host .window-control-icon {
+    width: auto;
+    height: auto;
+    font-family: var(--glyph-font-text);
+    font-size: 0.92rem;
+    line-height: 1;
 }
 
 .window-control:hover {
@@ -89,6 +254,31 @@
     color: var(--windows-caption-close-hover-fg);
 }
 
-body:not(.window-focused) .windows-titlebar {
+body:not(.window-focused) .app-titlebar {
     color: var(--windows-caption-fg-inactive);
+}
+
+@media (max-width: 860px) {
+    :root {
+        --app-menu-panel-width: 272px;
+    }
+
+    .app-menu-bar {
+        padding: 0 6px 0 12px;
+    }
+
+    .app-menu-button {
+        padding: 0 8px;
+    }
+
+    .app-menu-item {
+        gap: 10px;
+        padding: 0 7px;
+    }
+}
+
+@media (max-width: 520px) {
+    .app-menu-shortcut {
+        display: none;
+    }
 }

@@ -1,10 +1,110 @@
-<div id="windows-titlebar" class="windows-titlebar" hidden>
-    <div class="windows-drag-region" aria-hidden="true"></div>
-    <div class="windows-window-controls" role="toolbar" aria-label="Window controls">
+<div id="app-titlebar" class="app-titlebar" hidden>
+    <nav class="app-menu-bar" role="menubar" aria-label="Application menu">
+        <div class="app-menu" data-app-menu>
+            <button class="app-menu-button" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" data-menu-button="file">
+                File
+            </button>
+            <div class="app-menu-panel" role="menu" data-menu-panel="file" hidden>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="file:new">
+                    <span>New</span>
+                    <span class="app-menu-shortcut">Ctrl+N</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="file:open">
+                    <span>Open File...</span>
+                    <span class="app-menu-shortcut">Ctrl+O</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="file:open-directory">
+                    <span>Open Directory...</span>
+                    <span class="app-menu-shortcut">Ctrl+Shift+O</span>
+                </button>
+                <div class="app-menu-separator" role="separator"></div>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="file:save">
+                    <span>Save</span>
+                    <span class="app-menu-shortcut">Ctrl+S</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="file:save-as">
+                    <span>Save As...</span>
+                    <span class="app-menu-shortcut">Ctrl+Shift+S</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="file:export" disabled>
+                    <span>Export...</span>
+                </button>
+            </div>
+        </div>
+        <div class="app-menu" data-app-menu>
+            <button class="app-menu-button" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" data-menu-button="edit">
+                Edit
+            </button>
+            <div class="app-menu-panel" role="menu" data-menu-panel="edit" hidden>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="edit:undo">
+                    <span>Undo</span>
+                    <span class="app-menu-shortcut">Ctrl+Z</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="edit:redo">
+                    <span>Redo</span>
+                    <span class="app-menu-shortcut">Ctrl+Y</span>
+                </button>
+                <div class="app-menu-separator" role="separator"></div>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="edit:cut">
+                    <span>Cut</span>
+                    <span class="app-menu-shortcut">Ctrl+X</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="edit:copy">
+                    <span>Copy</span>
+                    <span class="app-menu-shortcut">Ctrl+C</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="edit:paste">
+                    <span>Paste</span>
+                    <span class="app-menu-shortcut">Ctrl+V</span>
+                </button>
+                <div class="app-menu-separator" role="separator"></div>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="edit:select-all">
+                    <span>Select All</span>
+                    <span class="app-menu-shortcut">Ctrl+A</span>
+                </button>
+            </div>
+        </div>
+        <div class="app-menu" data-app-menu>
+            <button class="app-menu-button" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" data-menu-button="view">
+                View
+            </button>
+            <div class="app-menu-panel" role="menu" data-menu-panel="view" hidden>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="view:toggle-file-tree">
+                    <span>Toggle File Tree</span>
+                    <span class="app-menu-shortcut">Ctrl+E</span>
+                </button>
+                <div class="app-menu-separator" role="separator"></div>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="view:zoom-in">
+                    <span>Zoom In</span>
+                    <span class="app-menu-shortcut">Ctrl++</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="view:zoom-out">
+                    <span>Zoom Out</span>
+                    <span class="app-menu-shortcut">Ctrl+-</span>
+                </button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="view:zoom-reset">
+                    <span>Reset Zoom</span>
+                    <span class="app-menu-shortcut">Ctrl+0</span>
+                </button>
+            </div>
+        </div>
+        <div class="app-menu" data-app-menu>
+            <button class="app-menu-button" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" data-menu-button="help">
+                Help
+            </button>
+            <div class="app-menu-panel" role="menu" data-menu-panel="help" hidden>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="help:about">
+                    <span>About Glyph</span>
+                </button>
+            </div>
+        </div>
+    </nav>
+    <div class="app-drag-region" aria-hidden="true"></div>
+    <div id="app-window-controls" class="app-window-controls" role="toolbar" aria-label="Window controls" hidden>
         <button class="window-control" type="button" data-window-action="minimise" aria-label="Minimize">
             <span class="window-control-icon" aria-hidden="true">&#xE921;</span>
         </button>
-        <button id="windows-maximise-button" class="window-control" type="button" data-window-action="maximise" aria-label="Maximize">
+        <button id="app-maximise-button" class="window-control" type="button" data-window-action="maximise" aria-label="Maximize">
             <span class="window-control-icon" aria-hidden="true">&#xE922;</span>
         </button>
         <button class="window-control window-control-close" type="button" data-window-action="close" aria-label="Close">

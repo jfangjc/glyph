@@ -172,7 +172,7 @@ export function clearLinkOpenIntent(): void {
 }
 
 function isWindowChromeEvent(event: MouseEvent): boolean {
-    return event.target instanceof Element && Boolean(event.target.closest(".windows-titlebar"));
+    return event.target instanceof Element && Boolean(event.target.closest(".app-titlebar"));
 }
 
 function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
