@@ -1,17 +1,40 @@
 import katex from "katex";
 import type { ParsedBlock } from "../../editor/blocks/model";
 import { escapeHtml } from "../../utils/text";
+import { findUnescapedSequence } from "./utils";
+
+const mathRenderCacheLimit = 512;
+const mathRenderCache = new Map<string, string>();
 
 export function renderLatexMath(source: string, displayMode: boolean): string {
+    const cacheKey = `${displayMode ? "display" : "inline"}\u0000${source}`;
+    const cached = mathRenderCache.get(cacheKey);
+    if (cached !== undefined) {
+        mathRenderCache.delete(cacheKey);
+        mathRenderCache.set(cacheKey, cached);
+        return cached;
+    }
+
+    let html: string;
     try {
-        return katex.renderToString(source, {
+        html = katex.renderToString(source, {
             displayMode,
             throwOnError: false,
             trust: false,
         });
     } catch {
-        return `<code>${escapeHtml(source)}</code>`;
+        html = `<code>${escapeHtml(source)}</code>`;
     }
+
+    mathRenderCache.set(cacheKey, html);
+    if (mathRenderCache.size > mathRenderCacheLimit) {
+        const oldestKey = mathRenderCache.keys().next().value;
+        if (oldestKey !== undefined) {
+            mathRenderCache.delete(oldestKey);
+        }
+    }
+
+    return html;
 }
 
 export function readMathSourceText(rawMarkdown: string): string {
@@ -69,19 +92,4 @@ function appendParagraphBlock(blocks: ParsedBlock[], text: string): void {
     if (text !== "") {
         blocks.push({ type: "paragraph", text });
     }
-}
-
-function findUnescapedSequence(text: string, sequence: string, startIndex: number): number {
-    for (let index = startIndex; index < text.length; index += 1) {
-        if (text[index] === "\\") {
-            index += 1;
-            continue;
-        }
-
-        if (text.startsWith(sequence, index)) {
-            return index;
-        }
-    }
-
-    return -1;
 }

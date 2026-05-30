@@ -1,4 +1,3 @@
-import { readSiblingPdfPreview } from "../bridge/documents";
 import type { DocumentFile } from "../bridge/types";
 import {
     configureBlockView,
@@ -16,17 +15,15 @@ import { readBlockType, type ParsedBlock } from "../editor/blocks/model";
 import { focusBlockAtOffset, getCurrentBlockOffset } from "../editor/selection/caret";
 import { getElement } from "../utils/dom";
 import { clearEditorHistory } from "../editor/history/undo-history";
-import { commitActiveBlockMarkdownSource } from "../formats/markdown/editor/source-controller";
 import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
-import type { DocumentFormat, DocumentReferenceMap } from "../formats/types";
+import type { DocumentFormat, DocumentPreviewBehavior, DocumentPreviewContext, DocumentReferenceMap } from "../formats/types";
 import { documentState, markDocumentDirty, notifyDocumentStateChanged } from "./document-state";
 
 let documentReferences: DocumentReferenceMap = {};
 let documentReferencesSnapshot = "{}";
 let referenceRerenderRequestId = 0;
-let latexPreviewSourcePath: string | null = null;
-let latexPreviewRequestId = 0;
-let wasSavingDocumentForLatexPreview = false;
+let referenceSyncFrame = 0;
+let activePreviewBehavior: DocumentPreviewBehavior | null = null;
 
 export function getActiveDocumentFormat(): DocumentFormat {
     return getDocumentFormatById(documentState.activeFormatId);
@@ -53,7 +50,10 @@ export function loadDocument(documentFile: DocumentFile): void {
 }
 
 export function serializeDocument(): string {
-    commitActiveBlockMarkdownSource();
+    getActiveDocumentFormat().editorBehavior?.beforeSerialize?.();
+    if (!flushDocumentReferenceSync()) {
+        syncDocumentReferences();
+    }
     const title = getElement<HTMLInputElement>("document-title").value;
     const format = getActiveDocumentFormat();
 
@@ -65,7 +65,7 @@ export function serializeDocument(): string {
 }
 
 export function markEditorDirty(): void {
-    syncDocumentReferences();
+    scheduleDocumentReferenceSync();
     markDocumentDirty();
 }
 
@@ -80,6 +80,7 @@ export function syncBlockViewContext(): void {
         renderBlockContent: format.renderBlock,
         hydrateRenderedContent: format.hydrateRenderedContent,
         readBlockSource: format.readBlockSource,
+        plainTextHighlightPolicy: format.plainTextHighlightPolicy,
     });
 }
 
@@ -95,95 +96,47 @@ export function syncDocumentFormatUi(): void {
         shell.dataset.documentFormat = format.id;
     }
 
-    syncLatexPdfPreview(format.id === "latex");
+    syncDocumentPreview(format);
 }
 
-function syncLatexPdfPreview(isLatexDocument: boolean): void {
-    const preview = getElement<HTMLElement>("latex-preview");
-    const frame = getElement<HTMLIFrameElement>("latex-pdf-frame");
-    const status = getElement<HTMLElement>("latex-preview-status");
-    const saveJustFinished = wasSavingDocumentForLatexPreview && !documentState.isSavingDocument;
+function syncDocumentPreview(format: DocumentFormat): void {
+    const context = createDocumentPreviewContext();
 
-    wasSavingDocumentForLatexPreview = documentState.isSavingDocument;
-
-    if (!isLatexDocument) {
-        latexPreviewRequestId += 1;
-        latexPreviewSourcePath = null;
-        setLatexPreviewActive(false);
-        preview.dataset.state = "hidden";
-        frame.removeAttribute("src");
-        status.textContent = "";
-        return;
+    if (activePreviewBehavior && activePreviewBehavior !== format.previewBehavior) {
+        activePreviewBehavior.deactivate(context);
     }
 
-    if (!documentState.activeFilePath) {
-        latexPreviewRequestId += 1;
-        latexPreviewSourcePath = null;
-        setLatexPreviewActive(false);
-        preview.dataset.state = "empty";
-        frame.removeAttribute("src");
-        status.textContent = "";
-        return;
-    }
-
-    if (documentState.activeFilePath === latexPreviewSourcePath && !saveJustFinished) {
-        return;
-    }
-
-    void loadLatexPdfPreview(documentState.activeFilePath);
+    activePreviewBehavior = format.previewBehavior ?? null;
+    activePreviewBehavior?.sync(context);
 }
 
-async function loadLatexPdfPreview(sourcePath: string): Promise<void> {
-    const requestId = latexPreviewRequestId + 1;
-    const preview = getElement<HTMLElement>("latex-preview");
-    const frame = getElement<HTMLIFrameElement>("latex-pdf-frame");
-    const status = getElement<HTMLElement>("latex-preview-status");
-
-    latexPreviewRequestId = requestId;
-    latexPreviewSourcePath = sourcePath;
-    setLatexPreviewActive(true);
-    preview.dataset.state = "loading";
-    frame.removeAttribute("src");
-    status.textContent = "Preparing PDF preview...";
-
-    try {
-        const pdfPreview = await readSiblingPdfPreview(sourcePath);
-        if (requestId !== latexPreviewRequestId || documentState.activeFilePath !== sourcePath) {
-            return;
-        }
-
-        setLatexPreviewActive(true);
-        frame.src = `${pdfPreview.dataUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
-        preview.dataset.state = "ready";
-        status.textContent = "";
-    } catch {
-        if (requestId !== latexPreviewRequestId || documentState.activeFilePath !== sourcePath) {
-            return;
-        }
-
-        preview.dataset.state = "unavailable";
-        setLatexPreviewActive(false);
-        frame.removeAttribute("src");
-        status.textContent = "";
-    }
+function createDocumentPreviewContext(): DocumentPreviewContext {
+    return {
+        activeFilePath: documentState.activeFilePath,
+        isSavingDocument: documentState.isSavingDocument,
+    };
 }
 
-function setLatexPreviewActive(isActive: boolean): void {
-    const surface = getElement<HTMLElement>("document-surface");
-    const shell = document.querySelector<HTMLElement>(".editor-shell");
-
-    if (isActive) {
-        surface.dataset.latexPreview = "active";
-        if (shell) {
-            shell.dataset.latexPreview = "active";
-        }
+function scheduleDocumentReferenceSync(): void {
+    if (referenceSyncFrame) {
         return;
     }
 
-    delete surface.dataset.latexPreview;
-    if (shell) {
-        delete shell.dataset.latexPreview;
+    referenceSyncFrame = window.requestAnimationFrame(() => {
+        referenceSyncFrame = 0;
+        syncDocumentReferences();
+    });
+}
+
+function flushDocumentReferenceSync(): boolean {
+    if (referenceSyncFrame) {
+        window.cancelAnimationFrame(referenceSyncFrame);
+        referenceSyncFrame = 0;
+        syncDocumentReferences();
+        return true;
     }
+
+    return false;
 }
 
 function syncDocumentReferences(): void {

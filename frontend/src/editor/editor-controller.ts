@@ -87,20 +87,13 @@ import {
     handleEditorMouseDown as handleEditorMouseDownCommand,
     syncLinkOpenIntentFromKeyboard,
 } from "./pointer-interactions";
-import {
-    configureMarkdownTokenController,
-    handleEditorClick,
-    handleSelectionChange,
-} from "../formats/markdown/editor/token-controller";
-import {
-    configureMarkdownSourceController,
-    syncActiveBlockMarkdownSource,
-} from "../formats/markdown/editor/source-controller";
 import { applyZoomShortcut } from "../app/zoom";
 import {
     appMenuCommandEvent,
     type AppMenuCommandDetail,
 } from "../platform/window-controls/window-controls";
+import { getDocumentFormats } from "../formats/registry";
+import type { DocumentEditorEventContext, DocumentPasteContext } from "../formats/types";
 
 let isComposingText = false;
 let shouldFlushTypingBatchAfterInput = false;
@@ -167,18 +160,10 @@ export function installEditorController(): void {
     configurePointerInteractions({
         onBlockActivated: syncActiveBlockIndicator,
     });
-    configureMarkdownSourceController({
-        markEditorDirty,
-        syncBlockMarkdownSourceReveal: syncBlockSourceReveal,
-    });
-    configureMarkdownTokenController({
-        syncActiveBlockIndicator,
-        syncActiveBlockMarkdownSource,
-        syncBlockMarkdownSourceReveal: syncBlockSourceReveal,
-    });
     configureEditorUiState({
         hasBlockSource: (type) => Boolean(getActiveDocumentFormat().hasBlockSource?.(type)),
     });
+    installDocumentFormatEditorBehaviors();
     configureBlockOperations({
         parseFragment: (content) => getActiveDocumentFormat().parseFragment(content),
     });
@@ -200,6 +185,43 @@ async function restoreStartupDocument(): Promise<void> {
     }
 }
 
+function installDocumentFormatEditorBehaviors(): void {
+    const hooks = createDocumentEditorHooks();
+    for (const format of getDocumentFormats()) {
+        format.editorBehavior?.install?.(hooks);
+    }
+}
+
+function createDocumentEditorHooks() {
+    return {
+        markDocumentDirty,
+        markEditorDirty,
+        syncActiveBlockIndicator,
+        syncBlockSourceReveal,
+        syncBlockSourceRevealBlocks,
+    };
+}
+
+function createDocumentEditorEventContext(): DocumentEditorEventContext {
+    return {
+        ...createDocumentEditorHooks(),
+        isComposingText,
+    };
+}
+
+function createDocumentPasteContext(): DocumentPasteContext {
+    return {
+        ...createDocumentEditorEventContext(),
+        getActiveDocumentFormat,
+        getActiveFilePath: () => documentState.activeFilePath,
+        ensureDocumentSaved: () =>
+            saveCurrentDocument({
+                promptForPath: true,
+                suggestedFileName: getSuggestedFileName(),
+            }),
+    };
+}
+
 function handleEditorSelectionChange(): void {
     const selectionState = readSelectionState();
     if (selectionState.signature === lastSelectionSignature) {
@@ -208,7 +230,7 @@ function handleEditorSelectionChange(): void {
 
     lastSelectionSignature = selectionState.signature;
     syncActiveBlockIndicator(selectionState.focusBlock);
-    handleSelectionChange();
+    getActiveDocumentFormat().editorBehavior?.selectionChange?.(createDocumentEditorEventContext());
     syncSelectedBlockSourceReveal();
     syncDocumentOutlineToSelection();
 }
@@ -365,7 +387,11 @@ function handleEditorMouseDown(event: MouseEvent): void {
         flushPendingUndoTransaction();
     }
 
-    handleEditorMouseDownCommand(event);
+    const context = createDocumentEditorEventContext();
+    const handledByFormat = getActiveDocumentFormat().editorBehavior?.mouseDown?.(event, context) ?? false;
+    if (!handledByFormat) {
+        handleEditorMouseDownCommand(event);
+    }
 }
 
 function handleEditorChange(event: Event): void {
@@ -419,10 +445,11 @@ function handleEditorKeydown(event: KeyboardEvent): void {
         beginDiscreteUndoTransaction();
     }
 
-    handleEditorKeydownCommand(event, {
-        isComposingText,
-        markEditorDirty,
-    });
+    const context = createDocumentEditorEventContext();
+    const handledByFormat = getActiveDocumentFormat().editorBehavior?.keydown?.(event, context) ?? false;
+    if (!handledByFormat) {
+        handleEditorKeydownCommand(event, context);
+    }
 
     if (shouldTrackDiscreteEdit || shouldTrackPlainTextSelectionReplacement) {
         commitUndoTransaction();
@@ -439,12 +466,11 @@ function handleEditorBeforeInput(event: InputEvent): void {
         shouldFlushTypingBatchAfterInput = false;
     }
 
-    handleEditorBeforeInputCommand(event, {
-        isComposingText,
-        markDocumentDirty,
-        markEditorDirty,
-        syncBlockSourceReveal,
-    });
+    const context = createDocumentEditorEventContext();
+    const handledByFormat = getActiveDocumentFormat().editorBehavior?.beforeInput?.(event, context) ?? false;
+    if (!handledByFormat) {
+        handleEditorBeforeInputCommand(event, context);
+    }
 
     if (event.defaultPrevented && undoKind) {
         commitUndoTransaction();
@@ -462,28 +488,18 @@ function handleEditorCompositionEnd(event: CompositionEvent): void {
 }
 
 function handleEditorInput(event: Event): void {
-    handleEditorInputCommand(event, {
-        isComposingText,
-        markDocumentDirty,
-        markEditorDirty,
-        syncBlockSourceReveal,
-    });
+    const context = createDocumentEditorEventContext();
+    const handledByFormat = getActiveDocumentFormat().editorBehavior?.input?.(event, context) ?? false;
+    if (!handledByFormat) {
+        handleEditorInputCommand(event, context);
+    }
     commitUndoTransaction();
     flushTypingBatchAfterInputIfNeeded();
 }
 
 function handleEditorPaste(event: ClipboardEvent): void {
     beginDiscreteUndoTransaction();
-    void handleEditorPasteCommand(event, {
-        getActiveDocumentFormat,
-        getActiveFilePath: () => documentState.activeFilePath,
-        ensureDocumentSaved: () =>
-            saveCurrentDocument({
-                promptForPath: true,
-                suggestedFileName: getSuggestedFileName(),
-            }),
-        markEditorDirty,
-    }).finally(commitUndoTransaction);
+    void handleEditorPasteFromFormatOrGeneric(event).finally(commitUndoTransaction);
 }
 
 function handleEditorCopy(event: ClipboardEvent): void {
@@ -500,6 +516,23 @@ function handleEditorCut(event: ClipboardEvent): void {
         markEditorDirty,
     });
     commitUndoTransaction();
+}
+
+async function handleEditorPasteFromFormatOrGeneric(event: ClipboardEvent): Promise<void> {
+    const context = createDocumentPasteContext();
+    const handledByFormat = await getActiveDocumentFormat().editorBehavior?.paste?.(event, context);
+    if (handledByFormat) {
+        return;
+    }
+
+    await handleEditorPasteCommand(event, {
+        getActiveDocumentFormat,
+        markEditorDirty,
+    });
+}
+
+function handleEditorClick(event: MouseEvent): void {
+    getActiveDocumentFormat().editorBehavior?.click?.(event, createDocumentEditorEventContext());
 }
 
 function isDiscreteEditorKeydown(event: KeyboardEvent): boolean {

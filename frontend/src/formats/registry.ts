@@ -44,6 +44,10 @@ const documentFormats: DocumentFormat[] = [
 const defaultDocumentFormat = markdownDocumentFormat;
 const fallbackDocumentFormat = plainTextDocumentFormat;
 
+export function getDocumentFormats(): DocumentFormat[] {
+    return [...documentFormats];
+}
+
 export function getDocumentFormatById(id: string | null | undefined): DocumentFormat {
     return documentFormats.find((format) => format.id === id) ?? defaultDocumentFormat;
 }

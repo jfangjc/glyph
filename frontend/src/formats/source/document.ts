@@ -9,7 +9,7 @@ type SourceDocumentFormatOptions = {
     defaultExtension: string;
     defaultFileName: string;
     renderPlainTextContent?: (type: BlockType, text: string) => string | null;
-};
+} & Pick<DocumentFormat, "previewBehavior" | "plainTextHighlightPolicy">;
 
 export function createSourceDocumentFormat(options: SourceDocumentFormatOptions): DocumentFormat {
     return {
@@ -19,6 +19,8 @@ export function createSourceDocumentFormat(options: SourceDocumentFormatOptions)
         parseFragment: parseSourceFragment,
         serializeDocument: serializeSourceDocument,
         renderPlainTextContent: options.renderPlainTextContent,
+        previewBehavior: options.previewBehavior,
+        plainTextHighlightPolicy: options.plainTextHighlightPolicy,
     };
 }
 

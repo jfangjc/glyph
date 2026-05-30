@@ -1,22 +1,4 @@
-import {
-    insertLineBreakInOpenCodeFenceParagraph,
-    removeTrailingLineBreakInOpenCodeFenceParagraph,
-    startCodeBlockFromFence,
-    startTableFromHeader,
-} from "../../formats/markdown/editor/block-operations";
-import {
-    moveCaretAfterCodeBlockSourceAtSelection,
-    moveCaretIntoCodeBlockSourceAtBoundary,
-    handleBlockMarkdownSourceKeydown,
-    trackVerticalBlockSourceNavigation,
-} from "../../formats/markdown/editor/source-controller";
-import {
-    moveCaretAfterActiveDisplayMathTokenSource,
-    moveCaretOutOfActiveMarkdownTokenSource,
-    trackHorizontalMarkdownNavigation,
-    trackVerticalLeadingTokenNavigation,
-    trackVerticalMarkdownImageNavigation,
-} from "../../formats/markdown/editor/token-controller";
+import type { DocumentEditorEventContext } from "../../formats/types";
 import {
     indentListBlocks,
     mergeForward,
@@ -40,20 +22,13 @@ import {
     isCompositionEvent,
     isPlainTextKey,
     isSelectAllShortcut,
-    readInlineFormatShortcut,
 } from "./keyboard-shortcuts";
 import {
-    applyInlineFormatShortcut,
     deleteSelectedContent,
     replaceSelectionWithText,
 } from "../selection/commands";
 
-type EditorKeydownOptions = {
-    isComposingText: boolean;
-    markEditorDirty: () => void;
-};
-
-export function handleEditorKeydown(event: KeyboardEvent, options: EditorKeydownOptions): void {
+export function handleEditorKeydown(event: KeyboardEvent, options: DocumentEditorEventContext): void {
     const editor = getElement<HTMLElement>("editor");
 
     if (isCompositionEvent(event, options.isComposingText)) {
@@ -71,38 +46,6 @@ export function handleEditorKeydown(event: KeyboardEvent, options: EditorKeydown
         return;
     }
 
-    if (handleBlockMarkdownSourceKeydown(event)) {
-        return;
-    }
-
-    const inlineFormat = readInlineFormatShortcut(event);
-    if (inlineFormat) {
-        event.preventDefault();
-        if (applyInlineFormatShortcut(block, inlineFormat)) {
-            options.markEditorDirty();
-        }
-        return;
-    }
-
-    if (moveCaretOutOfActiveMarkdownTokenSource(event, block)) {
-        event.preventDefault();
-        return;
-    }
-
-    if (moveCaretAfterActiveDisplayMathTokenSource(event, block)) {
-        event.preventDefault();
-        return;
-    }
-
-    if (trackVerticalBlockSourceNavigation(event, block)) {
-        return;
-    }
-    trackHorizontalMarkdownNavigation(event);
-    trackVerticalLeadingTokenNavigation(event, block);
-    if (trackVerticalMarkdownImageNavigation(event, block)) {
-        return;
-    }
-
     if (event.key === "Tab" && indentListBlocks(block, event.shiftKey ? -1 : 1)) {
         event.preventDefault();
         options.markEditorDirty();
@@ -113,28 +56,8 @@ export function handleEditorKeydown(event: KeyboardEvent, options: EditorKeydown
         event.preventDefault();
         const targetBlock = deleteSelectedContent() ?? block;
 
-        if (startCodeBlockFromFence(targetBlock)) {
-            options.markEditorDirty();
-            return;
-        }
-
-        if (startTableFromHeader(targetBlock)) {
-            options.markEditorDirty();
-            return;
-        }
-
-        if (moveCaretAfterCodeBlockSourceAtSelection(targetBlock)) {
-            options.markEditorDirty();
-            return;
-        }
-
         if (isMultilinePlainTextBlockType(readBlockType(targetBlock.dataset.type)) && !event.ctrlKey && !event.metaKey) {
             replaceSelectionWithText(targetBlock, "\n");
-            options.markEditorDirty();
-            return;
-        }
-
-        if (insertLineBreakInOpenCodeFenceParagraph(targetBlock)) {
             options.markEditorDirty();
             return;
         }
@@ -180,18 +103,7 @@ export function handleEditorKeydown(event: KeyboardEvent, options: EditorKeydown
             return;
         }
 
-        if (moveCaretIntoCodeBlockSourceAtBoundary(event, block)) {
-            event.preventDefault();
-            return;
-        }
-
         if (event.key === "Backspace" && removeTrailingLineBreakInMultilinePlainTextBlock(block)) {
-            event.preventDefault();
-            options.markEditorDirty();
-            return;
-        }
-
-        if (event.key === "Backspace" && removeTrailingLineBreakInOpenCodeFenceParagraph(block)) {
             event.preventDefault();
             options.markEditorDirty();
             return;

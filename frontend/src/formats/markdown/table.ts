@@ -3,6 +3,7 @@ import type { DocumentReferenceMap } from "../types";
 import { escapeHtml } from "../../utils/text";
 import { renderMarkdownHtmlBlock } from "./html";
 import { renderLatexMath } from "./math";
+import { isEscapedAt } from "./utils";
 
 export type MarkdownTableBlock = {
     block: ParsedBlock;
@@ -349,14 +350,4 @@ function readTableRowCellRanges(line: string, lineStart: number): Array<{ start:
     }
 
     return ranges;
-}
-
-function isEscapedAt(text: string, index: number): boolean {
-    let slashCount = 0;
-
-    for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
-        slashCount += 1;
-    }
-
-    return slashCount % 2 === 1;
 }

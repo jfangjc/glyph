@@ -18,6 +18,51 @@ export type ParsedDocumentFragment = {
     references?: DocumentReferenceMap;
 };
 
+export type DocumentEditorHooks = {
+    markDocumentDirty: () => void;
+    markEditorDirty: () => void;
+    syncActiveBlockIndicator: (block: HTMLElement | null) => void;
+    syncBlockSourceReveal: (block: HTMLElement | null) => void;
+    syncBlockSourceRevealBlocks: (blocks: HTMLElement[]) => void;
+};
+
+export type DocumentEditorEventContext = DocumentEditorHooks & {
+    isComposingText: boolean;
+};
+
+export type DocumentPasteContext = DocumentEditorEventContext & {
+    getActiveDocumentFormat: () => DocumentFormat;
+    getActiveFilePath: () => string | null;
+    ensureDocumentSaved: () => Promise<boolean>;
+};
+
+export type DocumentEditorBehavior = {
+    install?: (hooks: DocumentEditorHooks) => void;
+    beforeInput?: (event: InputEvent, context: DocumentEditorEventContext) => boolean;
+    input?: (event: Event, context: DocumentEditorEventContext) => boolean;
+    keydown?: (event: KeyboardEvent, context: DocumentEditorEventContext) => boolean;
+    mouseDown?: (event: MouseEvent, context: DocumentEditorEventContext) => boolean;
+    click?: (event: MouseEvent, context: DocumentEditorEventContext) => boolean;
+    selectionChange?: (context: DocumentEditorEventContext) => boolean;
+    paste?: (event: ClipboardEvent, context: DocumentPasteContext) => boolean | Promise<boolean>;
+    beforeSerialize?: () => void;
+};
+
+export type DocumentPreviewContext = {
+    activeFilePath: string | null;
+    isSavingDocument: boolean;
+};
+
+export type DocumentPreviewBehavior = {
+    sync: (context: DocumentPreviewContext) => void;
+    deactivate: (context: DocumentPreviewContext) => void;
+};
+
+export type PlainTextHighlightPolicy = {
+    liveMaxChars: number;
+    delayMs: number;
+};
+
 export type DocumentFormat = {
     id: string;
     label: string;
@@ -35,4 +80,8 @@ export type DocumentFormat = {
     renderPlainTextContent?: (type: BlockType, text: string) => string | null;
     renderBlock?: (type: BlockType, text: string, references: DocumentReferenceMap) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
+    editorBehavior?: DocumentEditorBehavior;
+    previewBehavior?: DocumentPreviewBehavior;
+    clipboardMimeTypes?: string[];
+    plainTextHighlightPolicy?: PlainTextHighlightPolicy;
 };

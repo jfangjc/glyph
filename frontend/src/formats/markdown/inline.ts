@@ -6,6 +6,7 @@ import {
 import type { DocumentReferenceMap } from "../types";
 import { escapeHtml } from "../../utils/text";
 import { renderLatexMath } from "./math";
+import { findUnescapedSequence, isEscapedAt } from "./utils";
 
 type InlineToken = {
     raw: string;
@@ -55,83 +56,23 @@ export function renderInlineMarkdown(text: string, references: DocumentReference
         return escapeHtml(text);
     }
 
-    let html = "";
+    const html: string[] = [];
     let index = 0;
 
     while (index < text.length) {
-        const inlineCode = readInlineCodeToken(text, index);
-        if (inlineCode) {
-            html += renderInlineCodeToken(inlineCode);
-            index += inlineCode.raw.length;
+        const token = renderInlineTokenAt(text, index, references, depth);
+        if (token) {
+            html.push(token.html);
+            index += token.length;
             continue;
         }
 
-        const escapedCharacter = readEscapedCharacter(text, index);
-        if (escapedCharacter) {
-            html += renderEscapedCharacter(escapedCharacter);
-            index += escapedCharacter.raw.length;
-            continue;
-        }
-
-        const math = readMathToken(text, index);
-        if (math) {
-            html += renderMathToken(math);
-            index += math.raw.length;
-            continue;
-        }
-
-        const autolink = readAutolink(text, index);
-        if (autolink) {
-            html += renderAutolinkToken(autolink);
-            index += autolink.raw.length;
-            continue;
-        }
-
-        const image = readInlineToken(text, index, true) ?? readReferenceToken(text, index, true, references);
-        if (image) {
-            html += renderImageToken(image);
-            index += image.raw.length;
-            continue;
-        }
-
-        const link = readInlineToken(text, index, false) ?? readReferenceToken(text, index, false, references);
-        if (link) {
-            html += renderLinkToken(link, references, depth + 1);
-            index += link.raw.length;
-            continue;
-        }
-
-        const emphasis = readEmphasisToken(text, index);
-        if (emphasis) {
-            html += renderEmphasisToken(emphasis, references, depth + 1);
-            index += emphasis.raw.length;
-            continue;
-        }
-
-        const url = readBareUrl(text, index);
-        if (url) {
-            html += renderBareUrl(url);
-            index += url.length;
-            continue;
-        }
-
-        if (text[index] === "\\" && text[index + 1] === "\n") {
-            html += '<br data-source-raw="\\&#10;">';
-            index += 2;
-            continue;
-        }
-
-        if (text[index] === "\n") {
-            html += '<br data-source-raw="&#10;">';
-            index += 1;
-            continue;
-        }
-
-        html += escapeHtml(text[index]);
-        index += 1;
+        const plainEnd = findNextInlineSpecialIndex(text, index + 1);
+        html.push(escapeHtml(text.slice(index, plainEnd)));
+        index = plainEnd;
     }
 
-    return html;
+    return html.join("");
 }
 
 export function findFirstInlineToken(text: string): { start: number; token: MarkdownInlineToken } | null {
@@ -153,6 +94,104 @@ export function findFirstInlineToken(text: string): { start: number; token: Mark
     }
 
     return null;
+}
+
+function renderInlineTokenAt(
+    text: string,
+    index: number,
+    references: DocumentReferenceMap,
+    depth: number,
+): { html: string; length: number } | null {
+    const character = text[index];
+
+    if (character === "`") {
+        const inlineCode = readInlineCodeToken(text, index);
+        return inlineCode ? { html: renderInlineCodeToken(inlineCode), length: inlineCode.raw.length } : null;
+    }
+
+    if (character === "\\") {
+        if (text[index + 1] === "\n") {
+            return { html: '<br data-source-raw="\\&#10;">', length: 2 };
+        }
+
+        const escapedCharacter = readEscapedCharacter(text, index);
+        return escapedCharacter
+            ? { html: renderEscapedCharacter(escapedCharacter), length: escapedCharacter.raw.length }
+            : null;
+    }
+
+    if (character === "$") {
+        const math = readMathToken(text, index);
+        return math ? { html: renderMathToken(math), length: math.raw.length } : null;
+    }
+
+    if (character === "<") {
+        const autolink = readAutolink(text, index);
+        return autolink ? { html: renderAutolinkToken(autolink), length: autolink.raw.length } : null;
+    }
+
+    if (character === "!" && text[index + 1] === "[") {
+        const image = readInlineToken(text, index, true) ?? readReferenceToken(text, index, true, references);
+        return image ? { html: renderImageToken(image), length: image.raw.length } : null;
+    }
+
+    if (character === "[") {
+        const link = readInlineToken(text, index, false) ?? readReferenceToken(text, index, false, references);
+        return link ? { html: renderLinkToken(link, references, depth + 1), length: link.raw.length } : null;
+    }
+
+    if (character === "*" || character === "_") {
+        const emphasis = readEmphasisToken(text, index);
+        return emphasis
+            ? { html: renderEmphasisToken(emphasis, references, depth + 1), length: emphasis.raw.length }
+            : null;
+    }
+
+    if (character === "\n") {
+        return { html: '<br data-source-raw="&#10;">', length: 1 };
+    }
+
+    if (isPotentialBareUrlStart(text, index)) {
+        const url = readBareUrl(text, index);
+        return url ? { html: renderBareUrl(url), length: url.length } : null;
+    }
+
+    return null;
+}
+
+function findNextInlineSpecialIndex(text: string, start: number): number {
+    for (let index = start; index < text.length; index += 1) {
+        if (isInlineSpecialCharacter(text, index)) {
+            return index;
+        }
+    }
+
+    return text.length;
+}
+
+function isInlineSpecialCharacter(text: string, index: number): boolean {
+    const character = text[index];
+    return (
+        character === "`" ||
+        character === "\\" ||
+        character === "$" ||
+        character === "<" ||
+        character === "!" ||
+        character === "[" ||
+        character === "*" ||
+        character === "_" ||
+        character === "\n" ||
+        isPotentialBareUrlStart(text, index)
+    );
+}
+
+function isPotentialBareUrlStart(text: string, index: number): boolean {
+    const character = text[index].toLowerCase();
+    if (character === "h") {
+        return /^https?:\/\//i.test(text.slice(index, index + 8));
+    }
+
+    return character === "w" && /^www\./i.test(text.slice(index, index + 4));
 }
 
 function readMathToken(text: string, index: number): MathToken | null {
@@ -584,31 +623,6 @@ function findClosingBracket(text: string, startIndex: number): number {
     }
 
     return -1;
-}
-
-function findUnescapedSequence(text: string, sequence: string, startIndex: number): number {
-    for (let index = startIndex; index < text.length; index += 1) {
-        if (text[index] === "\\") {
-            index += 1;
-            continue;
-        }
-
-        if (text.startsWith(sequence, index)) {
-            return index;
-        }
-    }
-
-    return -1;
-}
-
-function isEscapedAt(text: string, index: number): boolean {
-    let slashCount = 0;
-
-    for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
-        slashCount += 1;
-    }
-
-    return slashCount % 2 === 1;
 }
 
 function findClosingParenthesis(text: string, startIndex: number): number {

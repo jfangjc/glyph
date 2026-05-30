@@ -1,4 +1,4 @@
-import type { DocumentReferenceMap } from "../../formats/types";
+import type { DocumentReferenceMap, PlainTextHighlightPolicy } from "../../formats/types";
 import { blockLabels, headingTypes, readBlockType, type BlockType, type ParsedBlock } from "./model";
 import {
     renderAtomicBlockContent,
@@ -10,7 +10,12 @@ import {
     type BlockSource,
 } from "./rendering";
 import { getElement } from "../../utils/dom";
-import { caretSpacerCharacter, getRenderedContentText } from "../selection/rendered-content-dom";
+import {
+    caretSpacerCharacter,
+    findRenderedContentTextPosition,
+    getRenderedContentBoundaryOffset,
+    getRenderedContentText,
+} from "../selection/rendered-content-dom";
 import { escapeHtml } from "../../utils/text";
 import { readMathSourceText } from "../../formats/markdown/math";
 
@@ -22,6 +27,7 @@ type BlockRenderContext = {
     renderBlockContent?: (type: BlockType, text: string, references: DocumentReferenceMap) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
+    plainTextHighlightPolicy?: PlainTextHighlightPolicy;
 };
 
 let renderContext: BlockRenderContext = {
@@ -30,9 +36,36 @@ let renderContext: BlockRenderContext = {
     renderInlineContent: renderPlainInlineContent,
 };
 
+type RenderCacheEntry = {
+    inlineHtml?: string;
+    inlineRevision?: number;
+    previewHtml?: string;
+    previewRevision?: number;
+    plainText?: {
+        text: string;
+        highlightedHtml: string | null;
+        revision: number;
+    };
+};
+
+type PlainTextHighlightResult = {
+    html: string | null;
+    delayed: boolean;
+};
+
+const renderCache = new WeakMap<HTMLElement, RenderCacheEntry>();
+const pendingPlainTextHighlights = new WeakMap<HTMLElement, { timer: number; text: string; revision: number }>();
+let renderRevision = 0;
+
 export function configureBlockView(context: Partial<BlockRenderContext>): void {
-    renderContext = { ...renderContext, ...context };
-    renderContext.renderInlineContent = context.renderInlineContent ?? renderPlainInlineContent;
+    const nextContext = { ...renderContext, ...context };
+    nextContext.renderInlineContent = context.renderInlineContent ?? renderPlainInlineContent;
+
+    if (didRenderContextChange(renderContext, nextContext)) {
+        renderRevision += 1;
+    }
+
+    renderContext = nextContext;
 }
 
 export function createBlock(type: BlockType = "paragraph", text = "", options: Partial<ParsedBlock> = {}): HTMLElement {
@@ -110,40 +143,49 @@ export function setBlockText(block: HTMLElement, text: string): void {
 
     if (type === "code") {
         renderCodeBlockContent(content, text, source);
-        delete content.dataset.renderedMarkdown;
+        clearRenderCache(content);
         return;
     }
 
     const blockHtml = renderContext.renderBlockContent?.(type, text, renderContext.references);
     if (blockHtml !== undefined && blockHtml !== null) {
+        const previewHtml = `${serializeBlockSource(source)}\u0000${blockHtml}`;
+        const cache = getRenderCache(content);
+        if (cache.previewHtml === previewHtml && cache.previewRevision === renderRevision) {
+            return;
+        }
+
         renderPreviewBlockContent(content, text, blockHtml, `markdown-${type}-preview`, source);
-        content.dataset.renderedMarkdown = blockHtml;
+        cache.previewHtml = previewHtml;
+        cache.previewRevision = renderRevision;
         renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
         return;
     }
 
     if (isPlainTextBlockType(type) || isOpenFencedCodeParagraph(type, text)) {
-        const highlightedHtml = readPlainTextHighlightHtml(type, text);
-        renderPlainTextBlockContent(content, text, source, highlightedHtml);
-        syncPlainTextHighlightCache(content, highlightedHtml);
-        delete content.dataset.renderedMarkdown;
+        const highlight = readPlainTextHighlight(type, text, block, content, source);
+        renderPlainTextBlockContent(content, text, source, highlight.html);
+        syncPlainTextHighlightCache(content, text, highlight.html, highlight.delayed);
+        clearInlineAndPreviewCache(content);
         return;
     }
 
     if (isAtomicBlockType(type)) {
         renderAtomicBlockContent(content, source);
-        delete content.dataset.renderedMarkdown;
+        clearRenderCache(content);
         return;
     }
 
     const html = renderBlockInnerHtml(block, type, text, source);
 
-    if (content.dataset.renderedMarkdown === html) {
+    const cache = getRenderCache(content);
+    if (cache.inlineHtml === html && cache.inlineRevision === renderRevision) {
         return;
     }
 
     content.innerHTML = html;
-    content.dataset.renderedMarkdown = html;
+    cache.inlineHtml = html;
+    cache.inlineRevision = renderRevision;
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
 }
 
@@ -162,13 +204,15 @@ export function rerenderInlineBlockContent(block: HTMLElement, offset: number): 
 
     const content = getBlockContent(block);
     const html = renderBlockInnerHtml(block, type, text, renderContext.readBlockSource?.(block, type, text) ?? {});
+    const cache = getRenderCache(content);
 
-    if (content.dataset.renderedMarkdown === html) {
+    if (cache.inlineHtml === html && cache.inlineRevision === renderRevision) {
         return null;
     }
 
     content.innerHTML = html;
-    content.dataset.renderedMarkdown = html;
+    cache.inlineHtml = html;
+    cache.inlineRevision = renderRevision;
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
 
     return Math.min(offset, getBlockText(block).length);
@@ -182,34 +226,198 @@ export function rerenderPlainTextBlockContent(block: HTMLElement, offset: number
 
     const content = getBlockContent(block);
     const text = getBlockText(block);
-    const highlightedHtml = readPlainTextHighlightHtml(type, text);
-    if (highlightedHtml === null || content.dataset.renderedPlainText === highlightedHtml) {
+    const source = renderContext.readBlockSource?.(block, type, text) ?? {};
+    const highlight = readPlainTextHighlight(type, text, block, content, source);
+    const cache = getRenderCache(content);
+    if (
+        !highlight.delayed &&
+        (highlight.html === null ||
+            (cache.plainText?.text === text &&
+                cache.plainText.highlightedHtml === highlight.html &&
+                cache.plainText.revision === renderRevision))
+    ) {
         return null;
     }
 
-    renderPlainTextBlockContent(
-        content,
-        text,
-        renderContext.readBlockSource?.(block, type, text) ?? {},
-        highlightedHtml,
-    );
-    syncPlainTextHighlightCache(content, highlightedHtml);
-    delete content.dataset.renderedMarkdown;
+    renderPlainTextBlockContent(content, text, source, highlight.html);
+    syncPlainTextHighlightCache(content, text, highlight.html, highlight.delayed);
+    clearInlineAndPreviewCache(content);
 
     return Math.min(offset, text.length);
 }
 
-function readPlainTextHighlightHtml(type: BlockType, text: string): string | null {
-    return renderContext.renderPlainTextContent?.(type, text) ?? null;
+function readPlainTextHighlight(
+    type: BlockType,
+    text: string,
+    block: HTMLElement,
+    content: HTMLElement,
+    source: BlockSource,
+): PlainTextHighlightResult {
+    const renderPlainTextContent = renderContext.renderPlainTextContent;
+    if (!renderPlainTextContent) {
+        cancelPendingPlainTextHighlight(content);
+        return { html: null, delayed: false };
+    }
+
+    const policy = renderContext.plainTextHighlightPolicy;
+    if (policy && text.length >= policy.liveMaxChars) {
+        schedulePlainTextHighlight(block, content, type, text, source, policy);
+        return { html: null, delayed: true };
+    }
+
+    cancelPendingPlainTextHighlight(content);
+    return { html: renderPlainTextContent(type, text), delayed: false };
 }
 
-function syncPlainTextHighlightCache(content: HTMLElement, highlightedHtml: string | null): void {
-    if (highlightedHtml === null) {
-        delete content.dataset.renderedPlainText;
+function syncPlainTextHighlightCache(
+    content: HTMLElement,
+    text: string,
+    highlightedHtml: string | null,
+    delayed: boolean,
+): void {
+    const cache = getRenderCache(content);
+    if (delayed) {
+        delete cache.plainText;
         return;
     }
 
-    content.dataset.renderedPlainText = highlightedHtml;
+    cache.plainText = {
+        text,
+        highlightedHtml,
+        revision: renderRevision,
+    };
+}
+
+function schedulePlainTextHighlight(
+    block: HTMLElement,
+    content: HTMLElement,
+    type: BlockType,
+    text: string,
+    source: BlockSource,
+    policy: PlainTextHighlightPolicy,
+): void {
+    const pending = pendingPlainTextHighlights.get(content);
+    if (pending?.text === text && pending.revision === renderRevision) {
+        return;
+    }
+
+    cancelPendingPlainTextHighlight(content);
+    const revision = renderRevision;
+    const timer = window.setTimeout(() => {
+        pendingPlainTextHighlights.delete(content);
+        if (!block.isConnected || !content.isConnected || readBlockType(block.dataset.type) !== type) {
+            return;
+        }
+
+        if (getBlockText(block) !== text) {
+            return;
+        }
+
+        const renderPlainTextContent = renderContext.renderPlainTextContent;
+        if (!renderPlainTextContent) {
+            return;
+        }
+
+        const activeOffset = readCurrentBlockOffset(block);
+        const highlightedHtml = renderPlainTextContent(type, text);
+        const nextSource = renderContext.readBlockSource?.(block, type, text) ?? source;
+
+        renderPlainTextBlockContent(content, text, nextSource, highlightedHtml);
+        getRenderCache(content).plainText = {
+            text,
+            highlightedHtml,
+            revision: renderRevision,
+        };
+
+        if (activeOffset !== null) {
+            focusBlockContentAtOffset(block, Math.min(activeOffset, text.length));
+        }
+    }, policy.delayMs);
+
+    pendingPlainTextHighlights.set(content, { timer, text, revision });
+}
+
+function cancelPendingPlainTextHighlight(content: HTMLElement): void {
+    const pending = pendingPlainTextHighlights.get(content);
+    if (!pending) {
+        return;
+    }
+
+    window.clearTimeout(pending.timer);
+    pendingPlainTextHighlights.delete(content);
+}
+
+function getRenderCache(content: HTMLElement): RenderCacheEntry {
+    let cache = renderCache.get(content);
+    if (!cache) {
+        cache = {};
+        renderCache.set(content, cache);
+    }
+    return cache;
+}
+
+function clearRenderCache(content: HTMLElement): void {
+    cancelPendingPlainTextHighlight(content);
+    renderCache.delete(content);
+}
+
+function clearInlineAndPreviewCache(content: HTMLElement): void {
+    const cache = getRenderCache(content);
+    delete cache.inlineHtml;
+    delete cache.inlineRevision;
+    delete cache.previewHtml;
+    delete cache.previewRevision;
+}
+
+function serializeBlockSource(source: BlockSource): string {
+    return [
+        source.prefix ?? "",
+        source.prefixEditable === false ? "0" : "1",
+        source.suffix ?? "",
+        source.atomic ?? "",
+    ].join("\u0000");
+}
+
+function didRenderContextChange(previous: BlockRenderContext, next: BlockRenderContext): boolean {
+    return (
+        previous.references !== next.references ||
+        previous.activeFilePath !== next.activeFilePath ||
+        previous.renderInlineContent !== next.renderInlineContent ||
+        previous.renderPlainTextContent !== next.renderPlainTextContent ||
+        previous.renderBlockContent !== next.renderBlockContent ||
+        previous.hydrateRenderedContent !== next.hydrateRenderedContent ||
+        previous.readBlockSource !== next.readBlockSource ||
+        previous.plainTextHighlightPolicy !== next.plainTextHighlightPolicy
+    );
+}
+
+function readCurrentBlockOffset(block: HTMLElement): number | null {
+    const content = getBlockContent(block);
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+
+    if (!selection?.isCollapsed || !focusNode || (focusNode !== content && !content.contains(focusNode))) {
+        return null;
+    }
+
+    return getRenderedContentBoundaryOffset(content, focusNode, selection.focusOffset);
+}
+
+function focusBlockContentAtOffset(block: HTMLElement, offset: number): void {
+    const editor = getElement<HTMLElement>("editor");
+    const content = getBlockContent(block);
+    const selection = document.getSelection();
+    const range = document.createRange();
+    const position = findRenderedContentTextPosition(content, Math.max(0, offset)) ?? {
+        node: content,
+        offset: content.childNodes.length,
+    };
+
+    editor.focus();
+    range.setStart(position.node, position.offset);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
 }
 
 function renderBlockInnerHtml(block: HTMLElement, type: BlockType, text: string, source: BlockSource): string {

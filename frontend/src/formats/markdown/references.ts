@@ -1,4 +1,5 @@
 import type { DocumentReference } from "../types";
+import { countIndentColumns } from "./utils";
 
 export function normalizeReferenceLabel(label: string): string {
     return label.trim().replace(/\s+/g, " ").toLowerCase();
@@ -125,20 +126,4 @@ function findUnescapedCharacter(text: string, character: string, startIndex: num
     }
 
     return -1;
-}
-
-function countIndentColumns(value: string): number {
-    let columns = 0;
-
-    for (let index = 0; index < value.length; index += 1) {
-        const character = value[index];
-
-        if (character === "\t") {
-            columns += 4 - (columns % 4);
-        } else {
-            columns += 1;
-        }
-    }
-
-    return columns;
 }

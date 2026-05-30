@@ -8,6 +8,8 @@ import { hydrateMarkdownImagePreviews } from "./images";
 import { renderInlineMarkdown } from "./inline";
 import { parseMarkdownReferenceDefinition } from "./references";
 import { readMarkdownTable, renderMarkdownBlock } from "./table";
+import { markdownEditorBehavior } from "./editor/behavior";
+import { countIndentColumns, serializeListIndent } from "./utils";
 
 export const markdownDocumentFormat: DocumentFormat = {
     id: "markdown",
@@ -25,6 +27,8 @@ export const markdownDocumentFormat: DocumentFormat = {
     renderInline: renderInlineMarkdown,
     renderBlock: (type, text, references) => renderMarkdownBlock(type, text, references, renderInlineMarkdown),
     hydrateRenderedContent: hydrateMarkdownImagePreviews,
+    editorBehavior: markdownEditorBehavior,
+    clipboardMimeTypes: ["text/markdown"],
 };
 
 function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDocument {
@@ -470,26 +474,6 @@ function readMarkdownIndent(value: string): number {
     const level = Math.floor(columns / 2);
 
     return Math.min(Math.max(level, 0), 3);
-}
-
-function serializeListIndent(indent: number | undefined): string {
-    return "  ".repeat(Math.max(0, Math.min(indent ?? 0, 3)));
-}
-
-function countIndentColumns(value: string): number {
-    let columns = 0;
-
-    for (let index = 0; index < value.length; index += 1) {
-        const character = value[index];
-
-        if (character === "\t") {
-            columns += 4 - (columns % 4);
-        } else {
-            columns += 1;
-        }
-    }
-
-    return columns;
 }
 
 function readCodeFence(line: string): { marker: string; info: string } | null {

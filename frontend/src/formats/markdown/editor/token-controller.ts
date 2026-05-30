@@ -17,11 +17,13 @@ import {
 import {
     focusBlockAtOffset,
     getCaretOffset,
+    getCaretPositionFromPoint,
     getCurrentBlockOffset,
     getTextPosition,
 } from "../../../editor/selection/caret";
 import { caretSpacerCharacter } from "../../../editor/selection/rendered-content-dom";
 import { getElement } from "../../../utils/dom";
+import { clamp } from "../../../utils/text";
 import { setPointerSelecting } from "../../../editor/pointer-interactions";
 
 type MarkdownTokenHooks = {
@@ -35,6 +37,7 @@ let suppressSelectionChange = false;
 let suppressedMarkdownTokenActivation: { block: HTMLElement; offset: number } | null = null;
 let pendingHorizontalNavigationTarget: { token: HTMLElement; edge: MarkdownTokenEdge; requestId: number } | null = null;
 let pendingHorizontalNavigationRequestId = 0;
+let pendingClickRevealRequestId = 0;
 let pendingVerticalLeadingTokenNavigationRequestId = 0;
 let pendingVerticalLeadingTokenNavigationTarget: { requestId: number } | null = null;
 let activeMarkdownTokens = new Set<HTMLElement>();
@@ -72,14 +75,14 @@ export function handleEditorClick(event: MouseEvent): void {
             return;
         }
 
-        activateMarkdownTokenSource(token);
+        activateMarkdownTokenSourceAtPoint(token, event.clientX, event.clientY);
         return;
     }
 
     const link = target.closest("a.markdown-link") as HTMLAnchorElement | null;
     const href = link?.dataset.href;
     if (!href) {
-        clearActiveMarkdownToken();
+        scheduleClickCaretTokenReveal(event.clientX, event.clientY, target);
         return;
     }
 
@@ -90,6 +93,58 @@ export function handleEditorClick(event: MouseEvent): void {
     if (event.ctrlKey || event.metaKey) {
         void Browser.OpenURL(href).catch((error) => console.error("Failed to open URL:", error));
     }
+}
+
+export function handleEditorMouseDown(event: MouseEvent): boolean {
+    if (
+        event.button !== 0 ||
+        event.defaultPrevented ||
+        event.detail > 1 ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+    ) {
+        return false;
+    }
+
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest(".markdown-token-source")) {
+        return false;
+    }
+
+    const token = findClickedMarkdownToken(target);
+    if (token) {
+        event.preventDefault();
+        event.stopPropagation();
+        activateMarkdownTokenSourceAtPoint(token, event.clientX, event.clientY);
+        return true;
+    }
+
+    if (!activateMarkdownTokenAtPoint(event.clientX, event.clientY, target)) {
+        return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+}
+
+function scheduleClickCaretTokenReveal(clientX: number, clientY: number, target: Element): void {
+    const requestId = pendingClickRevealRequestId + 1;
+    pendingClickRevealRequestId = requestId;
+
+    window.requestAnimationFrame(() => {
+        if (requestId !== pendingClickRevealRequestId) {
+            return;
+        }
+
+        if (activateMarkdownTokenAtPoint(clientX, clientY, target)) {
+            return;
+        }
+
+        clearActiveMarkdownToken();
+    });
 }
 
 export function handleSelectionChange(): void {
@@ -188,6 +243,22 @@ function activateMarkdownTokenSource(
     focusMarkdownTokenSource(token, edge, options);
 }
 
+function activateMarkdownTokenSourceAtPoint(
+    token: HTMLElement,
+    clientX: number,
+    clientY: number,
+    fallbackEdge: "start" | "end" = "end",
+): void {
+    setActiveMarkdownToken(token);
+    suppressSelectionChangeForFrame();
+
+    if (focusMarkdownTokenSourceAtPoint(token, clientX, clientY)) {
+        return;
+    }
+
+    focusMarkdownTokenSource(token, fallbackEdge);
+}
+
 export function activateMarkdownTokenAtCaret(): boolean {
     const selection = document.getSelection();
     const focusNode = selection?.focusNode;
@@ -200,13 +271,96 @@ export function activateMarkdownTokenAtCaret(): boolean {
         return false;
     }
 
-    const tokenPosition = findMarkdownTokenAtCaret(focusNode, selection.focusOffset, isAutoActivatableMarkdownToken);
+    return activateMarkdownTokenAtPosition(focusNode, selection.focusOffset);
+}
+
+function activateMarkdownTokenAtPoint(clientX: number, clientY: number, target: Element): boolean {
+    const position = getCaretPositionFromPoint(clientX, clientY);
+    if (position && activateMarkdownTokenAtPointPosition(position.node, position.offset, clientX, clientY)) {
+        return true;
+    }
+
+    const block = findPointBlock(target, clientX, clientY);
+    return block ? activateMarkdownTokenAtBlockPoint(block, clientX, clientY) : false;
+}
+
+function activateMarkdownTokenAtPosition(node: Node, offset: number): boolean {
+    if (isPositionInActiveMarkdownToken(node)) {
+        return true;
+    }
+
+    const tokenPosition = findMarkdownTokenAtCaret(node, offset, isAutoActivatableMarkdownToken);
     if (!tokenPosition) {
         return false;
     }
 
     activateMarkdownTokenSource(tokenPosition.token, tokenPosition.edge);
     return true;
+}
+
+function activateMarkdownTokenAtPointPosition(node: Node, offset: number, clientX: number, clientY: number): boolean {
+    const activeToken = findActiveMarkdownTokenAtPosition(node);
+    if (activeToken) {
+        focusMarkdownTokenSourceAtPoint(activeToken, clientX, clientY);
+        return true;
+    }
+
+    const tokenPosition = findMarkdownTokenAtCaret(node, offset, isAutoActivatableMarkdownToken);
+    if (!tokenPosition) {
+        return false;
+    }
+
+    activateMarkdownTokenSourceAtPoint(tokenPosition.token, clientX, clientY, tokenPosition.edge);
+    return true;
+}
+
+function isPositionInActiveMarkdownToken(node: Node): boolean {
+    return findActiveMarkdownTokenAtPosition(node) !== null;
+}
+
+function findActiveMarkdownTokenAtPosition(node: Node): HTMLElement | null {
+    const element = node instanceof Element ? node : node.parentElement;
+    const token = element?.closest<HTMLElement>(".markdown-token");
+
+    return token?.dataset.active === "true" && isEditableMarkdownToken(token) ? token : null;
+}
+
+function findPointBlock(target: Element, clientX: number, clientY: number): HTMLElement | null {
+    const targetBlock = findBlock(target);
+    if (targetBlock) {
+        return targetBlock;
+    }
+
+    const pointTarget = document.elementFromPoint(clientX, clientY);
+    return pointTarget instanceof Element ? findBlock(pointTarget) : null;
+}
+
+function activateMarkdownTokenAtBlockPoint(block: HTMLElement, clientX: number, clientY: number): boolean {
+    const content = getBlockContent(block);
+    const rect = content.getBoundingClientRect();
+
+    if (clientY < rect.top || clientY > rect.bottom) {
+        return false;
+    }
+
+    const clampedX = clamp(clientX, rect.left + 1, rect.right - 1);
+    const clampedY = clamp(clientY, rect.top + 1, rect.bottom - 1);
+    const position = getCaretPositionFromPoint(clampedX, clampedY);
+    if (position && (position.node === content || content.contains(position.node))) {
+        const offset = getCaretOffset(content, position.node, position.offset);
+        return activateMarkdownTokenAtBlockOffset(content, offset);
+    }
+
+    if (clientX <= rect.left) {
+        return activateMarkdownTokenAtBlockOffset(content, 0);
+    }
+
+    return activateMarkdownTokenAtBlockOffset(content, getBlockText(block).length);
+}
+
+function activateMarkdownTokenAtBlockOffset(content: HTMLElement, offset: number): boolean {
+    const position = getTextPosition(content, offset);
+    return activateMarkdownTokenAtPosition(position.node, position.offset);
 }
 
 function clearActiveMarkdownToken(
@@ -604,6 +758,36 @@ function focusMarkdownTokenSource(
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
+}
+
+function focusMarkdownTokenSourceAtPoint(token: HTMLElement, clientX: number, clientY: number): boolean {
+    const source = getMarkdownTokenSource(token);
+    const selection = document.getSelection();
+
+    if (!source || !selection) {
+        return false;
+    }
+
+    const rect = source.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+        return false;
+    }
+
+    const position = getCaretPositionFromPoint(
+        clamp(clientX, rect.left + 1, rect.right - 1),
+        clamp(clientY, rect.top + 1, rect.bottom - 1),
+    );
+
+    if (!position || (position.node !== source && !source.contains(position.node))) {
+        return false;
+    }
+
+    const range = document.createRange();
+    range.setStart(position.node, position.offset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
 }
 
 function readMarkdownTokenSourceFocusOffset(

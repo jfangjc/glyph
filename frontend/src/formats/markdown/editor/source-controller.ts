@@ -31,6 +31,7 @@ import { getRenderedContentText } from "../../../editor/selection/rendered-conte
 import { hasMarkdownBlockSource } from "../block-source";
 import { formatMarkdownTableSource } from "../table";
 import { readMathSourceText } from "../math";
+import { isEscapedAt, serializeListIndent } from "../utils";
 import { clearPendingMarkdownTokenNavigation } from "./token-controller";
 
 type MarkdownSourceHooks = {
@@ -381,16 +382,6 @@ function readTableColumnCount(text: string): number {
 
 function createEmptyTableRow(columnCount: number): string {
     return `| ${Array.from({ length: columnCount }, () => "").join(" | ")} |`;
-}
-
-function isEscapedAt(text: string, index: number): boolean {
-    let slashCount = 0;
-
-    for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
-        slashCount += 1;
-    }
-
-    return slashCount % 2 === 1;
 }
 
 export function moveCaretIntoCodeBlockSourceAtBoundary(event: KeyboardEvent, block: HTMLElement): boolean {
@@ -871,10 +862,6 @@ function getBlockSourceRawMarkdown(block: HTMLElement, source: HTMLElement): str
 function isListSourceBlock(block: HTMLElement): boolean {
     const type = readBlockType(block.dataset.type);
     return type === "list" || type === "ordered-list" || type === "todo";
-}
-
-function serializeListIndent(indent: number | undefined): string {
-    return "  ".repeat(Math.max(0, Math.min(indent ?? 0, 3)));
 }
 
 function getCodeBlockRawMarkdown(block: HTMLElement): string {

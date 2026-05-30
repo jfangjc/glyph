@@ -429,6 +429,10 @@
     display: inline;
 }
 
+.markdown-code-token code {
+    margin-inline: 0.06em;
+}
+
 .markdown-code-token .markdown-token-source {
     font-family: var(--glyph-font-code);
 }
@@ -613,10 +617,9 @@
 }
 
 .markdown-token[data-active="true"]:not(.markdown-image-token) .markdown-token-source {
-    position: absolute;
-    z-index: 2;
-    top: 50%;
-    left: 0;
+    grid-area: 1 / 1;
+    position: relative;
+    z-index: 1;
     display: inline;
     max-width: min(70vw, 680px);
     overflow: visible;
@@ -624,7 +627,6 @@
     border-radius: 3px;
     background: #ffffff;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 5%);
-    transform: translateY(-50%);
     white-space: pre;
 }
 

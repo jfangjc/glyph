@@ -28,6 +28,7 @@ import { parseMarkdownReferenceDefinition } from "../references";
 import { markdownShortcuts } from "../shortcuts";
 import { readSingleLineMarkdownHtmlBlock } from "../html";
 import { createMarkdownTableFromHeader } from "../table";
+import { countIndentColumns } from "../utils";
 
 export function startCodeBlockFromFence(block: HTMLElement): boolean {
     if (readBlockType(block.dataset.type) !== "paragraph" || !isCaretAtBlockEdge(block, "end")) {
@@ -207,12 +208,7 @@ function readOrderedListShortcut(text: string): { indent: number; listNumber: st
 }
 
 function readShortcutIndent(value: string): number {
-    let columns = 0;
-
-    for (let index = 0; index < value.length; index += 1) {
-        columns += value[index] === "\t" ? 4 - (columns % 4) : 1;
-    }
-
+    const columns = countIndentColumns(value);
     return Math.min(Math.max(Math.floor(columns / 2), 0), 3);
 }
 
