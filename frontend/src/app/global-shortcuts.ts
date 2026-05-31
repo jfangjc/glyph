@@ -1,8 +1,10 @@
 import { canUseDesktopFileSystem, openDocument } from "../documents/document-actions";
 import {
+    isFindShortcut,
     isNewFileShortcut,
     isOpenDirectoryShortcut,
     isOpenFileShortcut,
+    isReplaceShortcut,
     isSaveFileShortcut,
     isToggleFileTreeShortcut,
     readZoomShortcut,
@@ -11,6 +13,8 @@ import { syncLinkOpenIntentFromKeyboard } from "../editor/pointer-interactions";
 import { applyZoomShortcut } from "./zoom";
 
 type GlobalShortcutOptions = {
+    openFind: () => void;
+    openReplace: () => void;
     newDocument: () => void | Promise<void>;
     openDirectory: () => void | Promise<void>;
     saveDocument: (promptForPath?: boolean) => void | Promise<void>;
@@ -19,6 +23,18 @@ type GlobalShortcutOptions = {
 
 export function handleGlobalKeydown(event: KeyboardEvent, options: GlobalShortcutOptions): void {
     syncLinkOpenIntentFromKeyboard(event);
+
+    if (isFindShortcut(event)) {
+        event.preventDefault();
+        options.openFind();
+        return;
+    }
+
+    if (isReplaceShortcut(event)) {
+        event.preventDefault();
+        options.openReplace();
+        return;
+    }
 
     const zoomShortcut = readZoomShortcut(event);
     if (zoomShortcut) {

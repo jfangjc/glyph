@@ -37,6 +37,14 @@ export function isSaveFileShortcut(event: KeyboardEvent): boolean {
     return event.key.toLowerCase() === "s" && (event.ctrlKey || event.metaKey) && !event.altKey;
 }
 
+export function isFindShortcut(event: KeyboardEvent): boolean {
+    return event.key.toLowerCase() === "f" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+}
+
+export function isReplaceShortcut(event: KeyboardEvent): boolean {
+    return event.key.toLowerCase() === "h" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+}
+
 export function isToggleFileTreeShortcut(event: KeyboardEvent): boolean {
     return event.key.toLowerCase() === "e" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
 }

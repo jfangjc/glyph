@@ -12,6 +12,41 @@
     </aside>
 </section>
 
+<div id="find-replace-panel" class="find-replace-panel" role="search" aria-label="Find and replace" data-replace-expanded="false" hidden>
+    <div class="find-replace-row">
+        <button id="find-replace-toggle" class="find-replace-button" type="button" aria-label="Show replace" aria-expanded="false">
+            Replace
+        </button>
+        <input id="find-query" class="find-replace-input" type="search" placeholder="Find" aria-label="Find" autocomplete="off" spellcheck="false" />
+        <output id="find-counter" class="find-counter" aria-live="polite">0 / 0</output>
+        <button id="find-previous" class="find-replace-button find-replace-short-button" type="button" aria-label="Previous match">
+            Prev
+        </button>
+        <button id="find-next" class="find-replace-button find-replace-short-button" type="button" aria-label="Next match">
+            Next
+        </button>
+        <button id="find-case-sensitive" class="find-replace-button find-replace-toggle" type="button" aria-label="Match case" aria-pressed="false">
+            Aa
+        </button>
+        <button id="find-whole-word" class="find-replace-button find-replace-toggle" type="button" aria-label="Whole word" aria-pressed="false">
+            Word
+        </button>
+        <button id="find-close" class="find-replace-button find-replace-close-button" type="button" aria-label="Close find">
+            Close
+        </button>
+    </div>
+    <div id="replace-row" class="find-replace-row find-replace-replace-row" hidden>
+        <input id="replace-query" class="find-replace-input" type="text" placeholder="Replace" aria-label="Replace" autocomplete="off" spellcheck="false" />
+        <button id="replace-current" class="find-replace-button" type="button">
+            Replace
+        </button>
+        <button id="replace-all" class="find-replace-button" type="button">
+            Replace All
+        </button>
+    </div>
+</div>
+<div id="find-highlight-layer" class="find-highlight-layer" aria-hidden="true"></div>
+
 <template id="block-template">
     <article class="block" data-block data-type="paragraph">
         <input class="todo-checkbox" type="checkbox" aria-label="Todo complete" contenteditable="false" />

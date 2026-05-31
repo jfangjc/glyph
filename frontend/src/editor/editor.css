@@ -181,6 +181,138 @@ body.app-titlebar-host .document-surface[data-document-format="latex"][data-late
     visibility: hidden;
 }
 
+.find-replace-panel {
+    position: fixed;
+    z-index: 45;
+    top: 12px;
+    right: 18px;
+    display: grid;
+    width: min(640px, calc(100vw - 36px));
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid #d8d8d8;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 12px 32px rgba(15, 18, 22, 0.14);
+    color: #202124;
+    font: 400 13px/1.2 var(--glyph-font-text);
+    --wails-draggable: no-drag;
+}
+
+body.app-titlebar-host .find-replace-panel {
+    top: calc(var(--glyph-titlebar-height, 37px) + 10px);
+}
+
+.find-replace-panel[hidden] {
+    display: none;
+}
+
+.find-replace-row {
+    display: grid;
+    grid-template-columns: auto minmax(120px, 1fr) auto auto auto auto auto auto;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.find-replace-replace-row {
+    grid-template-columns: minmax(120px, 1fr) auto auto;
+}
+
+.find-replace-replace-row[hidden] {
+    display: none;
+}
+
+.find-replace-input {
+    min-width: 0;
+    height: 30px;
+    padding: 0 9px;
+    border: 1px solid #d5d8dc;
+    border-radius: 5px;
+    outline: 0;
+    background: #ffffff;
+    color: #202124;
+    font: inherit;
+}
+
+.find-replace-input:focus {
+    border-color: #8ab4f8;
+    box-shadow: 0 0 0 2px rgb(138 180 248 / 28%);
+}
+
+.find-counter {
+    min-width: 46px;
+    color: #6f7377;
+    font-size: 12px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.find-replace-button {
+    display: grid;
+    place-items: center;
+    min-width: 0;
+    min-height: 30px;
+    padding: 0 9px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: #202124;
+    cursor: default;
+    font: inherit;
+    white-space: nowrap;
+}
+
+.find-replace-short-button,
+.find-replace-toggle,
+.find-replace-close-button {
+    padding-inline: 8px;
+}
+
+.find-replace-button:hover,
+.find-replace-button:focus-visible {
+    background: #f1f3f4;
+    outline: 0;
+}
+
+.find-replace-button:disabled {
+    color: #a0a4a8;
+}
+
+.find-replace-button:disabled:hover,
+.find-replace-button:disabled:focus-visible {
+    background: transparent;
+}
+
+.find-replace-toggle[aria-pressed="true"] {
+    border-color: #c9dcff;
+    background: #e8f0fe;
+    color: #174ea6;
+}
+
+.find-highlight-layer {
+    position: fixed;
+    z-index: 35;
+    inset: 0;
+    pointer-events: none;
+}
+
+.find-highlight-layer:empty {
+    display: none;
+}
+
+.find-highlight-rect {
+    position: fixed;
+    border-radius: 3px;
+    background: rgb(255 214 102 / 45%);
+    pointer-events: none;
+}
+
+.find-highlight-rect[data-active="true"] {
+    background: rgb(251 188 4 / 58%);
+    box-shadow: 0 0 0 1px rgb(180 112 0 / 55%);
+}
+
 .document-outline {
     position: fixed;
     z-index: 20;
@@ -485,5 +617,91 @@ button.file-tree-row[data-selected] .file-tree-disclosure {
 
     .block::after {
         left: -20px;
+    }
+
+    .find-replace-panel {
+        right: 12px;
+        left: 12px;
+        width: auto;
+    }
+
+    .find-replace-row {
+        grid-template-columns: minmax(0, 1fr) auto auto auto;
+    }
+
+    .find-replace-row > .find-replace-button:first-child {
+        grid-column: 1 / -1;
+        justify-self: start;
+    }
+
+    .find-counter {
+        justify-self: end;
+    }
+
+    .find-replace-replace-row {
+        grid-template-columns: minmax(0, 1fr) auto auto;
+    }
+}
+
+@page {
+    size: Letter;
+    margin: 0.75in;
+}
+
+@media print {
+    html,
+    body {
+        width: auto;
+        min-width: 0;
+        height: auto;
+        min-height: 0;
+        overflow: visible;
+        background: #ffffff;
+    }
+
+    .app-titlebar,
+    .latex-preview,
+    .find-replace-panel,
+    .find-highlight-layer,
+    .document-outline,
+    .centered-frame,
+    .file-tree-frame {
+        display: none !important;
+    }
+
+    .editor-shell,
+    body.app-titlebar-host .editor-shell {
+        position: static;
+        width: auto;
+        height: auto;
+        overflow: visible;
+        scrollbar-gutter: auto;
+    }
+
+    .document-surface {
+        width: auto;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        cursor: default;
+        zoom: 1;
+    }
+
+    .document-title {
+        color: #191919;
+        font-size: 28pt;
+    }
+
+    .block-editor {
+        margin-top: 18pt;
+    }
+
+    .block-content,
+    .markdown-link {
+        cursor: default;
+    }
+
+    .block::after {
+        display: none;
     }
 }

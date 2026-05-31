@@ -1,7 +1,9 @@
 import { getSuggestedFileName, syncDocumentWindowTitle } from "../app/window-title";
+import { Window } from "@wailsio/runtime";
 import { handleGlobalKeydown as handleGlobalKeydownCommand } from "../app/global-shortcuts";
 import {
     bindDocumentActions,
+    canUseDesktopFileSystem,
     createNewMarkdownDocument,
     installOpenDocumentRequests,
     openDocument,
@@ -94,11 +96,16 @@ import {
 } from "../platform/window-controls/window-controls";
 import { getDocumentFormats } from "../formats/registry";
 import type { DocumentEditorEventContext, DocumentPasteContext } from "../formats/types";
+import {
+    installFindReplaceController,
+    type FindReplaceController,
+} from "./find-replace";
 
 let isComposingText = false;
 let shouldFlushTypingBatchAfterInput = false;
 let openDirectoryFromShortcut: (() => Promise<void>) | null = null;
 let toggleFileTreeFromShortcut: (() => void) | null = null;
+let findReplaceController: FindReplaceController | null = null;
 let lastSelectionSignature = "";
 
 export function installEditorController(): void {
@@ -117,6 +124,11 @@ export function installEditorController(): void {
     });
     openDirectoryFromShortcut = fileTree.openDirectory;
     toggleFileTreeFromShortcut = fileTree.toggle;
+    findReplaceController = installFindReplaceController({
+        editor,
+        shell,
+        onDirty: markEditorDirty,
+    });
     installEditorEventListeners(
         { surface, editor, title },
         {
@@ -177,6 +189,7 @@ export function installEditorController(): void {
     syncBlockViewContext();
     syncFirstBlockPlaceholder();
     syncDocumentWindowTitle();
+    syncExportMenuState();
 }
 
 async function restoreStartupDocument(): Promise<void> {
@@ -247,10 +260,14 @@ function handleDocumentStateChanged(): void {
     syncDocumentFormatUi();
     syncBlockViewContext();
     syncDocumentWindowTitle();
+    syncExportMenuState();
+    findReplaceController?.refresh();
 }
 
 function handleGlobalKeydown(event: KeyboardEvent): void {
     handleGlobalKeydownCommand(event, {
+        openFind: () => findReplaceController?.openFind(),
+        openReplace: () => findReplaceController?.openReplace(),
         newDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
         openDirectory: () => openDirectoryFromShortcut?.(),
         saveDocument: saveDocumentFromEditor,
@@ -283,6 +300,7 @@ function handleAppMenuCommand(event: CustomEvent<AppMenuCommandDetail>): void {
             void saveDocumentFromEditor(true);
             return;
         case "file:export":
+            void exportCurrentDocumentToPdf();
             return;
         case "edit:undo":
             undoFromMenu();
@@ -302,6 +320,12 @@ function handleAppMenuCommand(event: CustomEvent<AppMenuCommandDetail>): void {
         case "edit:select-all":
             selectAllFromMenu();
             return;
+        case "edit:find":
+            findReplaceController?.openFind();
+            return;
+        case "edit:replace":
+            findReplaceController?.openReplace();
+            return;
         case "view:toggle-file-tree":
             toggleFileTreeFromShortcut?.();
             return;
@@ -320,6 +344,84 @@ function handleAppMenuCommand(event: CustomEvent<AppMenuCommandDetail>): void {
         default:
             assertUnhandledMenuCommand(event.detail.command);
     }
+}
+
+async function exportCurrentDocumentToPdf(): Promise<void> {
+    if (documentState.activeFormatId !== "markdown") {
+        return;
+    }
+
+    if (canUseDesktopFileSystem()) {
+        const saved = await saveCurrentDocument({
+            promptForPath: !documentState.activeFilePath,
+            suggestedFileName: getSuggestedFileName(),
+        });
+        if (!saved) {
+            return;
+        }
+    }
+
+    try {
+        document.body.dataset.printingMarkdown = "true";
+        await waitForMarkdownExportView();
+        if (canUseWindowPrintRuntime()) {
+            await Window.Print();
+        } else {
+            window.print();
+        }
+    } catch (error) {
+        console.error("Failed to export PDF:", error);
+    } finally {
+        delete document.body.dataset.printingMarkdown;
+        getElement<HTMLElement>("editor").focus();
+    }
+}
+
+function syncExportMenuState(): void {
+    const exportButton = document.querySelector<HTMLButtonElement>('[data-app-command="file:export"]');
+    if (!exportButton) {
+        return;
+    }
+
+    exportButton.disabled = documentState.activeFormatId !== "markdown";
+}
+
+async function waitForMarkdownExportView(): Promise<void> {
+    await nextAnimationFrame();
+    await waitForPreviewImages(getElement<HTMLElement>("editor"));
+    await nextAnimationFrame();
+}
+
+function nextAnimationFrame(): Promise<void> {
+    return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function waitForPreviewImages(root: HTMLElement): Promise<void> {
+    const pendingImages = Array.from(root.querySelectorAll<HTMLImageElement>("img")).filter((image) => !image.complete);
+    if (pendingImages.length === 0) {
+        return Promise.resolve();
+    }
+
+    return Promise.all(
+        pendingImages.map(
+            (image) =>
+                new Promise<void>((resolve) => {
+                    const finish = () => resolve();
+                    image.addEventListener("load", finish, { once: true });
+                    image.addEventListener("error", finish, { once: true });
+                }),
+        ),
+    ).then(() => undefined);
+}
+
+function canUseWindowPrintRuntime(): boolean {
+    return Boolean(
+        (window as Window & { _wails?: { environment?: unknown } })._wails?.environment ||
+            (window as Window & { chrome?: { webview?: { postMessage?: unknown } } }).chrome?.webview?.postMessage ||
+            (window as Window & { webkit?: { messageHandlers?: { external?: { postMessage?: unknown } } } }).webkit
+                ?.messageHandlers?.external?.postMessage ||
+            (window as Window & { wails?: { invoke?: unknown } }).wails?.invoke,
+    );
 }
 
 function undoFromMenu(): void {

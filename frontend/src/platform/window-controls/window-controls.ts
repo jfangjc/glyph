@@ -18,6 +18,8 @@ export type AppMenuCommand =
     | "edit:copy"
     | "edit:paste"
     | "edit:select-all"
+    | "edit:find"
+    | "edit:replace"
     | "view:toggle-file-tree"
     | "view:zoom-in"
     | "view:zoom-out"
