@@ -49,6 +49,7 @@ type FootnoteReferenceToken = {
     raw: string;
     label: string;
     number: number;
+    id: string;
 };
 
 type AutolinkToken = {
@@ -268,12 +269,12 @@ function readMathToken(text: string, index: number): MathToken | null {
 }
 
 function findDisplayMathClosingDelimiter(text: string, startIndex: number): number {
-    return text.indexOf("$$", startIndex);
+    return findUnescapedSequence(text, "$$", startIndex);
 }
 
 function findInlineMathClosingDelimiter(text: string, startIndex: number): number {
     for (let index = startIndex; index < text.length; index += 1) {
-        if (text[index] === "$" && text[index - 1] !== "$" && text[index + 1] !== "$") {
+        if (text[index] === "$" && !isEscapedAt(text, index) && text[index - 1] !== "$" && text[index + 1] !== "$") {
             return index;
         }
     }
@@ -284,6 +285,8 @@ function findInlineMathClosingDelimiter(text: string, startIndex: number): numbe
 
 type FootnoteRenderData = {
     numbers: Record<string, number>;
+    referenceIds?: Record<string, string[]>;
+    renderCursors?: Record<string, number>;
 };
 
 function normalizeInlineRenderContext(contextOrReferences: DocumentRenderContext | DocumentReferenceMap): DocumentRenderContext {
@@ -368,6 +371,10 @@ function readInlineToken(text: string, index: number, image: boolean): InlineTok
         return null;
     }
 
+    if (!image && text[index + 1] === "^") {
+        return null;
+    }
+
     const labelStart = index + opener.length;
     const labelEnd = findClosingBracket(text, labelStart);
     if (labelEnd < 0 || text[labelEnd + 1] !== "(") {
@@ -428,6 +435,10 @@ function readReferenceSyntaxToken(
         return null;
     }
 
+    if (!image && text[index + 1] === "^") {
+        return null;
+    }
+
     const labelStart = index + opener.length;
     const labelEnd = findClosingBracket(text, labelStart);
     if (labelEnd < 0) {
@@ -440,7 +451,11 @@ function readReferenceSyntaxToken(
     }
 
     if (text[referenceStart] !== "[") {
-        return null;
+        return {
+            raw: text.slice(index, labelEnd + 1),
+            label: text.slice(labelStart, labelEnd),
+            referenceLabel: "",
+        };
     }
 
     const referenceEnd = findClosingBracket(text, referenceStart + 1);
@@ -531,8 +546,22 @@ function readFootnoteReferenceToken(
     }
 
     const footnotes = readFootnoteRenderData(context);
-    const number = footnotes?.numbers[normalizeReferenceLabel(token.label)];
-    return number ? { raw: token.raw, label: token.label, number } : null;
+    const normalizedLabel = normalizeReferenceLabel(token.label);
+    const number = footnotes?.numbers[normalizedLabel];
+    return number && footnotes
+        ? { raw: token.raw, label: token.label, number, id: readNextFootnoteReferenceId(footnotes, normalizedLabel) }
+        : null;
+}
+
+function readNextFootnoteReferenceId(footnotes: FootnoteRenderData, normalizedLabel: string): string {
+    const fallbackId = `fnref-${encodeURIComponent(normalizedLabel)}`;
+    const ids = footnotes.referenceIds?.[normalizedLabel] ?? [fallbackId];
+    footnotes.renderCursors = footnotes.renderCursors ?? {};
+
+    const cursor = footnotes.renderCursors[normalizedLabel] ?? 0;
+    footnotes.renderCursors[normalizedLabel] = cursor + 1;
+
+    return ids[cursor] ?? `${fallbackId}-${cursor + 1}`;
 }
 
 function readEmphasisToken(text: string, index: number): EmphasisToken | null {
@@ -675,7 +704,7 @@ function renderFormattingToken(token: FormattingToken, context: DocumentRenderCo
 function renderFootnoteReferenceToken(token: FootnoteReferenceToken): string {
     const raw = escapeHtml(token.raw);
     const label = encodeURIComponent(normalizeReferenceLabel(token.label));
-    return `<span class="markdown-token markdown-footnote-reference-token"><sup class="markdown-footnote-reference" contenteditable="false" data-source-ignore="true" id="fnref-${label}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-footnote-reference-token"><sup class="markdown-footnote-reference" contenteditable="false" data-source-ignore="true" id="${escapeHtml(token.id)}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderEmphasisToken(token: EmphasisToken, context: DocumentRenderContext, depth: number): string {

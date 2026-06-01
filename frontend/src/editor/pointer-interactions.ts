@@ -297,7 +297,7 @@ function focusPointerTargetBlock(pointerTarget: PointerBlockTarget): void {
 
 function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
     const type = readBlockType(pointerTarget.block.dataset.type);
-    if (type !== "math" && type !== "html") {
+    if (type !== "table" && type !== "definition-list" && type !== "math" && type !== "html") {
         return false;
     }
 

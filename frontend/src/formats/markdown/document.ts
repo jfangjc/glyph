@@ -9,7 +9,7 @@ import { renderInlineMarkdown } from "./inline";
 import { normalizeReferenceLabel, parseMarkdownReferenceDefinition } from "./references";
 import { readMarkdownTable, renderMarkdownBlock } from "./table";
 import { markdownEditorBehavior } from "./editor/behavior";
-import { countIndentColumns, serializeListIndent } from "./utils";
+import { countIndentColumns, isEscapedAt, serializeListIndent } from "./utils";
 import { escapeHtml } from "../../utils/text";
 
 export const markdownDocumentFormat: DocumentFormat = {
@@ -108,10 +108,11 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
             continue;
         }
 
-        const referenceDefinition = parseMarkdownReferenceDefinition(line);
+        const referenceDefinition = readReferenceDefinition(lines, index);
         if (referenceDefinition) {
             references[referenceDefinition.normalizedLabel] = referenceDefinition.reference;
-            blocks.push({ type: "reference", text: line });
+            blocks.push({ type: "reference", text: referenceDefinition.text });
+            index += referenceDefinition.consumedLines - 1;
             continue;
         }
 
@@ -182,6 +183,8 @@ type MarkdownRenderData = {
         definitions: Record<string, { label: string; text: string }>;
         numbers: Record<string, number>;
         order: string[];
+        referenceIds: Record<string, string[]>;
+        renderCursors?: Record<string, number>;
     };
 };
 
@@ -200,6 +203,29 @@ function readMarkdownReferences(blocks: ParsedBlock[]): DocumentReferenceMap {
     }
 
     return references;
+}
+
+function readReferenceDefinition(
+    lines: string[],
+    index: number,
+): { normalizedLabel: string; reference: DocumentReferenceMap[string]; text: string; consumedLines: number } | null {
+    const line = lines[index];
+    const nextLine = lines[index + 1];
+
+    if (nextLine !== undefined && isReferenceTitleContinuationLine(nextLine)) {
+        const multilineText = `${line}\n${nextLine}`;
+        const multiline = parseMarkdownReferenceDefinition(multilineText);
+        if (multiline) {
+            return { ...multiline, text: multilineText, consumedLines: 2 };
+        }
+    }
+
+    const singleLine = parseMarkdownReferenceDefinition(line);
+    return singleLine ? { ...singleLine, text: line, consumedLines: 1 } : null;
+}
+
+function isReferenceTitleContinuationLine(line: string): boolean {
+    return /^ {0,3}(?:"[^"]*"|'[^']*'|\([^)]*\))\s*$/.test(line);
 }
 
 function readMarkdownRenderContext(blocks: ParsedBlock[]): DocumentRenderContext {
@@ -257,10 +283,12 @@ function renderMarkdownDocumentFooter(context: DocumentRenderContext): string {
             }
 
             const encodedLabel = encodeURIComponent(label);
-            return `<li id="fn-${encodedLabel}" class="markdown-footnote-item"><span class="markdown-footnote-body">${renderInlineMarkdown(definition.text, context)}</span> <a class="markdown-footnote-backref" href="#fnref-${encodedLabel}" data-href="#fnref-${encodedLabel}" aria-label="Back to reference">&#8617;</a></li>`;
+            const referenceId = data.footnotes.referenceIds[label]?.[0] ?? `fnref-${encodedLabel}`;
+            return `<li id="fn-${encodedLabel}" class="markdown-footnote-item"><span class="markdown-footnote-body">${renderInlineMarkdown(definition.text, context)}</span> <a class="markdown-footnote-backref" href="#${escapeHtml(referenceId)}" data-href="#${escapeHtml(referenceId)}" aria-label="Back to reference">&#8617;</a></li>`;
         })
         .join("");
 
+    data.footnotes.renderCursors = {};
     return `<section class="markdown-footnotes"><hr><ol>${items}</ol></section>`;
 }
 
@@ -299,16 +327,20 @@ function readMarkdownRenderData(context: DocumentRenderContext): MarkdownRenderD
 }
 
 
-function createMarkdownSlugger(): { slug: (value: string) => string } {
+function createMarkdownSlugger(): { slug: (value: string) => string; unique: (value: string) => string } {
     const counts = new Map<string, number>();
+
+    const unique = (base: string): string => {
+        const count = counts.get(base) ?? 0;
+        counts.set(base, count + 1);
+        return count === 0 ? base : `${base}-${count}`;
+    };
 
     return {
         slug(value: string): string {
-            const base = slugMarkdownHeading(value);
-            const count = counts.get(base) ?? 0;
-            counts.set(base, count + 1);
-            return count === 0 ? base : `${base}-${count}`;
+            return unique(slugMarkdownHeading(value));
         },
+        unique,
     };
 }
 
@@ -336,8 +368,7 @@ function readMarkdownHeadingIds(blocks: ParsedBlock[]): string[] {
 
         const explicitId = block.headingIdExplicit ? normalizeHeadingId(block.headingId) : "";
         if (explicitId) {
-            ids.push(explicitId);
-            slugger.slug(explicitId);
+            ids.push(slugger.unique(explicitId));
             continue;
         }
 
@@ -351,6 +382,7 @@ function readMarkdownFootnotes(blocks: ParsedBlock[]): MarkdownRenderData["footn
     const definitions: MarkdownRenderData["footnotes"]["definitions"] = {};
     const numbers: Record<string, number> = {};
     const order: string[] = [];
+    const referenceIds: Record<string, string[]> = {};
 
     for (const block of blocks) {
         if (block.type !== "footnote-definition") {
@@ -370,16 +402,23 @@ function readMarkdownFootnotes(blocks: ParsedBlock[]): MarkdownRenderData["footn
 
         for (const label of readFootnoteReferenceLabels(block.text)) {
             const normalizedLabel = normalizeReferenceLabel(label);
-            if (!definitions[normalizedLabel] || numbers[normalizedLabel]) {
+            if (!definitions[normalizedLabel]) {
                 continue;
             }
 
-            numbers[normalizedLabel] = order.length + 1;
-            order.push(normalizedLabel);
+            if (!numbers[normalizedLabel]) {
+                numbers[normalizedLabel] = order.length + 1;
+                order.push(normalizedLabel);
+            }
+
+            const encodedLabel = encodeURIComponent(normalizedLabel);
+            const ids = referenceIds[normalizedLabel] ?? [];
+            ids.push(ids.length === 0 ? `fnref-${encodedLabel}` : `fnref-${encodedLabel}-${ids.length + 1}`);
+            referenceIds[normalizedLabel] = ids;
         }
     }
 
-    return { definitions, numbers, order };
+    return { definitions, numbers, order, referenceIds };
 }
 
 
@@ -595,10 +634,44 @@ function readFootnoteReferenceLabels(text: string): string[] {
     const pattern = /\[\^([^\]\n]+)\]/g;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(text)) !== null) {
+        if (isEscapedAt(text, match.index) || isInsideInlineCodeSpan(text, match.index)) {
+            continue;
+        }
+
         labels.push(match[1]);
     }
 
     return labels;
+}
+
+function isInsideInlineCodeSpan(text: string, offset: number): boolean {
+    let markerLength = 0;
+
+    for (let index = 0; index < offset; index += 1) {
+        if (text[index] !== "`" || isEscapedAt(text, index)) {
+            continue;
+        }
+
+        const length = countCharacterRun(text, index, "`");
+        if (markerLength === 0) {
+            markerLength = length;
+        } else if (markerLength === length) {
+            markerLength = 0;
+        }
+        index += length - 1;
+    }
+
+    return markerLength > 0;
+}
+
+function countCharacterRun(text: string, index: number, character: string): number {
+    let length = 0;
+
+    while (text[index + length] === character) {
+        length += 1;
+    }
+
+    return length;
 }
 
 function readDefinitionList(lines: string[], index: number): { block: ParsedBlock; consumedLines: number } | null {
@@ -832,6 +905,10 @@ function isIndentedCodeLine(line: string, previousBlock: ParsedBlock | null): bo
         return false;
     }
 
+    if (previousBlock?.type === "paragraph") {
+        return false;
+    }
+
     if (!isIndentedCodeContinuationLine(line)) {
         return false;
     }
@@ -890,7 +967,7 @@ function readMarkdownIndent(value: string): number {
 }
 
 function readCodeFence(line: string): { marker: string; info: string } | null {
-    const match = line.trim().match(/^(`{3,}|~{3,})(.*)$/);
+    const match = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
     if (!match) {
         return null;
     }
@@ -902,8 +979,8 @@ function readCodeFence(line: string): { marker: string; info: string } | null {
 }
 
 function isClosingCodeFence(line: string, fence: string): boolean {
-    const trimmed = line.trim();
     const fenceCharacter = fence[0];
+    const match = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
 
-    return trimmed.startsWith(fenceCharacter.repeat(fence.length)) && trimmed.split("").every((char) => char === fenceCharacter);
+    return Boolean(match && match[1][0] === fenceCharacter && match[1].length >= fence.length);
 }

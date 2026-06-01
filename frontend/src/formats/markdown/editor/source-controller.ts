@@ -34,9 +34,9 @@ import {
 import { readInlineFormatShortcut } from "../../../editor/input/keyboard-shortcuts";
 import { getRenderedContentText } from "../../../editor/selection/rendered-content-dom";
 import { hasMarkdownBlockSource } from "../block-source";
-import { formatMarkdownTableSource } from "../table";
+import { formatMarkdownTableSource, readMarkdownTableRowCellRanges } from "../table";
 import { readMathSourceText } from "../math";
-import { isEscapedAt, serializeListIndent } from "../utils";
+import { serializeListIndent } from "../utils";
 import { clearPendingMarkdownTokenNavigation } from "./token-controller";
 
 type MarkdownSourceHooks = {
@@ -339,65 +339,12 @@ function readTableCellBoundary(text: string, lineIndex: number, cellIndex: numbe
 }
 
 function readTableRowCellBoundaries(line: string, lineStart: number, lineIndex: number): TableCellBoundary[] {
-    const cells: TableCellBoundary[] = [];
-    const leadingPipe = line.startsWith("|");
-    let cellStart = leadingPipe ? 1 : 0;
-    let cellIndex = 0;
-
-    for (let index = cellStart; index <= line.length; index += 1) {
-        if (index < line.length && (line[index] !== "|" || isEscapedAt(line, index))) {
-            continue;
-        }
-
-        cells.push(createTableCellBoundary(line, lineStart, lineIndex, cellIndex, cellStart, index));
-        cellStart = index + 1;
-        cellIndex += 1;
-    }
-
-    if (leadingPipe && cells.length > 0 && cells[cells.length - 1].start === lineStart + line.length) {
-        cells.pop();
-    }
-
-    return cells;
-}
-
-function createTableCellBoundary(
-    line: string,
-    lineStart: number,
-    lineIndex: number,
-    cellIndex: number,
-    rawStart: number,
-    rawEnd: number,
-): TableCellBoundary {
-    const rawCell = line.slice(rawStart, rawEnd);
-    if (rawCell.trim() === "") {
-        const offset = rawCell.startsWith(" ") ? 1 : 0;
-        const emptyCellStart = lineStart + rawStart + offset;
-        return {
-            lineIndex,
-            cellIndex,
-            start: emptyCellStart,
-            end: emptyCellStart,
-        };
-    }
-
-    let start = rawStart;
-    let end = rawEnd;
-
-    while (start < end && line[start] === " ") {
-        start += 1;
-    }
-
-    while (end > start && line[end - 1] === " ") {
-        end -= 1;
-    }
-
-    return {
+    return readMarkdownTableRowCellRanges(line, lineStart).map((range, cellIndex) => ({
         lineIndex,
         cellIndex,
-        start: lineStart + start,
-        end: lineStart + end,
-    };
+        start: range.start,
+        end: range.end,
+    }));
 }
 
 function readTableColumnCount(text: string): number {

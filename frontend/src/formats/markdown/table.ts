@@ -106,7 +106,7 @@ export function readMarkdownTableCellStart(text: string, lineIndex: number, cell
     }
 
     const lineStart = lines.slice(0, lineIndex).join("\n").length + (lineIndex > 0 ? 1 : 0);
-    const cells = readTableRowCellRanges(lines[lineIndex], lineStart);
+    const cells = readMarkdownTableRowCellRanges(lines[lineIndex], lineStart);
     return cells[cellIndex]?.start ?? null;
 }
 
@@ -251,16 +251,30 @@ function splitTableRow(line: string): string[] {
 
     const cells: string[] = [];
     let cell = "";
+    let codeMarkerLength = 0;
 
     for (let index = 0; index < trimmed.length; index += 1) {
         const character = trimmed[index];
-        if (character === "\\" && trimmed[index + 1] === "|") {
+
+        if (character === "`" && !isEscapedAt(trimmed, index)) {
+            const markerLength = countRun(trimmed, index, "`");
+            cell += trimmed.slice(index, index + markerLength);
+            if (codeMarkerLength === 0) {
+                codeMarkerLength = markerLength;
+            } else if (codeMarkerLength === markerLength) {
+                codeMarkerLength = 0;
+            }
+            index += markerLength - 1;
+            continue;
+        }
+
+        if (codeMarkerLength === 0 && character === "\\" && trimmed[index + 1] === "|") {
             cell += "|";
             index += 1;
             continue;
         }
 
-        if (character === "|") {
+        if (codeMarkerLength === 0 && character === "|") {
             cells.push(cell);
             cell = "";
             continue;
@@ -271,6 +285,16 @@ function splitTableRow(line: string): string[] {
 
     cells.push(cell);
     return cells;
+}
+
+function countRun(text: string, index: number, character: string): number {
+    let length = 0;
+
+    while (text[index + length] === character) {
+        length += 1;
+    }
+
+    return length;
 }
 
 function serializeTableRow(cells: string[]): string {
@@ -317,13 +341,25 @@ function createDelimiterCell(alignment: TableAlignment, width: number): string {
     return `:${"-".repeat(Math.max(3, width - 1))}`;
 }
 
-function readTableRowCellRanges(line: string, lineStart: number): Array<{ start: number; end: number }> {
+export function readMarkdownTableRowCellRanges(line: string, lineStart: number): Array<{ start: number; end: number }> {
     const ranges: Array<{ start: number; end: number }> = [];
     const leadingPipe = line.startsWith("|");
     let cellStart = leadingPipe ? 1 : 0;
+    let codeMarkerLength = 0;
 
     for (let index = cellStart; index <= line.length; index += 1) {
-        if (index < line.length && (line[index] !== "|" || isEscapedAt(line, index))) {
+        if (index < line.length && line[index] === "`" && !isEscapedAt(line, index)) {
+            const markerLength = countRun(line, index, "`");
+            if (codeMarkerLength === 0) {
+                codeMarkerLength = markerLength;
+            } else if (codeMarkerLength === markerLength) {
+                codeMarkerLength = 0;
+            }
+            index += markerLength - 1;
+            continue;
+        }
+
+        if (index < line.length && (line[index] !== "|" || codeMarkerLength > 0 || isEscapedAt(line, index))) {
             continue;
         }
 
