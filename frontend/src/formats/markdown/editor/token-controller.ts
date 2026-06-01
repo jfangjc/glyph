@@ -71,6 +71,10 @@ export function handleEditorClick(event: MouseEvent): void {
         const link = token.querySelector<HTMLAnchorElement>("a.markdown-link");
         const href = link?.dataset.href;
         if (href && (event.ctrlKey || event.metaKey)) {
+            if (scrollToInternalMarkdownAnchor(href)) {
+                return;
+            }
+
             void Browser.OpenURL(href).catch((error) => console.error("Failed to open URL:", error));
             return;
         }
@@ -91,8 +95,27 @@ export function handleEditorClick(event: MouseEvent): void {
     clearActiveMarkdownToken();
 
     if (event.ctrlKey || event.metaKey) {
+        if (scrollToInternalMarkdownAnchor(href)) {
+            return;
+        }
+
         void Browser.OpenURL(href).catch((error) => console.error("Failed to open URL:", error));
     }
+}
+
+function scrollToInternalMarkdownAnchor(href: string): boolean {
+    if (!href.startsWith("#") || href.length <= 1) {
+        return false;
+    }
+
+    const id = decodeURIComponent(href.slice(1));
+    const target = document.getElementById(id);
+    if (!target) {
+        return false;
+    }
+
+    target.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    return true;
 }
 
 export function handleEditorMouseDown(event: MouseEvent): boolean {

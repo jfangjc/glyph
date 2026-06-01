@@ -3,7 +3,7 @@ import {
     parseMarkdownDestinationWithTitle,
     unescapeMarkdownText,
 } from "./references";
-import type { DocumentReferenceMap } from "../types";
+import type { DocumentReferenceMap, DocumentRenderContext } from "../types";
 import { escapeHtml } from "../../utils/text";
 import { renderLatexMath } from "./math";
 import { findUnescapedSequence, isEscapedAt } from "./utils";
@@ -39,6 +39,18 @@ type EmphasisToken = {
     strong: boolean;
 };
 
+type FormattingToken = {
+    raw: string;
+    marker: "~~" | "==" | "~" | "^";
+    label: string;
+};
+
+type FootnoteReferenceToken = {
+    raw: string;
+    label: string;
+    number: number;
+};
+
 type AutolinkToken = {
     raw: string;
     label: string;
@@ -49,9 +61,14 @@ type MarkdownInlineToken = {
     raw: string;
 };
 
-const escapableCharacters = new Set(["\\", "`", "*", "_", "{", "}", "[", "]", "<", ">", "(", ")", "#", "+", "-", ".", "!", "|", "$"]);
+const escapableCharacters = new Set(["\\", "`", "*", "_", "{", "}", "[", "]", "<", ">", "(", ")", "#", "+", "-", ".", "!", "|", "$", "~", "=", "^", ":"]);
 
-export function renderInlineMarkdown(text: string, references: DocumentReferenceMap = {}, depth = 0): string {
+export function renderInlineMarkdown(
+    text: string,
+    contextOrReferences: DocumentRenderContext | DocumentReferenceMap = { references: {} },
+    depth = 0,
+): string {
+    const context = normalizeInlineRenderContext(contextOrReferences);
     if (depth > 8) {
         return escapeHtml(text);
     }
@@ -60,7 +77,7 @@ export function renderInlineMarkdown(text: string, references: DocumentReference
     let index = 0;
 
     while (index < text.length) {
-        const token = renderInlineTokenAt(text, index, references, depth);
+        const token = renderInlineTokenAt(text, index, context, depth);
         if (token) {
             html.push(token.html);
             index += token.length;
@@ -85,6 +102,8 @@ export function findFirstInlineToken(text: string): { start: number; token: Mark
             readInlineToken(text, index, false) ??
             readReferenceSyntaxToken(text, index, true) ??
             readReferenceSyntaxToken(text, index, false) ??
+            readFootnoteReferenceSyntaxToken(text, index) ??
+            readFormattingToken(text, index) ??
             readEmphasisToken(text, index) ??
             readAutolink(text, index) ??
             readBareUrlToken(text, index);
@@ -99,7 +118,7 @@ export function findFirstInlineToken(text: string): { start: number; token: Mark
 function renderInlineTokenAt(
     text: string,
     index: number,
-    references: DocumentReferenceMap,
+    context: DocumentRenderContext,
     depth: number,
 ): { html: string; length: number } | null {
     const character = text[index];
@@ -131,19 +150,31 @@ function renderInlineTokenAt(
     }
 
     if (character === "!" && text[index + 1] === "[") {
-        const image = readInlineToken(text, index, true) ?? readReferenceToken(text, index, true, references);
+        const image = readInlineToken(text, index, true) ?? readReferenceToken(text, index, true, context.references);
         return image ? { html: renderImageToken(image), length: image.raw.length } : null;
     }
 
+    if (character === "[" && text[index + 1] === "^") {
+        const footnote = readFootnoteReferenceToken(text, index, context);
+        return footnote ? { html: renderFootnoteReferenceToken(footnote), length: footnote.raw.length } : null;
+    }
+
     if (character === "[") {
-        const link = readInlineToken(text, index, false) ?? readReferenceToken(text, index, false, references);
-        return link ? { html: renderLinkToken(link, references, depth + 1), length: link.raw.length } : null;
+        const link = readInlineToken(text, index, false) ?? readReferenceToken(text, index, false, context.references);
+        return link ? { html: renderLinkToken(link, context, depth + 1), length: link.raw.length } : null;
+    }
+
+    if (character === "~" || character === "=" || character === "^") {
+        const formatting = readFormattingToken(text, index);
+        return formatting
+            ? { html: renderFormattingToken(formatting, context, depth + 1), length: formatting.raw.length }
+            : null;
     }
 
     if (character === "*" || character === "_") {
         const emphasis = readEmphasisToken(text, index);
         return emphasis
-            ? { html: renderEmphasisToken(emphasis, references, depth + 1), length: emphasis.raw.length }
+            ? { html: renderEmphasisToken(emphasis, context, depth + 1), length: emphasis.raw.length }
             : null;
     }
 
@@ -180,6 +211,9 @@ function isInlineSpecialCharacter(text: string, index: number): boolean {
         character === "[" ||
         character === "*" ||
         character === "_" ||
+        character === "~" ||
+        character === "=" ||
+        character === "^" ||
         character === "\n" ||
         isPotentialBareUrlStart(text, index)
     );
@@ -245,6 +279,38 @@ function findInlineMathClosingDelimiter(text: string, startIndex: number): numbe
     }
 
     return -1;
+}
+
+
+type FootnoteRenderData = {
+    numbers: Record<string, number>;
+};
+
+function normalizeInlineRenderContext(contextOrReferences: DocumentRenderContext | DocumentReferenceMap): DocumentRenderContext {
+    if (isDocumentRenderContext(contextOrReferences)) {
+        return contextOrReferences;
+    }
+
+    return { references: contextOrReferences };
+}
+
+function isDocumentRenderContext(value: DocumentRenderContext | DocumentReferenceMap): value is DocumentRenderContext {
+    const references = (value as { references?: unknown }).references;
+    return Boolean(references && typeof references === "object" && !("destination" in references));
+}
+
+function readFootnoteRenderData(context: DocumentRenderContext): FootnoteRenderData | null {
+    const data = context.data;
+    if (!data || typeof data !== "object" || !("footnotes" in data)) {
+        return null;
+    }
+
+    const footnotes = (data as { footnotes?: unknown }).footnotes;
+    if (!footnotes || typeof footnotes !== "object" || !("numbers" in footnotes)) {
+        return null;
+    }
+
+    return footnotes as FootnoteRenderData;
 }
 
 export function normalizeExternalImageUrl(value: string): string | null {
@@ -389,6 +455,86 @@ function readReferenceSyntaxToken(
     };
 }
 
+
+function readFormattingToken(text: string, index: number): FormattingToken | null {
+    const marker = readFormattingMarker(text, index);
+    if (!marker || isEscapedAt(text, index)) {
+        return null;
+    }
+
+    const labelStart = index + marker.length;
+    if (labelStart >= text.length || /\s/.test(text[labelStart])) {
+        return null;
+    }
+
+    const labelEnd = findUnescapedSequence(text, marker, labelStart);
+    if (labelEnd < 0) {
+        return null;
+    }
+
+    const label = text.slice(labelStart, labelEnd);
+    if (label === "" || /\s$/.test(label)) {
+        return null;
+    }
+
+    return {
+        raw: text.slice(index, labelEnd + marker.length),
+        marker,
+        label,
+    };
+}
+
+function readFormattingMarker(text: string, index: number): FormattingToken["marker"] | null {
+    if (text.startsWith("~~", index)) {
+        return "~~";
+    }
+
+    if (text.startsWith("==", index)) {
+        return "==";
+    }
+
+    if (text[index] === "~" && text[index + 1] !== "~" && text[index - 1] !== "~") {
+        return "~";
+    }
+
+    if (text[index] === "^" && text[index + 1] !== "^" && text[index - 1] !== "^") {
+        return "^";
+    }
+
+    return null;
+}
+
+function readFootnoteReferenceSyntaxToken(text: string, index: number): (MarkdownInlineToken & { label: string }) | null {
+    if (!text.startsWith("[^", index) || isEscapedAt(text, index)) {
+        return null;
+    }
+
+    const end = findClosingBracket(text, index + 2);
+    if (end <= index + 2) {
+        return null;
+    }
+
+    return {
+        raw: text.slice(index, end + 1),
+        label: text.slice(index + 2, end),
+    };
+}
+
+function readFootnoteReferenceToken(
+    text: string,
+    index: number,
+    context: DocumentRenderContext,
+): FootnoteReferenceToken | null {
+    const token = readFootnoteReferenceSyntaxToken(text, index);
+    if (!token) {
+        return null;
+    }
+
+    const footnotes = readFootnoteRenderData(context);
+    const number = footnotes?.numbers[normalizeReferenceLabel(token.label)];
+    return number ? { raw: token.raw, label: token.label, number } : null;
+}
+
 function readEmphasisToken(text: string, index: number): EmphasisToken | null {
     const marker = readEmphasisMarker(text, index);
     if (!marker || isEscapedAt(text, index)) {
@@ -509,9 +655,32 @@ function renderMathToken(token: MathToken): string {
     return `<span class="${className}"><span class="markdown-math" contenteditable="false" data-source-ignore="true">${math}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
-function renderEmphasisToken(token: EmphasisToken, references: DocumentReferenceMap, depth: number): string {
+
+function renderFormattingToken(token: FormattingToken, context: DocumentRenderContext, depth: number): string {
     const raw = escapeHtml(token.raw);
-    const label = renderInlineMarkdown(token.label, references, depth);
+    const label = renderInlineMarkdown(token.label, context, depth);
+    const tag = token.marker === "~~" ? "del" : token.marker === "==" ? "mark" : token.marker === "~" ? "sub" : "sup";
+    const className =
+        token.marker === "~~"
+            ? "markdown-strikethrough"
+            : token.marker === "=="
+              ? "markdown-highlight"
+              : token.marker === "~"
+                ? "markdown-subscript"
+                : "markdown-superscript";
+
+    return `<span class="markdown-token markdown-format-token"><${tag} class="${className}" contenteditable="false" data-source-ignore="true">${label}</${tag}><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+}
+
+function renderFootnoteReferenceToken(token: FootnoteReferenceToken): string {
+    const raw = escapeHtml(token.raw);
+    const label = encodeURIComponent(normalizeReferenceLabel(token.label));
+    return `<span class="markdown-token markdown-footnote-reference-token"><sup class="markdown-footnote-reference" contenteditable="false" data-source-ignore="true" id="fnref-${label}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+}
+
+function renderEmphasisToken(token: EmphasisToken, context: DocumentRenderContext, depth: number): string {
+    const raw = escapeHtml(token.raw);
+    const label = renderInlineMarkdown(token.label, context, depth);
 
     if (token.strong && token.emphasis) {
         return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true"><em class="markdown-emphasis">${label}</em></strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
@@ -533,10 +702,10 @@ function renderImageToken(token: InlineToken): string {
     return `<span class="markdown-token markdown-image-token"><span class="markdown-image-preview" contenteditable="false" data-source-ignore="true" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>`;
 }
 
-function renderLinkToken(token: InlineToken, references: DocumentReferenceMap, depth: number): string {
+function renderLinkToken(token: InlineToken, context: DocumentRenderContext, depth: number): string {
     const href = normalizeLinkHref(token.destination);
     const title = token.title ? ` title="${escapeHtml(token.title)}"` : "";
-    const labelHtml = renderInlineMarkdown(token.label, references, depth);
+    const labelHtml = renderInlineMarkdown(token.label, context, depth);
     const label = href
         ? `<a class="markdown-link" contenteditable="false" data-source-ignore="true" tabindex="-1" href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"${title} rel="noreferrer">${labelHtml}</a>`
         : `<span class="markdown-link markdown-link-label" contenteditable="false" data-source-ignore="true"${title}>${labelHtml}</span>`;

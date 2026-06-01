@@ -410,7 +410,7 @@ function syncExportMenuState(): void {
 
 async function waitForMarkdownExportView(): Promise<void> {
     await nextAnimationFrame();
-    await waitForPreviewImages(getElement<HTMLElement>("editor"));
+    await waitForPreviewImages(getElement<HTMLElement>("document-surface"));
     await nextAnimationFrame();
 }
 

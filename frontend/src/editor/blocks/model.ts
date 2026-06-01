@@ -16,7 +16,9 @@ export type BlockType =
     | "table"
     | "math"
     | "html"
-    | "reference";
+    | "reference"
+    | "definition-list"
+    | "footnote-definition";
 
 export type ParsedBlock = {
     type: BlockType;
@@ -30,6 +32,8 @@ export type ParsedBlock = {
     quoteLevel?: number;
     ruleMarker?: string;
     mathSource?: string;
+    headingId?: string;
+    headingIdExplicit?: boolean;
 };
 
 export type ParsedDocument = {
@@ -58,6 +62,8 @@ export const blockLabels: Record<BlockType, string> = {
     math: "Math",
     html: "HTML",
     reference: "Reference",
+    "definition-list": "Definition list",
+    "footnote-definition": "Footnote",
 };
 
 export const headingTypes = new Set<BlockType>([

@@ -384,6 +384,113 @@
     font-size: 0.9rem;
 }
 
+
+.block[data-type="definition-list"] {
+    padding: 6px 0;
+}
+
+.block[data-type="definition-list"] .block-content {
+    white-space: normal;
+}
+
+.block[data-type="definition-list"] .format-block-source {
+    font-family: var(--glyph-font-code);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+
+.block[data-block-source-active="true"][data-type="definition-list"] .format-block-source {
+    display: block;
+}
+
+.block[data-block-source-active="true"][data-type="definition-list"] .markdown-definition-list-preview {
+    display: none;
+}
+
+.markdown-definition-list {
+    margin: 0.25rem 0;
+}
+
+.markdown-definition-list dt {
+    font-weight: 650;
+    margin-top: 0.35rem;
+}
+
+.markdown-definition-list dd {
+    margin: 0.15rem 0 0.35rem 1.5rem;
+    color: #444444;
+}
+
+.markdown-definition-list-fallback {
+    margin: 0;
+    font-family: var(--glyph-font-code);
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+}
+
+.block[data-type="footnote-definition"] .block-content {
+    color: #6b6b6b;
+    font-family: var(--glyph-font-code);
+    font-size: 0.9rem;
+}
+
+.markdown-strikethrough {
+    text-decoration: line-through;
+}
+
+.markdown-highlight {
+    border-radius: 0.18em;
+    padding: 0 0.12em;
+    background: #fff2a8;
+}
+
+.markdown-subscript,
+.markdown-superscript,
+.markdown-footnote-reference {
+    line-height: 0;
+}
+
+
+.markdown-footnote-reference-token {
+    display: inline;
+}
+
+.markdown-footnote-reference {
+    font-size: 0.75em;
+}
+
+.document-render-footer {
+    width: min(760px, calc(100vw - 48px));
+    margin: 1.5rem auto 4rem;
+    color: #3c3c3c;
+    font-size: 0.92rem;
+    line-height: 1.55;
+}
+
+.document-render-footer[hidden] {
+    display: none;
+}
+
+.markdown-footnotes hr {
+    border: 0;
+    border-top: 1px solid #dddddd;
+    margin: 1rem 0 0.75rem;
+}
+
+.markdown-footnotes ol {
+    padding-left: 1.5rem;
+}
+
+.markdown-footnote-item {
+    margin: 0.25rem 0;
+}
+
+.markdown-footnote-backref {
+    color: #6a6a6a;
+    text-decoration: none;
+}
+
 .block-content code {
     border-radius: 4px;
     padding: 0 0.25em;

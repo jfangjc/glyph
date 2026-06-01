@@ -13,6 +13,11 @@ export type DocumentReference = {
 
 export type DocumentReferenceMap = Record<string, DocumentReference>;
 
+export type DocumentRenderContext = {
+    references: DocumentReferenceMap;
+    data?: unknown;
+};
+
 export type ParsedDocumentFragment = {
     blocks: ParsedBlock[];
     references?: DocumentReferenceMap;
@@ -78,11 +83,14 @@ export type DocumentFormat = {
     parseFragment: (content: string) => ParsedDocumentFragment;
     serializeDocument: (title: string, usesTitle: boolean, blocks: ParsedBlock[]) => string;
     readReferences?: (blocks: ParsedBlock[]) => DocumentReferenceMap;
+    readRenderContext?: (blocks: ParsedBlock[]) => DocumentRenderContext;
+    applyRenderContext?: (blocks: HTMLElement[], context: DocumentRenderContext) => void;
+    renderDocumentFooter?: (context: DocumentRenderContext) => string;
     hasBlockSource?: (type: BlockType) => boolean;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
-    renderInline?: (text: string, references: DocumentReferenceMap) => string;
+    renderInline?: (text: string, context: DocumentRenderContext) => string;
     renderPlainTextContent?: (type: BlockType, text: string) => string | null;
-    renderBlock?: (type: BlockType, text: string, references: DocumentReferenceMap) => string | null;
+    renderBlock?: (type: BlockType, text: string, context: DocumentRenderContext) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
     editorBehavior?: DocumentEditorBehavior;
     previewBehavior?: DocumentPreviewBehavior;

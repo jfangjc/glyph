@@ -94,7 +94,7 @@ export function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean 
         return true;
     }
 
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && moveAfterTableSource(source)) {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && moveAfterSourcePreview(source)) {
         event.preventDefault();
         hooks.markEditorDirty?.();
         return true;
@@ -223,6 +223,23 @@ function moveInTableSource(
     }
 
     moveToTableCell(source, nextLineIndex, direction === "next-cell" ? 0 : columnCount - 1, direction === "next-cell");
+    return true;
+}
+
+function moveAfterSourcePreview(source: HTMLElement): boolean {
+    const block = findBlock(source);
+    if (!block || readBlockSourcePosition(source) !== "atomic") {
+        return false;
+    }
+
+    const type = readBlockType(block.dataset.type);
+    if (type !== "table" && type !== "definition-list" && type !== "math" && type !== "html") {
+        return false;
+    }
+
+    applyFocusedBlockMarkdownSourceInput(source);
+    ensureEditableBlockAfter(block);
+    focusBlockAtOffset(getSiblingBlock(block, "next") ?? block, 0);
     return true;
 }
 
@@ -902,6 +919,13 @@ function parseEditedRawMarkdownBlock(
             type: "table",
             text: options.normalizeTable ? formatMarkdownTableSource(rawMarkdown) : rawMarkdown,
         };
+    }
+
+    if (type === "definition-list") {
+        const parsedBlocks = parseMarkdownFragment(rawMarkdown).blocks;
+        return parsedBlocks.length === 1 && parsedBlocks[0].type === "definition-list"
+            ? parsedBlocks[0]
+            : { type: "definition-list", text: rawMarkdown };
     }
 
     if (type === "math") {

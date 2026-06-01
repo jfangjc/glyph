@@ -1,5 +1,5 @@
 import type { BlockType, ParsedBlock } from "../../editor/blocks/model";
-import type { DocumentReferenceMap } from "../types";
+import type { DocumentRenderContext } from "../types";
 import { escapeHtml } from "../../utils/text";
 import { renderMarkdownHtmlBlock } from "./html";
 import { renderLatexMath } from "./math";
@@ -113,8 +113,8 @@ export function readMarkdownTableCellStart(text: string, lineIndex: number, cell
 export function renderMarkdownBlock(
     type: BlockType,
     text: string,
-    references: DocumentReferenceMap,
-    renderInline: (text: string, references: DocumentReferenceMap) => string,
+    context: DocumentRenderContext,
+    renderInline: (text: string, context: DocumentRenderContext) => string,
 ): string | null {
     if (type === "math") {
         return renderLatexMath(text, true);
@@ -134,12 +134,12 @@ export function renderMarkdownBlock(
     }
 
     const header = table.header
-        .map((cell, index) => renderTableCell("th", cell, table.alignments[index], references, renderInline))
+        .map((cell, index) => renderTableCell("th", cell, table.alignments[index], context, renderInline))
         .join("");
     const rows = table.rows
         .map((row) => {
             const cells = table.alignments
-                .map((alignment, index) => renderTableCell("td", row[index] ?? "", alignment, references, renderInline))
+                .map((alignment, index) => renderTableCell("td", row[index] ?? "", alignment, context, renderInline))
                 .join("");
             return `<tr>${cells}</tr>`;
         })
@@ -178,11 +178,11 @@ function renderTableCell(
     tag: "th" | "td",
     text: string,
     alignment: TableAlignment,
-    references: DocumentReferenceMap,
-    renderInline: (text: string, references: DocumentReferenceMap) => string,
+    context: DocumentRenderContext,
+    renderInline: (text: string, context: DocumentRenderContext) => string,
 ): string {
     const align = alignment ? ` style="text-align: ${alignment}"` : "";
-    return `<${tag}${align}>${renderInline(text.trim(), references)}</${tag}>`;
+    return `<${tag}${align}>${renderInline(text.trim(), context)}</${tag}>`;
 }
 
 function parseTableDelimiterRow(

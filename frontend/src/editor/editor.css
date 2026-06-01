@@ -701,6 +701,15 @@ button.file-tree-row[data-selected] .file-tree-disclosure {
         cursor: default;
     }
 
+    .block[data-type="footnote-definition"] {
+        display: none !important;
+    }
+
+    .document-render-footer {
+        width: auto;
+        margin: 18pt 0 0;
+    }
+
     .block::after {
         display: none;
     }

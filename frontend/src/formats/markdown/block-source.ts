@@ -7,19 +7,22 @@ import {
     readBlockListNumber,
     readBlockQuoteLevel,
     readBlockRuleMarker,
+    readBlockHeadingId,
+    readBlockHeadingIdExplicit,
 } from "../../editor/blocks/view";
 import { createCodeFence } from "./code-fence";
 
 export function hasMarkdownBlockSource(type: BlockType): boolean {
     return (
         headingTypes.has(type) ||
-        ["list", "ordered-list", "todo", "quote", "code", "rule", "table", "math", "html"].includes(type)
+        ["list", "ordered-list", "todo", "quote", "code", "rule", "table", "math", "html", "definition-list"].includes(type)
     );
 }
 
 export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, text: string): BlockSource {
     if (headingTypes.has(type)) {
-        return { prefix: `${"#".repeat(readHeadingLevel(type))} ` };
+        const suffix = readBlockHeadingIdExplicit(block) && readBlockHeadingId(block) ? ` {#${readBlockHeadingId(block)}}` : undefined;
+        return { prefix: `${"#".repeat(readHeadingLevel(type))} `, suffix };
     }
 
     if (type === "list") {
@@ -63,7 +66,7 @@ export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, tex
         return { atomic: block.dataset.mathSource ?? `$$\n${text}\n$$` };
     }
 
-    if (type === "html") {
+    if (type === "html" || type === "definition-list") {
         return { atomic: text };
     }
 

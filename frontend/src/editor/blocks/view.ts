@@ -1,4 +1,4 @@
-import type { DocumentReferenceMap, PlainTextHighlightPolicy } from "../../formats/types";
+import type { DocumentReferenceMap, DocumentRenderContext, PlainTextHighlightPolicy } from "../../formats/types";
 import { blockLabels, headingTypes, readBlockType, type BlockType, type ParsedBlock } from "./model";
 import {
     renderAtomicBlockContent,
@@ -22,17 +22,19 @@ import { readMathSourceText } from "../../formats/markdown/math";
 export type BlockEditingKind = "rich" | "plain" | "source-preview" | "atomic";
 
 type BlockRenderContext = {
+    context: DocumentRenderContext;
     references: DocumentReferenceMap;
     activeFilePath: string | null;
-    renderInlineContent: (text: string, references: DocumentReferenceMap) => string;
+    renderInlineContent: (text: string, context: DocumentRenderContext) => string;
     renderPlainTextContent?: (type: BlockType, text: string) => string | null;
-    renderBlockContent?: (type: BlockType, text: string, references: DocumentReferenceMap) => string | null;
+    renderBlockContent?: (type: BlockType, text: string, context: DocumentRenderContext) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
     plainTextHighlightPolicy?: PlainTextHighlightPolicy;
 };
 
 let renderContext: BlockRenderContext = {
+    context: { references: {} },
     references: {},
     activeFilePath: null,
     renderInlineContent: renderPlainInlineContent,
@@ -61,6 +63,8 @@ let renderRevision = 0;
 
 export function configureBlockView(context: Partial<BlockRenderContext>): void {
     const nextContext = { ...renderContext, ...context };
+    nextContext.context = context.context ?? { references: context.references ?? nextContext.references };
+    nextContext.references = nextContext.context.references;
     nextContext.renderInlineContent = context.renderInlineContent ?? renderPlainInlineContent;
 
     if (didRenderContextChange(renderContext, nextContext)) {
@@ -95,6 +99,7 @@ export function applyBlockProperties(block: HTMLElement, options: Partial<Parsed
     setCodeInfo(block, options.codeInfo ?? "");
     setRuleMarker(block, options.ruleMarker);
     setMathSource(block, options.mathSource);
+    setBlockHeadingId(block, options.headingId, options.headingIdExplicit);
 }
 
 export function setBlockType(block: HTMLElement, type: BlockType): void {
@@ -132,6 +137,12 @@ export function setBlockType(block: HTMLElement, type: BlockType): void {
     if (type !== "math") {
         delete block.dataset.mathSource;
     }
+
+    if (!headingTypes.has(type)) {
+        delete block.dataset.headingId;
+        delete block.dataset.headingIdExplicit;
+        block.removeAttribute("id");
+    }
 }
 
 export function setBlockText(block: HTMLElement, text: string): void {
@@ -150,7 +161,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
         return;
     }
 
-    const blockHtml = renderContext.renderBlockContent?.(type, text, renderContext.references);
+    const blockHtml = renderContext.renderBlockContent?.(type, text, renderContext.context);
     if (blockHtml !== undefined && blockHtml !== null) {
         const previewHtml = `${serializeBlockSource(source)}\u0000${blockHtml}`;
         const cache = getRenderCache(content);
@@ -416,6 +427,7 @@ function canRecoverMissingBlockSource(block: HTMLElement, type: BlockType): bool
 
 function didRenderContextChange(previous: BlockRenderContext, next: BlockRenderContext): boolean {
     return (
+        previous.context !== next.context ||
         previous.references !== next.references ||
         previous.activeFilePath !== next.activeFilePath ||
         previous.renderInlineContent !== next.renderInlineContent ||
@@ -469,7 +481,7 @@ function renderBlockEditableTextHtml(text: string, source: BlockSource): string 
         return caretSpacerCharacter;
     }
 
-    return renderContext.renderInlineContent(text, renderContext.references);
+    return renderContext.renderInlineContent(text, renderContext.context);
 }
 
 function renderPlainInlineContent(text: string): string {
@@ -566,6 +578,31 @@ function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void
     delete block.dataset.ruleMarker;
 }
 
+export function setBlockHeadingId(block: HTMLElement, headingId: string | undefined, explicit = false): void {
+    if (!headingTypes.has(readBlockType(block.dataset.type))) {
+        delete block.dataset.headingId;
+        delete block.dataset.headingIdExplicit;
+        block.removeAttribute("id");
+        return;
+    }
+
+    const normalized = normalizeHeadingId(headingId);
+    if (normalized) {
+        block.dataset.headingId = normalized;
+        block.dataset.headingIdExplicit = explicit ? "true" : "false";
+        block.id = normalized;
+        return;
+    }
+
+    delete block.dataset.headingId;
+    delete block.dataset.headingIdExplicit;
+    block.removeAttribute("id");
+}
+
+function normalizeHeadingId(value: string | undefined): string {
+    return (value ?? "").trim().replace(/\s+/g, "-");
+}
+
 function setMathSource(block: HTMLElement, mathSource: string | undefined): void {
     if (readBlockType(block.dataset.type) === "math" && mathSource !== undefined) {
         block.dataset.mathSource = mathSource;
@@ -593,7 +630,7 @@ export function getBlockText(block: HTMLElement): string {
         }
     }
 
-    if (type === "html") {
+    if (type === "html" || type === "definition-list") {
         const source = getBlockSourceElement(content, "atomic");
         return source?.textContent ?? "";
     }
@@ -639,6 +676,14 @@ export function readBlockQuoteLevel(block: HTMLElement): number | undefined {
     return Number.isFinite(level) && level > 1 ? level : undefined;
 }
 
+export function readBlockHeadingId(block: HTMLElement): string | undefined {
+    return block.dataset.headingId;
+}
+
+export function readBlockHeadingIdExplicit(block: HTMLElement): boolean {
+    return block.dataset.headingIdExplicit === "true";
+}
+
 export function readBlockRuleMarker(block: HTMLElement): string | undefined {
     const ruleMarker = block.dataset.ruleMarker;
     return ruleMarker && /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker) ? ruleMarker : undefined;
@@ -659,6 +704,8 @@ export function readEditorBlock(block: HTMLElement): ParsedBlock {
         quoteLevel: readBlockQuoteLevel(block),
         ruleMarker: readBlockRuleMarker(block),
         mathSource: type === "math" ? block.dataset.mathSource : undefined,
+        headingId: headingTypes.has(type) ? readBlockHeadingId(block) : undefined,
+        headingIdExplicit: headingTypes.has(type) ? readBlockHeadingIdExplicit(block) : undefined,
     };
 }
 
@@ -694,7 +741,7 @@ export function readBlockEditingKind(type: BlockType): BlockEditingKind {
         return "plain";
     }
 
-    if (type === "table" || type === "math" || type === "html") {
+    if (type === "table" || type === "math" || type === "html" || type === "definition-list") {
         return "source-preview";
     }
 
@@ -710,7 +757,7 @@ export function canMergeBlockText(leftType: BlockType, rightType: BlockType): bo
 }
 
 function isPlainTextBlockType(type: BlockType): boolean {
-    return type === "code" || type === "source" || type === "reference";
+    return type === "code" || type === "source" || type === "reference" || type === "footnote-definition";
 }
 
 export function isMultilinePlainTextBlockType(type: BlockType): boolean {
@@ -736,7 +783,9 @@ export function shouldResetEmptyBlock(type: BlockType): boolean {
         type === "reference" ||
         type === "table" ||
         type === "math" ||
-        type === "html"
+        type === "html" ||
+        type === "definition-list" ||
+        type === "footnote-definition"
     );
 }
 

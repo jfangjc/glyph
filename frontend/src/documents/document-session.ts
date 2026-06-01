@@ -16,10 +16,11 @@ import { focusBlockAtOffset, getCurrentBlockOffset } from "../editor/selection/c
 import { getElement } from "../utils/dom";
 import { clearEditorHistory } from "../editor/history/undo-history";
 import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
-import type { DocumentFormat, DocumentPreviewBehavior, DocumentPreviewContext, DocumentReferenceMap } from "../formats/types";
+import type { DocumentFormat, DocumentPreviewBehavior, DocumentPreviewContext, DocumentReferenceMap, DocumentRenderContext } from "../formats/types";
 import { documentState, markDocumentDirty, notifyDocumentStateChanged } from "./document-state";
 
 let documentReferences: DocumentReferenceMap = {};
+let documentRenderContext: DocumentRenderContext = { references: documentReferences };
 let documentReferencesSnapshot = "{}";
 let referenceRerenderRequestId = 0;
 let referenceSyncFrame = 0;
@@ -37,12 +38,16 @@ export function loadDocument(documentFile: DocumentFile): void {
     documentState.activeFilePath = documentFile.path;
     documentState.activeFormatId = format.id;
     documentState.usesTitle = format.supportsTitle && parsedDocument.usesTitle;
-    documentReferences = parsedDocument.references ?? {};
-    documentReferencesSnapshot = JSON.stringify(documentReferences);
+    documentRenderContext = readFormatRenderContext(format, parsedDocument.blocks, parsedDocument.references ?? {});
+    documentReferences = documentRenderContext.references;
+    documentReferencesSnapshot = JSON.stringify(documentRenderContext);
     syncDocumentFormatUi();
     syncBlockViewContext();
     title.value = parsedDocument.title;
     replaceEditorBlocks(parsedDocument.blocks);
+    syncDocumentReferences();
+    applyDocumentRenderContext();
+    syncDocumentFooter();
     clearEditorHistory();
     documentState.lastSavedContent = serializeDocument();
     documentState.hasUnsavedChanges = false;
@@ -78,6 +83,7 @@ export function syncBlockViewContext(): void {
     const format = getActiveDocumentFormat();
 
     configureBlockView({
+        context: documentRenderContext,
         references: documentReferences,
         activeFilePath: documentState.activeFilePath,
         renderInlineContent: format.renderInline,
@@ -102,6 +108,7 @@ export function syncDocumentFormatUi(): void {
     }
 
     syncDocumentPreview(format);
+    syncDocumentFooter();
 }
 
 function syncDocumentPreview(format: DocumentFormat): void {
@@ -145,16 +152,42 @@ function flushDocumentReferenceSync(): boolean {
 }
 
 function syncDocumentReferences(): void {
-    const nextReferences = getActiveDocumentFormat().readReferences?.(getEditorBlocks().map(readEditorBlock)) ?? {};
-    const nextReferencesSnapshot = JSON.stringify(nextReferences);
+    const format = getActiveDocumentFormat();
+    const blocks = getEditorBlocks().map(readEditorBlock);
+    const nextContext = readFormatRenderContext(format, blocks, format.readReferences?.(blocks) ?? {});
+    const nextReferencesSnapshot = JSON.stringify(nextContext);
     if (nextReferencesSnapshot === documentReferencesSnapshot) {
+        applyDocumentRenderContext();
+        syncDocumentFooter();
         return;
     }
 
-    documentReferences = nextReferences;
+    documentRenderContext = nextContext;
+    documentReferences = nextContext.references;
     documentReferencesSnapshot = nextReferencesSnapshot;
     syncBlockViewContext();
+    applyDocumentRenderContext();
+    syncDocumentFooter();
     rerenderInlineContentBlocks();
+}
+
+function readFormatRenderContext(
+    format: DocumentFormat,
+    blocks: ParsedBlock[],
+    fallbackReferences: DocumentReferenceMap,
+): DocumentRenderContext {
+    return format.readRenderContext?.(blocks) ?? { references: fallbackReferences };
+}
+
+function applyDocumentRenderContext(): void {
+    getActiveDocumentFormat().applyRenderContext?.(getEditorBlocks(), documentRenderContext);
+}
+
+function syncDocumentFooter(): void {
+    const footer = getElement<HTMLElement>("document-render-footer");
+    const html = getActiveDocumentFormat().renderDocumentFooter?.(documentRenderContext) ?? "";
+    footer.hidden = html === "";
+    footer.innerHTML = html;
 }
 
 function rerenderInlineContentBlocks(): void {

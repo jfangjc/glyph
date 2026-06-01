@@ -129,6 +129,14 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
     }
 
     const text = getBlockText(block);
+    if (startDefinitionListFromMarker(block, text)) {
+        return true;
+    }
+
+    if (startFootnoteDefinitionFromShortcut(block, text)) {
+        return true;
+    }
+
     const referenceDefinition = parseMarkdownReferenceDefinition(text);
     if (referenceDefinition) {
         setBlockType(block, "reference");
@@ -191,6 +199,46 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
     }
 
     focusBlock(block);
+    return true;
+}
+
+
+function startFootnoteDefinitionFromShortcut(block: HTMLElement, text: string): boolean {
+    if (!/^ {0,3}\[\^[^\]]+\]:/.test(text)) {
+        return false;
+    }
+
+    setBlockType(block, "footnote-definition");
+    setBlockText(block, text);
+    ensureEditableBlockAfter(block);
+    focusBlock(block);
+    return true;
+}
+
+function startDefinitionListFromMarker(block: HTMLElement, text: string): boolean {
+    if (!/^ {0,3}:\s+/.test(text)) {
+        return false;
+    }
+
+    const previous = getSiblingBlock(block, "previous");
+    if (!previous || readBlockType(previous.dataset.type) !== "paragraph" || getBlockText(previous).trim() === "") {
+        return false;
+    }
+
+    const raw = `${getBlockText(previous)}\n${text}`;
+    setBlockType(previous, "definition-list");
+    setBlockText(previous, raw);
+    block.remove();
+    ensureEditableBlockAfter(previous);
+    previous.dataset.blockSourceActive = "true";
+
+    const source = getBlockSourceElement(getBlockContent(previous), "atomic");
+    if (source) {
+        focusPlainTextElement(source, source.textContent?.length ?? 0);
+    } else {
+        focusBlock(previous);
+    }
+
     return true;
 }
 
