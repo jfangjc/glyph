@@ -1,10 +1,14 @@
 import {
+    canMergeBlockText,
+    createBlock,
     getBlockContent,
     getBlockText,
     isRichTextBlockType,
+    readBlockEditingKind,
     readEditorBlock,
     setBlockText,
     setBlockType,
+    syncFirstBlockPlaceholder,
 } from "../blocks/view";
 import { readBlockType } from "../blocks/model";
 import {
@@ -15,6 +19,11 @@ import {
 } from "./caret";
 import type { ParsedBlock } from "../blocks/model";
 import type { InlineFormat } from "../input/keyboard-shortcuts";
+
+export type SelectionInsertionTarget = {
+    block: HTMLElement;
+    offset: number;
+};
 
 export function readSelectedContent(serializeBlocks: (blocks: ParsedBlock[]) => string): string | null {
     const selectedRange = getSelectedBlockRange();
@@ -28,7 +37,7 @@ export function readSelectedContent(serializeBlocks: (blocks: ParsedBlock[]) => 
     return content.endsWith("\n") ? content.slice(0, -1) : content;
 }
 
-export function deleteSelectedContent(): HTMLElement | null {
+export function deleteSelectedContent(): SelectionInsertionTarget | null {
     const selectedRange = getSelectedBlockRange();
     if (!selectedRange) {
         return null;
@@ -41,26 +50,35 @@ export function deleteSelectedContent(): HTMLElement | null {
     if (startBlock === endBlock) {
         setBlockText(startBlock, startText.slice(0, startOffset) + startText.slice(endOffset));
         focusBlockAtOffset(startBlock, startOffset);
-        return startBlock;
+        syncFirstBlockPlaceholder();
+        return { block: startBlock, offset: startOffset };
     }
 
-    setBlockText(startBlock, startText.slice(0, startOffset) + endText.slice(endOffset));
+    if (canMergeSelectedBlockRange(selectedRange)) {
+        setBlockText(startBlock, startText.slice(0, startOffset) + endText.slice(endOffset));
 
-    for (const block of blocks.slice(1)) {
-        block.remove();
+        for (const block of blocks.slice(1)) {
+            block.remove();
+        }
+
+        if (getBlockText(startBlock) === "") {
+            setBlockType(startBlock, "paragraph");
+        }
+
+        focusBlockAtOffset(startBlock, startOffset);
+        syncFirstBlockPlaceholder();
+        return { block: startBlock, offset: startOffset };
     }
 
-    if (getBlockText(startBlock) === "") {
-        setBlockType(startBlock, "paragraph");
-    }
-
-    focusBlockAtOffset(startBlock, startOffset);
-    return startBlock;
+    return replaceSelectedBlockRangeWithRemainders(selectedRange);
 }
 
 export function replaceSelectionWithText(block: HTMLElement, text: string): void {
-    const selectedBlock = deleteSelectedContent() ?? block;
-    insertTextAtCaret(selectedBlock, text);
+    const target = deleteSelectedContent() ?? {
+        block,
+        offset: getCurrentSelectionOffset(block),
+    };
+    insertTextAtCaret(target.block, text);
 }
 
 export function applyInlineFormatShortcut(block: HTMLElement, format: InlineFormat): boolean {
@@ -95,10 +113,77 @@ function readSelectedEditorBlock(block: HTMLElement, selectedRange: SelectedBloc
         return readEditorBlock(block);
     }
 
-    return {
-        type: "paragraph" as const,
-        text: text.slice(startOffset, endOffset),
-    };
+    return { type: "paragraph", text: text.slice(startOffset, endOffset) };
+}
+
+function canMergeSelectedBlockRange(selectedRange: SelectedBlockRange): boolean {
+    return (
+        selectedRange.blocks.every((block) => isRichTextBlockType(readBlockType(block.dataset.type))) &&
+        canMergeBlockText(readBlockType(selectedRange.startBlock.dataset.type), readBlockType(selectedRange.endBlock.dataset.type))
+    );
+}
+
+function replaceSelectedBlockRangeWithRemainders(selectedRange: SelectedBlockRange): SelectionInsertionTarget {
+    const { blocks, startBlock, endBlock, startOffset, endOffset } = selectedRange;
+    const startPrefix = getBlockText(startBlock).slice(0, startOffset);
+    const endSuffix = getBlockText(endBlock).slice(endOffset);
+    const remainders: ParsedBlock[] = [];
+    const startRemainder = readRemainderBlock(startBlock, startPrefix);
+    const endRemainder = readRemainderBlock(endBlock, endSuffix);
+
+    if (startRemainder) {
+        remainders.push(startRemainder);
+    }
+
+    if (endRemainder) {
+        remainders.push(endRemainder);
+    }
+
+    if (remainders.length === 0) {
+        remainders.push({ type: "paragraph", text: "" });
+    }
+
+    const replacementBlocks = remainders.map((block) => createBlock(block.type, block.text, block));
+    startBlock.replaceWith(...replacementBlocks);
+    for (const block of blocks.slice(1)) {
+        block.remove();
+    }
+
+    const focusBlock = replacementBlocks[0];
+    const focusOffset = startRemainder ? getBlockText(focusBlock).length : 0;
+    focusBlockAtOffset(focusBlock, focusOffset);
+    syncFirstBlockPlaceholder();
+    return { block: focusBlock, offset: focusOffset };
+}
+
+function readRemainderBlock(block: HTMLElement, text: string): ParsedBlock | null {
+    if (text !== "") {
+        return readPartialEditorBlock(block, text);
+    }
+
+    return null;
+}
+
+function readPartialEditorBlock(block: HTMLElement, text: string): ParsedBlock {
+    const parsedBlock = readEditorBlock(block);
+    const type = readBlockType(block.dataset.type);
+    const nextBlock: ParsedBlock = { ...parsedBlock, text };
+
+    if (type === "math") {
+        delete nextBlock.mathSource;
+    }
+
+    if (readBlockEditingKind(type) === "atomic") {
+        return { type: "paragraph", text };
+    }
+
+    return nextBlock;
+}
+
+function getCurrentSelectionOffset(block: HTMLElement): number {
+    const content = getBlockContent(block);
+    const selection = document.getSelection();
+    return selection?.focusNode ? getCaretOffset(content, selection.focusNode, selection.focusOffset) : getBlockText(block).length;
 }
 
 function insertInlineFormatPair(block: HTMLElement, marker: string): boolean {

@@ -1,5 +1,6 @@
 import type { BlockType } from "./blocks/model";
 import { readBlockType } from "./blocks/model";
+import { ensureBlockSourceRendered, getEditorBlocks } from "./blocks/view";
 
 type EditorUiStateOptions = {
     hasBlockSource: (type: BlockType) => boolean;
@@ -48,7 +49,7 @@ function syncBlockSourceRevealTargets(blocks: HTMLElement[]): void {
         addBlockSourceRevealTarget(nextBlocks, block);
     }
 
-    for (const revealedBlock of blockSourceRevealBlocks) {
+    for (const revealedBlock of readRevealedBlockSourceBlocks()) {
         if (!nextBlocks.has(revealedBlock)) {
             delete revealedBlock.dataset.blockSourceActive;
         }
@@ -68,6 +69,19 @@ function addBlockSourceRevealTarget(targets: Set<HTMLElement>, block: HTMLElemen
 
     const type = readBlockType(block.dataset.type);
     if (options.hasBlockSource(type)) {
+        ensureBlockSourceRendered(block);
         targets.add(block);
     }
+}
+
+function readRevealedBlockSourceBlocks(): HTMLElement[] {
+    const revealedBlocks = new Set(blockSourceRevealBlocks.filter((block) => block.isConnected));
+
+    for (const block of getEditorBlocks()) {
+        if (block.dataset.blockSourceActive === "true") {
+            revealedBlocks.add(block);
+        }
+    }
+
+    return Array.from(revealedBlocks);
 }

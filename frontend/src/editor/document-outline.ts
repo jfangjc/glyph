@@ -109,7 +109,7 @@ function renderOutlineEntry(entry: OutlineEntry): HTMLLIElement {
     button.type = "button";
     button.title = entry.text;
     button.addEventListener("click", () => {
-        entry.block.scrollIntoView({ block: "start", behavior: "smooth" });
+        entry.block.scrollIntoView({ block: "start", behavior: readOutlineScrollBehavior() });
     });
 
     const marker = document.createElement("span");
@@ -262,7 +262,7 @@ function scrollActiveOutlineItemIntoView(activeItem: HTMLElement | null): void {
     if (itemTop < viewportTop) {
         outline.scrollTo({
             top: itemTop - paddingTop,
-            behavior: "auto",
+            behavior: readOutlineScrollBehavior(),
         });
         return;
     }
@@ -270,7 +270,11 @@ function scrollActiveOutlineItemIntoView(activeItem: HTMLElement | null): void {
     if (itemBottom > viewportBottom) {
         outline.scrollTo({
             top: itemBottom - outline.clientHeight + paddingBottom,
-            behavior: "auto",
+            behavior: readOutlineScrollBehavior(),
         });
     }
+}
+
+function readOutlineScrollBehavior(): ScrollBehavior {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 }

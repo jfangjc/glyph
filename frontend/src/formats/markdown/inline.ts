@@ -250,7 +250,7 @@ function findInlineMathClosingDelimiter(text: string, startIndex: number): numbe
 export function normalizeExternalImageUrl(value: string): string | null {
     const trimmed = value.trim();
 
-    if (/^data:image\//i.test(trimmed)) {
+    if (/^data:image\/(?:gif|jpe?g|png|webp);/i.test(trimmed)) {
         return trimmed;
     }
 

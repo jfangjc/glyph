@@ -11,7 +11,12 @@ import {
     setBlockText,
 } from "../../../editor/blocks/view";
 import { readBlockType, type ParsedBlock } from "../../../editor/blocks/model";
-import { indentListBlocks, removeOrMergeBackward, splitBlock } from "../../../editor/blocks/operations";
+import {
+    deleteBlockBoundary,
+    indentListBlocks,
+    splitBlock,
+    type BlockBoundaryDeleteResult,
+} from "../../../editor/blocks/operations";
 import {
     getBlockSourceElement,
     isBlockSourceElement,
@@ -60,9 +65,12 @@ export function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean 
         return true;
     }
 
-    if (event.key === "Backspace" && removeOrMergeBackwardFromSourceStart(source)) {
+    const sourceBoundaryDelete = event.key === "Backspace" ? removeOrMergeBackwardFromSourceStart(source) : null;
+    if (sourceBoundaryDelete) {
         event.preventDefault();
-        hooks.markEditorDirty?.();
+        if (sourceBoundaryDelete === "changed") {
+            hooks.markEditorDirty?.();
+        }
         return true;
     }
 
@@ -481,6 +489,42 @@ export function applyFocusedBlockMarkdownSourceInput(
     return true;
 }
 
+export function readSelectedBlockMarkdownSourceText(): string | null {
+    const range = readSelectedBlockMarkdownSourceRange();
+    if (!range) {
+        return null;
+    }
+
+    return (range.source.textContent ?? "").slice(range.startOffset, range.endOffset);
+}
+
+export function deleteSelectedBlockMarkdownSourceText(): boolean {
+    const range = readSelectedBlockMarkdownSourceRange();
+    if (!range) {
+        return false;
+    }
+
+    const text = range.source.textContent ?? "";
+    range.source.textContent = text.slice(0, range.startOffset) + text.slice(range.endOffset);
+    focusPlainTextElement(range.source, range.startOffset);
+    applyFocusedBlockMarkdownSourceInput(range.source);
+    return true;
+}
+
+export function insertTextIntoFocusedBlockMarkdownSource(text: string): boolean {
+    const target = readFocusedBlockMarkdownSourceTarget();
+    if (!target) {
+        return false;
+    }
+
+    const currentText = target.source.textContent ?? "";
+    target.source.textContent =
+        currentText.slice(0, target.startOffset) + text + currentText.slice(target.endOffset);
+    focusPlainTextElement(target.source, target.startOffset + text.length);
+    applyFocusedBlockMarkdownSourceInput(target.source);
+    return true;
+}
+
 export function syncActiveBlockMarkdownSource(focusBlock: HTMLElement | null): void {
     const source = getFocusedBlockMarkdownSource();
     const sourceBlock = findBlock(source);
@@ -553,16 +597,66 @@ function deleteLastBlockMarkdownSourceCharacter(event: KeyboardEvent, source: HT
     return true;
 }
 
-function removeOrMergeBackwardFromSourceStart(source: HTMLElement): boolean {
+type BlockMarkdownSourceRange = {
+    source: HTMLElement;
+    startOffset: number;
+    endOffset: number;
+};
+
+function readFocusedBlockMarkdownSourceTarget(): BlockMarkdownSourceRange | null {
+    const selectedRange = readSelectedBlockMarkdownSourceRange();
+    if (selectedRange) {
+        return selectedRange;
+    }
+
+    const source = getFocusedBlockMarkdownSource();
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    if (!source || !selection?.isCollapsed || !focusNode || (focusNode !== source && !source.contains(focusNode))) {
+        return null;
+    }
+
+    const offset = getPlainTextBoundaryOffset(source, focusNode, selection.focusOffset);
+    return { source, startOffset: offset, endOffset: offset };
+}
+
+function readSelectedBlockMarkdownSourceRange(): BlockMarkdownSourceRange | null {
+    const selection = document.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        return null;
+    }
+
+    const range = selection.getRangeAt(0);
+    const startSource = findContainingBlockMarkdownSource(range.startContainer);
+    const endSource = findContainingBlockMarkdownSource(range.endContainer);
+    if (!startSource || startSource !== endSource) {
+        return null;
+    }
+
+    const startOffset = getPlainTextBoundaryOffset(startSource, range.startContainer, range.startOffset);
+    const endOffset = getPlainTextBoundaryOffset(startSource, range.endContainer, range.endOffset);
+    return {
+        source: startSource,
+        startOffset: Math.min(startOffset, endOffset),
+        endOffset: Math.max(startOffset, endOffset),
+    };
+}
+
+function findContainingBlockMarkdownSource(node: Node): HTMLElement | null {
+    const element = node instanceof Element ? node : node.parentElement;
+    return element?.closest<HTMLElement>(".format-block-source") ?? null;
+}
+
+function removeOrMergeBackwardFromSourceStart(source: HTMLElement): BlockBoundaryDeleteResult | null {
     if (
         !isCaretAtPlainTextEdge(source, "start") ||
         (readBlockSourcePosition(source) !== "prefix" && readBlockSourcePosition(source) !== "atomic")
     ) {
-        return false;
+        return null;
     }
 
     const block = findBlock(source);
-    return Boolean(block && removeOrMergeBackward(block));
+    return block ? deleteBlockBoundary(block, "previous") : null;
 }
 
 function removeFollowingEmptyParagraphFromCodeSuffix(source: HTMLElement): boolean {

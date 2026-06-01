@@ -25,6 +25,7 @@ import {
     markEditorDirty,
     serializeDocument,
     syncBlockViewContext,
+    syncEditorDirtyState,
     syncDocumentFormatUi,
 } from "../documents/document-session";
 import { configureBlockOperations } from "./blocks/operations";
@@ -41,6 +42,8 @@ import { getElement } from "../utils/dom";
 import {
     handleEditorCopy as handleEditorCopyCommand,
     handleEditorCut as handleEditorCutCommand,
+    handleEditorDragOver as handleEditorDragOverCommand,
+    handleEditorDrop as handleEditorDropCommand,
     handleEditorPaste as handleEditorPasteCommand,
 } from "./input/editor-clipboard";
 import {
@@ -146,10 +149,14 @@ export function installEditorController(): void {
             onEditorCopy: handleEditorCopy,
             onEditorCut: handleEditorCut,
             onEditorPaste: handleEditorPaste,
+            onEditorDragOver: handleEditorDragOver,
+            onEditorDrop: handleEditorDrop,
             onEditorChange: handleEditorChange,
             onEditorClick: handleEditorClick,
             onEditorCompositionStart: handleEditorCompositionStart,
             onEditorCompositionEnd: handleEditorCompositionEnd,
+            onTitleBeforeInput: handleTitleBeforeInput,
+            onTitleKeydown: handleTitleKeydown,
             onTitleInput: handleTitleInput,
             onTitleFocus: handleTitleFocus,
             onTitleBlur: handleTitleBlur,
@@ -232,6 +239,7 @@ function createDocumentPasteContext(): DocumentPasteContext {
                 promptForPath: true,
                 suggestedFileName: getSuggestedFileName(),
             }),
+        runDiscreteEdit,
     };
 }
 
@@ -252,6 +260,20 @@ function syncSelectedBlockSourceReveal(): void {
     const selectedRange = getSelectedBlockRange();
     if (selectedRange) {
         syncBlockSourceRevealBlocks(selectedRange.blocks);
+        return;
+    }
+
+    const selection = document.getSelection();
+    if (!selection || selection.isCollapsed) {
+        return;
+    }
+
+    const selectedBlocks = Array.from(
+        new Set([findBlock(selection.anchorNode ?? null), findBlock(selection.focusNode ?? null)]),
+    ).filter((block): block is HTMLElement => Boolean(block));
+
+    if (selectedBlocks.length > 0) {
+        syncBlockSourceRevealBlocks(selectedBlocks);
     }
 }
 
@@ -425,16 +447,31 @@ function canUseWindowPrintRuntime(): boolean {
 }
 
 function undoFromMenu(): void {
-    flushPendingUndoTransaction();
-    if (undoEditorChange()) {
-        markEditorDirty();
-    }
+    undoHistoryChange();
 }
 
 function redoFromMenu(): void {
-    flushPendingUndoTransaction();
+    redoHistoryChange();
+}
+
+function undoHistoryChange(): void {
+    if (undoEditorChange()) {
+        syncEditorDirtyState();
+    }
+}
+
+function redoHistoryChange(): void {
     if (redoEditorChange()) {
-        markEditorDirty();
+        syncEditorDirtyState();
+    }
+}
+
+function runDiscreteEdit(edit: () => void): void {
+    beginDiscreteUndoTransaction();
+    try {
+        edit();
+    } finally {
+        commitUndoTransaction();
     }
 }
 
@@ -457,13 +494,56 @@ function assertUnhandledMenuCommand(command: never): never {
     throw new Error(`Unhandled app menu command: ${command}`);
 }
 
+function handleTitleBeforeInput(event: InputEvent): void {
+    if (!getActiveDocumentFormat().supportsTitle) {
+        return;
+    }
+
+    const undoKind = readBeforeInputUndoKind(event);
+    if (undoKind === "history-undo" || undoKind === "history-redo") {
+        event.preventDefault();
+        if (undoKind === "history-undo") {
+            undoHistoryChange();
+        } else {
+            redoHistoryChange();
+        }
+        return;
+    }
+
+    if (undoKind === "typing") {
+        beginTypingUndoTransaction();
+        shouldFlushTypingBatchAfterInput = shouldEndTypingBatchAfterInput(event);
+    } else if (undoKind === "discrete") {
+        beginDiscreteUndoTransaction();
+        shouldFlushTypingBatchAfterInput = false;
+    }
+}
+
+function handleTitleKeydown(event: KeyboardEvent): void {
+    if (isUndoShortcut(event)) {
+        event.preventDefault();
+        undoHistoryChange();
+        return;
+    }
+
+    if (isRedoShortcut(event)) {
+        event.preventDefault();
+        redoHistoryChange();
+        return;
+    }
+
+    if (isTypingBoundaryKeydown(event)) {
+        flushPendingUndoTransaction();
+    }
+}
+
 function handleTitleInput(): void {
     if (!getActiveDocumentFormat().supportsTitle) {
         return;
     }
 
-    beginTypingUndoTransaction();
     commitUndoTransaction();
+    flushTypingBatchAfterInputIfNeeded();
     syncDocumentWindowTitle();
     markDocumentDirty();
 }
@@ -514,17 +594,13 @@ function handleEditorChange(event: Event): void {
 function handleEditorKeydown(event: KeyboardEvent): void {
     if (isUndoShortcut(event)) {
         event.preventDefault();
-        if (undoEditorChange()) {
-            markEditorDirty();
-        }
+        undoHistoryChange();
         return;
     }
 
     if (isRedoShortcut(event)) {
         event.preventDefault();
-        if (redoEditorChange()) {
-            markEditorDirty();
-        }
+        redoHistoryChange();
         return;
     }
 
@@ -560,6 +636,16 @@ function handleEditorKeydown(event: KeyboardEvent): void {
 
 function handleEditorBeforeInput(event: InputEvent): void {
     const undoKind = readBeforeInputUndoKind(event);
+    if (undoKind === "history-undo" || undoKind === "history-redo") {
+        event.preventDefault();
+        if (undoKind === "history-undo") {
+            undoHistoryChange();
+        } else {
+            redoHistoryChange();
+        }
+        return;
+    }
+
     if (undoKind === "typing") {
         beginTypingUndoTransaction();
         shouldFlushTypingBatchAfterInput = shouldEndTypingBatchAfterInput(event);
@@ -582,6 +668,7 @@ function handleEditorBeforeInput(event: InputEvent): void {
 
 function handleEditorCompositionStart(): void {
     isComposingText = true;
+    beginTypingUndoTransaction();
 }
 
 function handleEditorCompositionEnd(event: CompositionEvent): void {
@@ -600,11 +687,16 @@ function handleEditorInput(event: Event): void {
 }
 
 function handleEditorPaste(event: ClipboardEvent): void {
-    beginDiscreteUndoTransaction();
-    void handleEditorPasteFromFormatOrGeneric(event).finally(commitUndoTransaction);
+    handleEditorPasteFromFormatOrGeneric(event);
 }
 
 function handleEditorCopy(event: ClipboardEvent): void {
+    const context = createDocumentEditorEventContext();
+    const handledByFormat = getActiveDocumentFormat().editorBehavior?.copy?.(event, context) ?? false;
+    if (handledByFormat) {
+        return;
+    }
+
     handleEditorCopyCommand(event, {
         getActiveDocumentFormat,
         markEditorDirty,
@@ -612,25 +704,86 @@ function handleEditorCopy(event: ClipboardEvent): void {
 }
 
 function handleEditorCut(event: ClipboardEvent): void {
-    beginDiscreteUndoTransaction();
-    handleEditorCutCommand(event, {
-        getActiveDocumentFormat,
-        markEditorDirty,
+    runDiscreteEdit(() => {
+        const context = createDocumentEditorEventContext();
+        const handledByFormat = getActiveDocumentFormat().editorBehavior?.cut?.(event, context) ?? false;
+        if (handledByFormat) {
+            return;
+        }
+
+        handleEditorCutCommand(event, {
+            getActiveDocumentFormat,
+            markEditorDirty,
+        });
     });
-    commitUndoTransaction();
 }
 
-async function handleEditorPasteFromFormatOrGeneric(event: ClipboardEvent): Promise<void> {
+function handleEditorPasteFromFormatOrGeneric(event: ClipboardEvent): void {
     const context = createDocumentPasteContext();
-    const handledByFormat = await getActiveDocumentFormat().editorBehavior?.paste?.(event, context);
+    const handledByFormat = getActiveDocumentFormat().editorBehavior?.paste?.(event, context) ?? false;
+    if (isPromiseLike(handledByFormat)) {
+        void handledByFormat.then((handled) => {
+            if (!handled) {
+                runGenericPaste(event);
+            }
+        });
+        return;
+    }
+
     if (handledByFormat) {
         return;
     }
 
-    await handleEditorPasteCommand(event, {
-        getActiveDocumentFormat,
-        markEditorDirty,
+    runGenericPaste(event);
+}
+
+function runGenericPaste(event: ClipboardEvent): void {
+    runDiscreteEdit(() => {
+        handleEditorPasteCommand(event, {
+            getActiveDocumentFormat,
+            markEditorDirty,
+        });
     });
+}
+
+function handleEditorDragOver(event: DragEvent): void {
+    handleEditorDragOverCommand(event);
+}
+
+function handleEditorDrop(event: DragEvent): void {
+    handleEditorDropFromFormatOrGeneric(event);
+}
+
+function handleEditorDropFromFormatOrGeneric(event: DragEvent): void {
+    const context = createDocumentPasteContext();
+    const handledByFormat = getActiveDocumentFormat().editorBehavior?.drop?.(event, context) ?? false;
+    if (isPromiseLike(handledByFormat)) {
+        void handledByFormat.then((handled) => {
+            if (!handled) {
+                runGenericDrop(event);
+            }
+        });
+        return;
+    }
+
+    if (handledByFormat) {
+        return;
+    }
+
+    runGenericDrop(event);
+}
+
+function runGenericDrop(event: DragEvent): void {
+    runDiscreteEdit(() => {
+        handleEditorDropCommand(event, {
+            getActiveDocumentFormat,
+            markEditorDirty,
+        });
+    });
+}
+
+function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
+    return Boolean(value && typeof (value as Promise<T>).then === "function");
 }
 
 function handleEditorClick(event: MouseEvent): void {
@@ -680,7 +833,15 @@ function isTypingBoundaryKeydown(event: KeyboardEvent): boolean {
     );
 }
 
-function readBeforeInputUndoKind(event: InputEvent): "typing" | "discrete" | null {
+function readBeforeInputUndoKind(event: InputEvent): "typing" | "discrete" | "history-undo" | "history-redo" | null {
+    if (event.inputType === "historyUndo") {
+        return "history-undo";
+    }
+
+    if (event.inputType === "historyRedo") {
+        return "history-redo";
+    }
+
     if (isComposingText) {
         return null;
     }
@@ -689,15 +850,16 @@ function readBeforeInputUndoKind(event: InputEvent): "typing" | "discrete" | nul
         return "typing";
     }
 
-    if (
-        event.inputType === "deleteContentBackward" ||
-        event.inputType === "deleteContentForward" ||
-        event.inputType === "deleteByCut"
-    ) {
+    if (event.inputType.startsWith("delete")) {
         return "typing";
     }
 
-    if (event.inputType.startsWith("format") || event.inputType.startsWith("insert")) {
+    if (
+        event.inputType === "insertFromDrop" ||
+        event.inputType === "insertReplacementText" ||
+        event.inputType.startsWith("format") ||
+        event.inputType.startsWith("insert")
+    ) {
         return "discrete";
     }
 

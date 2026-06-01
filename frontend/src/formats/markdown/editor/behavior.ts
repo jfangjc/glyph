@@ -8,13 +8,18 @@ import {
     focusBlockAtOffset,
     focusPlainTextElement,
     getActiveBlock,
+    getCaretOffset,
+    getCaretPositionFromPoint,
     getCurrentBlockOffset,
+    getPlainTextBoundaryOffset,
     getSelectedBlockRange,
     isCaretAtBlockEdge,
     selectEditorContents,
 } from "../../../editor/selection/caret";
 import {
     commitTransientBlock,
+    findBlock,
+    getBlockContent,
     getBlockText,
     getSiblingBlock,
     isMultilinePlainTextBlockType,
@@ -24,10 +29,9 @@ import {
 } from "../../../editor/blocks/view";
 import { readBlockType } from "../../../editor/blocks/model";
 import {
+    deleteBlockBoundary,
     indentListBlocks,
     insertPastedText,
-    mergeForward,
-    removeOrMergeBackward,
     removeTrailingLineBreakInMultilinePlainTextBlock,
     splitBlock,
 } from "../../../editor/blocks/operations";
@@ -56,10 +60,13 @@ import {
     applyFocusedBlockMarkdownSourceInput,
     commitActiveBlockMarkdownSource,
     configureMarkdownSourceController,
+    deleteSelectedBlockMarkdownSourceText,
     getFocusedBlockMarkdownSource,
     handleBlockMarkdownSourceKeydown,
+    insertTextIntoFocusedBlockMarkdownSource,
     moveCaretAfterCodeBlockSourceAtSelection,
     moveCaretIntoCodeBlockSourceAtBoundary,
+    readSelectedBlockMarkdownSourceText,
     rerenderPlainTextBlockMarkdownSource,
     syncActiveBlockMarkdownSource,
     trackVerticalBlockSourceNavigation,
@@ -79,6 +86,9 @@ import {
     trackVerticalLeadingTokenNavigation,
     trackVerticalMarkdownImageNavigation,
 } from "./token-controller";
+import { readDataTransferText } from "../../../editor/input/editor-clipboard";
+
+const supportedPastedImageMimeTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 export const markdownEditorBehavior: DocumentEditorBehavior = {
     install: installMarkdownEditorBehavior,
@@ -94,7 +104,10 @@ export const markdownEditorBehavior: DocumentEditorBehavior = {
         handleMarkdownSelectionChange();
         return true;
     },
+    copy: handleMarkdownCopy,
+    cut: handleMarkdownCut,
     paste: handleMarkdownPaste,
+    drop: handleMarkdownDrop,
     beforeSerialize: commitActiveBlockMarkdownSource,
 };
 
@@ -241,7 +254,7 @@ function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEditorEven
 
     if (event.key === "Enter") {
         event.preventDefault();
-        const targetBlock = deleteSelectedContent() ?? block;
+        const targetBlock = deleteSelectedContent()?.block ?? block;
 
         if (startCodeBlockFromFence(targetBlock)) {
             context.markEditorDirty();
@@ -327,15 +340,15 @@ function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEditorEven
             return true;
         }
 
-        if (event.key === "Backspace" && removeOrMergeBackward(block)) {
+        const boundaryDelete =
+            event.key === "Backspace"
+                ? deleteBlockBoundary(block, "previous")
+                : deleteBlockBoundary(block, "next");
+        if (boundaryDelete) {
             event.preventDefault();
-            context.markEditorDirty();
-            return true;
-        }
-
-        if (event.key === "Delete" && mergeForward(block)) {
-            event.preventDefault();
-            context.markEditorDirty();
+            if (boundaryDelete === "changed") {
+                context.markEditorDirty();
+            }
             return true;
         }
     }
@@ -349,7 +362,43 @@ function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEditorEven
     return true;
 }
 
-async function handleMarkdownPaste(event: ClipboardEvent, context: DocumentPasteContext): Promise<boolean> {
+function handleMarkdownCopy(event: ClipboardEvent, _context: DocumentEditorEventContext): boolean {
+    const sourceText = readSelectedBlockMarkdownSourceText();
+    if (sourceText === null || !event.clipboardData) {
+        return false;
+    }
+
+    event.preventDefault();
+    writeMarkdownClipboardText(event.clipboardData, sourceText);
+    return true;
+}
+
+function handleMarkdownCut(event: ClipboardEvent, context: DocumentEditorEventContext): boolean {
+    const sourceText = readSelectedBlockMarkdownSourceText();
+    if (sourceText === null || !event.clipboardData) {
+        return false;
+    }
+
+    event.preventDefault();
+    writeMarkdownClipboardText(event.clipboardData, sourceText);
+    if (deleteSelectedBlockMarkdownSourceText()) {
+        context.markEditorDirty();
+    }
+    return true;
+}
+
+function handleMarkdownPaste(event: ClipboardEvent, context: DocumentPasteContext): boolean | Promise<boolean> {
+    const sourceText = readDataTransferText(event.clipboardData);
+    if (sourceText && getFocusedBlockMarkdownSource()) {
+        event.preventDefault();
+        context.runDiscreteEdit(() => {
+            if (insertTextIntoFocusedBlockMarkdownSource(sourceText.replace(/\r\n?/g, "\n"))) {
+                context.markEditorDirty();
+            }
+        });
+        return true;
+    }
+
     const block = getActiveBlock(event.target);
     const image = readClipboardImage(event.clipboardData);
 
@@ -358,7 +407,15 @@ async function handleMarkdownPaste(event: ClipboardEvent, context: DocumentPaste
     }
 
     event.preventDefault();
+    return pasteMarkdownImage(event, context, block, image);
+}
 
+async function pasteMarkdownImage(
+    _event: ClipboardEvent,
+    context: DocumentPasteContext,
+    block: HTMLElement,
+    image: File,
+): Promise<boolean> {
     let activeFilePath = context.getActiveFilePath();
     if (!activeFilePath) {
         const saved = await context.ensureDocumentSaved();
@@ -376,11 +433,69 @@ async function handleMarkdownPaste(event: ClipboardEvent, context: DocumentPaste
     try {
         const dataUrl = await readFileAsDataUrl(image);
         const pastedImage = await savePastedImage(activeFilePath, dataUrl, image.name, image.type);
-        commitTransientBlock(block);
-        insertPastedText(block, `![${escapeMarkdownImageAlt(image.name)}](${pastedImage.relativePath})`);
-        context.markEditorDirty();
+        context.runDiscreteEdit(() => {
+            commitTransientBlock(block);
+            insertPastedText(block, `![${escapeMarkdownImageAlt(image.name)}](${pastedImage.relativePath})`);
+            context.markEditorDirty();
+        });
     } catch (error) {
         console.error("Failed to paste image:", error);
+    }
+
+    return true;
+}
+
+function handleMarkdownDrop(event: DragEvent, context: DocumentPasteContext): boolean | Promise<boolean> {
+    const sourceText = readDataTransferText(event.dataTransfer);
+    if (sourceText && focusBlockMarkdownSourceDropTarget(event)) {
+        event.preventDefault();
+        context.runDiscreteEdit(() => {
+            if (insertTextIntoFocusedBlockMarkdownSource(sourceText.replace(/\r\n?/g, "\n"))) {
+                context.markEditorDirty();
+            }
+        });
+        return true;
+    }
+
+    const image = readClipboardImage(event.dataTransfer);
+    if (!image) {
+        return false;
+    }
+
+    const block = focusMarkdownDropTarget(event);
+    if (!block) {
+        return false;
+    }
+
+    event.preventDefault();
+    return dropMarkdownImage(context, block, image);
+}
+
+async function dropMarkdownImage(context: DocumentPasteContext, block: HTMLElement, image: File): Promise<boolean> {
+    let activeFilePath = context.getActiveFilePath();
+    if (!activeFilePath) {
+        const saved = await context.ensureDocumentSaved();
+        if (!saved) {
+            return true;
+        }
+
+        activeFilePath = context.getActiveFilePath();
+    }
+
+    if (!activeFilePath) {
+        return true;
+    }
+
+    try {
+        const dataUrl = await readFileAsDataUrl(image);
+        const pastedImage = await savePastedImage(activeFilePath, dataUrl, image.name, image.type);
+        context.runDiscreteEdit(() => {
+            commitTransientBlock(block);
+            insertPastedText(block, `![${escapeMarkdownImageAlt(image.name)}](${pastedImage.relativePath})`);
+            context.markEditorDirty();
+        });
+    } catch (error) {
+        console.error("Failed to drop image:", error);
     }
 
     return true;
@@ -424,12 +539,49 @@ function readClipboardImage(dataTransfer: DataTransfer | null | undefined): File
     }
 
     for (const item of Array.from(dataTransfer.items)) {
-        if (item.kind === "file" && item.type.startsWith("image/")) {
+        if (item.kind === "file" && supportedPastedImageMimeTypes.has(item.type.toLowerCase())) {
             return item.getAsFile();
         }
     }
 
-    return Array.from(dataTransfer.files).find((file) => file.type.startsWith("image/")) ?? null;
+    return Array.from(dataTransfer.files).find((file) => supportedPastedImageMimeTypes.has(file.type.toLowerCase())) ?? null;
+}
+
+function writeMarkdownClipboardText(clipboardData: DataTransfer, text: string): void {
+    clipboardData.setData("text/plain", text);
+    clipboardData.setData("text/markdown", text);
+}
+
+function focusBlockMarkdownSourceDropTarget(event: DragEvent): boolean {
+    const target = event.target;
+    const source = target instanceof Element ? target.closest<HTMLElement>(".format-block-source") : null;
+    if (!source) {
+        return false;
+    }
+
+    const caretPosition = getCaretPositionFromPoint(event.clientX, event.clientY);
+    if (caretPosition && (caretPosition.node === source || source.contains(caretPosition.node))) {
+        focusPlainTextElement(source, getPlainTextBoundaryOffset(source, caretPosition.node, caretPosition.offset));
+        return true;
+    }
+
+    focusPlainTextElement(source, source.textContent?.length ?? 0);
+    return true;
+}
+
+function focusMarkdownDropTarget(event: DragEvent): HTMLElement | null {
+    const caretPosition = getCaretPositionFromPoint(event.clientX, event.clientY);
+    if (caretPosition) {
+        const block = findBlock(caretPosition.node);
+        if (block) {
+            const content = getBlockContent(block);
+            const offset = getCaretOffset(content, caretPosition.node, caretPosition.offset);
+            focusBlockAtOffset(block, offset, { scroll: "none" });
+            return block;
+        }
+    }
+
+    return getActiveBlock(event.target);
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {

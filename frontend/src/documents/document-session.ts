@@ -69,6 +69,11 @@ export function markEditorDirty(): void {
     markDocumentDirty();
 }
 
+export function syncEditorDirtyState(): void {
+    documentState.hasUnsavedChanges = serializeDocument() !== documentState.lastSavedContent;
+    notifyDocumentStateChanged();
+}
+
 export function syncBlockViewContext(): void {
     const format = getActiveDocumentFormat();
 

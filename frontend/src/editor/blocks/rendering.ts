@@ -48,6 +48,7 @@ export function renderPreviewBlockContent(
     preview.className = className;
     preview.dataset.sourceIgnore = "true";
     preview.contentEditable = "false";
+    // Format renderers must only return escaped or sanitized HTML.
     preview.innerHTML = html;
     content.append(preview);
 }

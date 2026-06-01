@@ -1,8 +1,7 @@
 import type { DocumentEditorEventContext } from "../../formats/types";
 import {
     indentListBlocks,
-    mergeForward,
-    removeOrMergeBackward,
+    deleteBlockBoundary,
     removeTrailingLineBreakInMultilinePlainTextBlock,
     splitBlock,
 } from "../blocks/operations";
@@ -54,7 +53,7 @@ export function handleEditorKeydown(event: KeyboardEvent, options: DocumentEdito
 
     if (event.key === "Enter") {
         event.preventDefault();
-        const targetBlock = deleteSelectedContent() ?? block;
+        const targetBlock = deleteSelectedContent()?.block ?? block;
 
         if (isMultilinePlainTextBlockType(readBlockType(targetBlock.dataset.type)) && !event.ctrlKey && !event.metaKey) {
             replaceSelectionWithText(targetBlock, "\n");
@@ -109,15 +108,15 @@ export function handleEditorKeydown(event: KeyboardEvent, options: DocumentEdito
             return;
         }
 
-        if (event.key === "Backspace" && removeOrMergeBackward(block)) {
+        const boundaryDelete =
+            event.key === "Backspace"
+                ? deleteBlockBoundary(block, "previous")
+                : deleteBlockBoundary(block, "next");
+        if (boundaryDelete) {
             event.preventDefault();
-            options.markEditorDirty();
-            return;
-        }
-
-        if (event.key === "Delete" && mergeForward(block)) {
-            event.preventDefault();
-            options.markEditorDirty();
+            if (boundaryDelete === "changed") {
+                options.markEditorDirty();
+            }
             return;
         }
     }

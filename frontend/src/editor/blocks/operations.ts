@@ -1,5 +1,6 @@
 import {
     clearBlockProperties,
+    canMergeBlockText,
     createBlock,
     getBlockContent,
     getBlockText,
@@ -8,6 +9,7 @@ import {
     isMultilinePlainTextBlockType,
     isRichTextBlockType,
     readBlockIndent,
+    readBlockEditingKind,
     readBlockListMarker,
     readBlockQuoteLevel,
     readNextListNumber,
@@ -21,6 +23,7 @@ import { readBlockType, type ParsedBlock } from "./model";
 import {
     focusBlock,
     focusBlockAtOffset,
+    focusPlainTextElement,
     getCaretOffset,
     getCurrentBlockOffset,
     getSelectedBlockRange,
@@ -30,10 +33,13 @@ import {
     deleteSelectedContent,
     insertTextAtCaret,
 } from "../selection/commands";
+import { getBlockSourceElement } from "./rendering";
 
 type BlockOperationHooks = {
     parseFragment?: (content: string) => { blocks: ParsedBlock[] };
 };
+
+export type BlockBoundaryDeleteResult = "changed" | "moved";
 
 let hooks: BlockOperationHooks = {
     parseFragment: parsePlainTextFragment,
@@ -89,7 +95,7 @@ export function removeTrailingLineBreakInMultilinePlainTextBlock(block: HTMLElem
 }
 
 export function insertPastedText(block: HTMLElement, text: string): void {
-    const selectedBlock = deleteSelectedContent() ?? block;
+    const selectedBlock = deleteSelectedContent()?.block ?? block;
 
     if (isMultilinePlainTextBlockType(readBlockType(selectedBlock.dataset.type))) {
         insertTextAtCaret(selectedBlock, text);
@@ -152,61 +158,138 @@ export function indentListBlocks(block: HTMLElement, delta: number): boolean {
     return true;
 }
 
+export function deleteBlockBoundary(
+    block: HTMLElement,
+    direction: "previous" | "next",
+): BlockBoundaryDeleteResult | null {
+    const edge = direction === "previous" ? "start" : "end";
+    if (!isCaretAtBlockEdge(block, edge)) {
+        return null;
+    }
+
+    return direction === "previous" ? deletePreviousBoundary(block) : deleteNextBoundary(block);
+}
+
 export function removeOrMergeBackward(block: HTMLElement): boolean {
+    return deleteBlockBoundary(block, "previous") === "changed";
+}
+
+export function mergeForward(block: HTMLElement): boolean {
+    return deleteBlockBoundary(block, "next") === "changed";
+}
+
+function deletePreviousBoundary(block: HTMLElement): BlockBoundaryDeleteResult | null {
     const type = readBlockType(block.dataset.type);
 
-    if (!isCaretAtBlockEdge(block, "start")) {
-        return false;
-    }
-
     if (type === "source") {
-        return false;
+        return null;
     }
 
-    if (type !== "paragraph") {
+    if (readBlockEditingKind(type) === "rich" && type !== "paragraph") {
         clearBlockProperties(block);
         focusBlockAtOffset(block, 0);
-        return true;
-    }
-
-    if (getBlockText(block) === "") {
-        const previous = getSiblingBlock(block, "previous");
-        if (previous) {
-            block.remove();
-            focusBlock(previous);
-            return true;
-        }
-
-        return true;
+        syncFirstBlockPlaceholder();
+        return "changed";
     }
 
     const previous = getSiblingBlock(block, "previous");
     if (!previous) {
-        return true;
+        return "moved";
+    }
+
+    if (getBlockText(block) === "") {
+        if (readBlockEditingKind(type) === "rich") {
+            block.remove();
+            syncFirstBlockPlaceholder();
+            focusBlockBoundary(previous, "end");
+            return "changed";
+        }
+
+        focusBlockBoundary(previous, "end");
+        return "moved";
+    }
+
+    const previousType = readBlockType(previous.dataset.type);
+    if (!canMergeBlockText(previousType, type)) {
+        focusBlockBoundary(previous, "end");
+        return "moved";
     }
 
     const offset = getBlockText(previous).length;
     setBlockText(previous, getBlockText(previous) + getBlockText(block));
     block.remove();
+    syncFirstBlockPlaceholder();
     focusBlockAtOffset(previous, offset);
-    return true;
+    return "changed";
 }
 
-export function mergeForward(block: HTMLElement): boolean {
-    if (!isCaretAtBlockEdge(block, "end")) {
-        return false;
-    }
-
+function deleteNextBoundary(block: HTMLElement): BlockBoundaryDeleteResult {
     const next = getSiblingBlock(block, "next");
     if (!next) {
-        return true;
+        return "moved";
+    }
+
+    const type = readBlockType(block.dataset.type);
+    const nextType = readBlockType(next.dataset.type);
+    const canMerge = canMergeBlockText(type, nextType);
+    if (!canMerge) {
+        if (
+            readBlockEditingKind(type) !== "rich" &&
+            getBlockText(next) === "" &&
+            readBlockEditingKind(nextType) === "rich"
+        ) {
+            next.remove();
+            syncFirstBlockPlaceholder();
+            focusBlockBoundary(block, "end");
+            return "changed";
+        }
+
+        focusBlockBoundary(next, "start");
+        return "moved";
+    }
+
+    if (getBlockText(block) === "" && readBlockEditingKind(type) === "rich") {
+        block.remove();
+        syncFirstBlockPlaceholder();
+        focusBlockBoundary(next, "start");
+        return "changed";
+    }
+
+    if (getBlockText(next) === "" && readBlockEditingKind(nextType) === "rich") {
+        next.remove();
+        syncFirstBlockPlaceholder();
+        focusBlockBoundary(block, "end");
+        return "changed";
     }
 
     const offset = getBlockText(block).length;
     setBlockText(block, getBlockText(block) + getBlockText(next));
     next.remove();
+    syncFirstBlockPlaceholder();
     focusBlockAtOffset(block, offset);
-    return true;
+    return "changed";
+}
+
+function focusBlockBoundary(block: HTMLElement, edge: "start" | "end"): void {
+    const type = readBlockType(block.dataset.type);
+    const kind = readBlockEditingKind(type);
+    if (kind !== "rich") {
+        const content = getBlockContent(block);
+        const source =
+            getBlockSourceElement(content, edge === "start" ? "prefix" : "suffix") ??
+            getBlockSourceElement(content, "atomic");
+        if (source) {
+            focusPlainTextElement(source, edge === "start" ? 0 : source.textContent?.length ?? 0);
+            return;
+        }
+    }
+
+    if (edge === "start") {
+        focusBlockAtOffset(block, 0);
+        return;
+    }
+
+    focusBlock(block);
 }
 
 function shouldParsePastedContent(text: string): boolean {

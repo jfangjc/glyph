@@ -34,6 +34,7 @@ export type DocumentPasteContext = DocumentEditorEventContext & {
     getActiveDocumentFormat: () => DocumentFormat;
     getActiveFilePath: () => string | null;
     ensureDocumentSaved: () => Promise<boolean>;
+    runDiscreteEdit: (edit: () => void) => void;
 };
 
 export type DocumentEditorBehavior = {
@@ -44,7 +45,10 @@ export type DocumentEditorBehavior = {
     mouseDown?: (event: MouseEvent, context: DocumentEditorEventContext) => boolean;
     click?: (event: MouseEvent, context: DocumentEditorEventContext) => boolean;
     selectionChange?: (context: DocumentEditorEventContext) => boolean;
+    copy?: (event: ClipboardEvent, context: DocumentEditorEventContext) => boolean;
+    cut?: (event: ClipboardEvent, context: DocumentEditorEventContext) => boolean;
     paste?: (event: ClipboardEvent, context: DocumentPasteContext) => boolean | Promise<boolean>;
+    drop?: (event: DragEvent, context: DocumentPasteContext) => boolean | Promise<boolean>;
     beforeSerialize?: () => void;
 };
 

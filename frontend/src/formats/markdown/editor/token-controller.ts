@@ -161,12 +161,12 @@ export function handleSelectionChange(): void {
     if (selection && !selection.isCollapsed) {
         hooks.syncBlockMarkdownSourceReveal?.(focusBlock);
         clearPendingMarkdownTokenNavigation();
-        syncSelectedMathTokenSources(selection);
+        syncSelectedMarkdownTokenSources(selection);
         setPointerSelecting(true);
         return;
     }
 
-    clearSelectedMathTokenSources();
+    clearSelectedMarkdownTokenSources();
     hooks.syncBlockMarkdownSourceReveal?.(focusBlock);
 
     const source = getFocusedMarkdownTokenSource();
@@ -401,7 +401,7 @@ function clearActiveMarkdownToken(
     });
 
     for (const update of updates) {
-        if (update.hasSourceEdits || update.hasFormatToken) {
+        if (update.hasSourceEdits) {
             setBlockText(update.block, update.text);
             continue;
         }
@@ -630,15 +630,43 @@ export function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
 }
 
 export function suppressAdjacentFormatTokenActivation(block: HTMLElement, offset: number): boolean {
-    const position = getTextPosition(getBlockContent(block), offset);
+    const content = getBlockContent(block);
+    const position = getTextPosition(content, offset);
     const tokenPosition = findMarkdownTokenAtCaret(position.node, position.offset, isFormatMarkdownToken);
 
     if (tokenPosition) {
+        if (activateFormatMarkdownTokenSourceAtOffset(content, tokenPosition.token, offset)) {
+            return true;
+        }
+
         suppressedMarkdownTokenActivation = { block, offset };
         return true;
     }
 
     return false;
+}
+
+function activateFormatMarkdownTokenSourceAtOffset(
+    content: HTMLElement,
+    token: HTMLElement,
+    offset: number,
+): boolean {
+    const source = getMarkdownTokenSource(token);
+    if (!source) {
+        return false;
+    }
+
+    const tokenStart = getMarkdownBoundaryOffset(content, token, 0);
+    const sourceOffset = offset - tokenStart;
+    const sourceLength = getMarkdownText(source).length;
+    if (sourceOffset <= 0 || sourceOffset >= sourceLength) {
+        return false;
+    }
+
+    setActiveMarkdownToken(token);
+    suppressSelectionChangeForFrame();
+    focusMarkdownTokenSourceAtOffset(source, sourceOffset);
+    return true;
 }
 
 function findClickedMarkdownToken(target: Element): HTMLElement | null {
@@ -754,6 +782,21 @@ function focusMarkdownTokenSource(
     const offset = readMarkdownTokenSourceFocusOffset(sourceLength, edge, options.advanceIntoSource ?? false);
     const position = getTextPosition(source, offset);
 
+    range.setStart(position.node, position.offset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+}
+
+function focusMarkdownTokenSourceAtOffset(source: HTMLElement, offset: number): void {
+    const selection = document.getSelection();
+    const range = document.createRange();
+
+    if (!selection) {
+        return;
+    }
+
+    const position = getTextPosition(source, offset);
     range.setStart(position.node, position.offset);
     range.collapse(true);
     selection.removeAllRanges();
@@ -906,6 +949,10 @@ function deactivateMarkdownToken(token: HTMLElement): void {
 }
 
 function getActiveMarkdownTokens(): HTMLElement[] {
+    for (const token of Array.from(getElement<HTMLElement>("editor").querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
+        activeMarkdownTokens.add(token);
+    }
+
     for (const token of Array.from(activeMarkdownTokens)) {
         if (!token.isConnected || token.dataset.active !== "true") {
             activeMarkdownTokens.delete(token);
@@ -915,16 +962,20 @@ function getActiveMarkdownTokens(): HTMLElement[] {
     return Array.from(activeMarkdownTokens);
 }
 
-function syncSelectedMathTokenSources(selection: Selection): void {
+function syncSelectedMarkdownTokenSources(selection: Selection): void {
     const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
     if (!range) {
-        clearSelectedMathTokenSources();
+        clearSelectedMarkdownTokenSources();
         return;
     }
 
     const root = getSelectionTokenSearchRoot(range);
     const nextTokens = new Set(
-        Array.from(root.querySelectorAll<HTMLElement>(".markdown-math-token")).filter((token) => {
+        Array.from(root.querySelectorAll<HTMLElement>(".markdown-token")).filter((token) => {
+            if (!isEditableMarkdownToken(token)) {
+                return false;
+            }
+
             try {
                 return range.intersectsNode(token);
             } catch {
@@ -946,7 +997,11 @@ function syncSelectedMathTokenSources(selection: Selection): void {
     selectedSourceMarkdownTokens = nextTokens;
 }
 
-function clearSelectedMathTokenSources(): void {
+function clearSelectedMarkdownTokenSources(): void {
+    for (const token of Array.from(getElement<HTMLElement>("editor").querySelectorAll<HTMLElement>(".markdown-token[data-selected-source='true']"))) {
+        selectedSourceMarkdownTokens.add(token);
+    }
+
     for (const token of Array.from(selectedSourceMarkdownTokens)) {
         delete token.dataset.selectedSource;
     }

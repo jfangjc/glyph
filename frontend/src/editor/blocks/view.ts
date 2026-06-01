@@ -19,6 +19,8 @@ import {
 import { escapeHtml } from "../../utils/text";
 import { readMathSourceText } from "../../formats/markdown/math";
 
+export type BlockEditingKind = "rich" | "plain" | "source-preview" | "atomic";
+
 type BlockRenderContext = {
     references: DocumentReferenceMap;
     activeFilePath: string | null;
@@ -140,6 +142,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
     if (text !== "") {
         delete block.dataset.transient;
     }
+    syncBlockPlaceholder(block, content, type, text);
 
     if (type === "code") {
         renderCodeBlockContent(content, text, source);
@@ -187,6 +190,27 @@ export function setBlockText(block: HTMLElement, text: string): void {
     cache.inlineHtml = html;
     cache.inlineRevision = renderRevision;
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
+}
+
+export function ensureBlockSourceRendered(block: HTMLElement): void {
+    const content = getBlockContent(block);
+    if (content.querySelector(".format-block-source")) {
+        return;
+    }
+
+    const type = readBlockType(block.dataset.type);
+    if (!canRecoverMissingBlockSource(block, type)) {
+        return;
+    }
+
+    const text = getBlockText(block);
+    const source = renderContext.readBlockSource?.(block, type, text) ?? {};
+    if (!hasRenderableBlockSource(source)) {
+        return;
+    }
+
+    clearRenderCache(content);
+    setBlockText(block, text);
 }
 
 export function rerenderInlineBlockContent(block: HTMLElement, offset: number): number | null {
@@ -376,6 +400,18 @@ function serializeBlockSource(source: BlockSource): string {
         source.suffix ?? "",
         source.atomic ?? "",
     ].join("\u0000");
+}
+
+function hasRenderableBlockSource(source: BlockSource): boolean {
+    return source.prefix !== undefined || source.suffix !== undefined || source.atomic !== undefined;
+}
+
+function canRecoverMissingBlockSource(block: HTMLElement, type: BlockType): boolean {
+    if (type === "table" || type === "html") {
+        return false;
+    }
+
+    return type !== "math" || Boolean(block.dataset.mathSource);
 }
 
 function didRenderContextChange(previous: BlockRenderContext, next: BlockRenderContext): boolean {
@@ -646,15 +682,31 @@ function isEmptyTransientParagraph(block: HTMLElement): boolean {
 }
 
 export function readSplitContinuationType(type: BlockType): BlockType {
-    return headingTypes.has(type) || isStandaloneBlockType(type) ? "paragraph" : type;
+    return headingTypes.has(type) || readBlockEditingKind(type) !== "rich" ? "paragraph" : type;
 }
 
 export function isRichTextBlockType(type: BlockType): boolean {
-    return !isStandaloneBlockType(type);
+    return readBlockEditingKind(type) === "rich";
 }
 
-function isStandaloneBlockType(type: BlockType): boolean {
-    return isPlainTextBlockType(type) || isAtomicBlockType(type) || type === "table" || type === "math" || type === "html";
+export function readBlockEditingKind(type: BlockType): BlockEditingKind {
+    if (isPlainTextBlockType(type)) {
+        return "plain";
+    }
+
+    if (type === "table" || type === "math" || type === "html") {
+        return "source-preview";
+    }
+
+    if (isAtomicBlockType(type)) {
+        return "atomic";
+    }
+
+    return "rich";
+}
+
+export function canMergeBlockText(leftType: BlockType, rightType: BlockType): boolean {
+    return readBlockEditingKind(leftType) === "rich" && readBlockEditingKind(rightType) === "rich";
 }
 
 function isPlainTextBlockType(type: BlockType): boolean {
@@ -773,7 +825,24 @@ export function syncFirstBlockPlaceholder(): void {
         return;
     }
 
+    const firstContent = getBlockContent(firstBlock);
+    if (readBlockType(firstBlock.dataset.type) === "paragraph" && getBlockText(firstBlock) === "") {
+        firstContent.dataset.placeholder = "Start writing...";
+    } else {
+        delete firstContent.dataset.placeholder;
+    }
+
     for (const block of remainingBlocks) {
         delete getBlockContent(block).dataset.placeholder;
     }
+}
+
+function syncBlockPlaceholder(block: HTMLElement, content: HTMLElement, type: BlockType, text: string): void {
+    const firstBlock = getEditorBlocks()[0] ?? null;
+    if (block === firstBlock && type === "paragraph" && text === "") {
+        content.dataset.placeholder = "Start writing...";
+        return;
+    }
+
+    delete content.dataset.placeholder;
 }

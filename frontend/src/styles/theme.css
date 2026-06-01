@@ -405,13 +405,15 @@
     position: relative;
 }
 
-.markdown-token[data-active="true"]:not(.markdown-image-token) {
+.markdown-token[data-active="true"]:not(.markdown-image-token),
+.markdown-token[data-selected-source="true"]:not(.markdown-image-token) {
     display: inline-grid;
     position: relative;
     vertical-align: baseline;
 }
 
-.markdown-token[data-active="true"]:not(.markdown-image-token) [data-source-ignore="true"] {
+.markdown-token[data-active="true"]:not(.markdown-image-token) [data-source-ignore="true"],
+.markdown-token[data-selected-source="true"]:not(.markdown-image-token) [data-source-ignore="true"] {
     display: inline;
     grid-area: 1 / 1;
     visibility: hidden;
@@ -608,15 +610,18 @@
     white-space: nowrap;
 }
 
-.markdown-token[data-active="true"] [data-source-ignore="true"] {
+.markdown-token[data-active="true"] [data-source-ignore="true"],
+.markdown-token[data-selected-source="true"] [data-source-ignore="true"] {
     display: none;
 }
 
-.markdown-token[data-active="true"] .markdown-token-source {
+.markdown-token[data-active="true"] .markdown-token-source,
+.markdown-token[data-selected-source="true"] .markdown-token-source {
     display: inline;
 }
 
-.markdown-token[data-active="true"]:not(.markdown-image-token) .markdown-token-source {
+.markdown-token[data-active="true"]:not(.markdown-image-token) .markdown-token-source,
+.markdown-token[data-selected-source="true"]:not(.markdown-image-token) .markdown-token-source {
     grid-area: 1 / 1;
     position: relative;
     z-index: 1;
@@ -661,6 +666,7 @@
 }
 
 .markdown-token[data-active="true"] .markdown-token-source,
+.markdown-token[data-selected-source="true"] .markdown-token-source,
 .markdown-token-source:focus {
     outline: 0;
     user-select: text;
