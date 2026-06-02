@@ -6,6 +6,7 @@ import (
 
 	"glyph/internal/documents"
 	"glyph/internal/launch"
+	"glyph/internal/windowstate"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -21,6 +22,8 @@ var assets embed.FS
 
 func main() {
 	launchService := launch.NewService()
+	windowStateStore := windowstate.New("Glyph")
+	savedWindowState := windowStateStore.Load()
 
 	app := application.New(application.Options{
 		Name:        "Glyph",
@@ -50,7 +53,7 @@ func main() {
 		launch.QueueOpenDocumentPath(launchService, event.Context().Filename(), "")
 	})
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	windowOptions := application.WebviewWindowOptions{
 		Title:     "Glyph",
 		Width:     1180,
 		Height:    760,
@@ -63,7 +66,11 @@ func main() {
 		},
 		BackgroundColour: application.NewRGB(250, 250, 248),
 		URL:              "/",
-	})
+	}
+	windowstate.ApplyToOptions(&windowOptions, savedWindowState)
+
+	mainWindow := app.Window.NewWithOptions(windowOptions)
+	windowStateStore.Track(mainWindow, savedWindowState.Maximized)
 
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
