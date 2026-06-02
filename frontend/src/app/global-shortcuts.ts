@@ -1,4 +1,4 @@
-import { canUseDesktopFileSystem, openDocument } from "../documents/document-actions";
+import { canUseDesktopFileSystem } from "../documents/document-actions";
 import {
     isFindShortcut,
     isNewFileShortcut,
@@ -16,6 +16,7 @@ type GlobalShortcutOptions = {
     openFind: () => void;
     openReplace: () => void;
     newDocument: () => void | Promise<void>;
+    openDocument: () => void | Promise<void>;
     openDirectory: () => void | Promise<void>;
     saveDocument: (promptForPath?: boolean) => void | Promise<void>;
     toggleFileTree: () => void;
@@ -71,7 +72,7 @@ export function handleGlobalKeydown(event: KeyboardEvent, options: GlobalShortcu
 
     if (isOpenFileShortcut(event)) {
         event.preventDefault();
-        void openDocument();
+        void options.openDocument();
         return;
     }
 

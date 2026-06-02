@@ -1,6 +1,5 @@
-import { getSuggestedFileName, syncDocumentWindowTitle } from "../app/window-title";
-import { Window } from "@wailsio/runtime";
 import { handleGlobalKeydown as handleGlobalKeydownCommand } from "../app/global-shortcuts";
+import { getSuggestedFileName, syncDocumentWindowTitle } from "../app/window-title";
 import {
     bindDocumentActions,
     canUseDesktopFileSystem,
@@ -13,7 +12,6 @@ import {
     saveCurrentDocument,
     startDocumentAutosave,
 } from "../documents/document-actions";
-import { installFileTree, restoreLastOpenDirectory } from "../documents/file-tree";
 import {
     documentState,
     documentStateChangedEvent,
@@ -25,54 +23,34 @@ import {
     markEditorDirty,
     serializeDocument,
     syncBlockViewContext,
-    syncEditorDirtyState,
     syncDocumentFormatUi,
 } from "../documents/document-session";
+import { installFileTree, restoreLastOpenDirectory } from "../documents/file-tree";
+import type { DocumentEditorHooks } from "../formats/types";
+import { getDocumentFormats } from "../formats/registry";
+import {
+    appMenuCommandEvent,
+} from "../platform/window-controls/window-controls";
 import { configureBlockOperations } from "./blocks/operations";
+import { syncFirstBlockPlaceholder } from "./blocks/view";
 import {
-    findBlock,
-    getBlockContent,
-    getBlockIndex,
-    getBlockText,
-    setBlockText,
-    syncFirstBlockPlaceholder,
-} from "./blocks/view";
-import { configureCaret } from "./selection/caret";
-import { getElement } from "../utils/dom";
+    createAppMenuController,
+} from "./controllers/app-menu-controller";
 import {
-    handleEditorCopy as handleEditorCopyCommand,
-    handleEditorCut as handleEditorCutCommand,
-    handleEditorDragOver as handleEditorDragOverCommand,
-    handleEditorDrop as handleEditorDropCommand,
-    handleEditorPaste as handleEditorPasteCommand,
-} from "./input/editor-clipboard";
+    createEditorInputController,
+} from "./controllers/editor-input-controller";
 import {
-    handleEditorBeforeInput as handleEditorBeforeInputCommand,
-    handleEditorInput as handleEditorInputCommand,
-} from "./input/editor-input";
+    createSelectionController,
+} from "./controllers/selection-controller";
 import {
-    beginDiscreteUndoTransaction,
-    beginTypingUndoTransaction,
-    commitUndoTransaction,
-    flushPendingUndoTransaction,
-    redoEditorChange,
-    undoEditorChange,
-} from "./history/undo-history";
-import { installEditorEventListeners } from "./editor-events";
+    createTitleController,
+} from "./controllers/title-controller";
 import {
     installDocumentOutline,
     syncDocumentOutlineToBlock,
-    syncDocumentOutlineToSelection,
 } from "./document-outline";
-import { handleEditorKeydown as handleEditorKeydownCommand } from "./input/editor-keydown";
-import {
-    isPlainTextKey,
-    isRedoShortcut,
-    isUndoShortcut,
-    readInlineFormatShortcut,
-} from "./input/keyboard-shortcuts";
-import { getSelectedBlockRange } from "./selection/caret";
-import { getCaretOffset } from "./selection/caret";
+import { readEditorDom } from "./editor-dom";
+import { installEditorEventListeners } from "./editor-events";
 import {
     configureEditorUiState,
     syncActiveBlockIndicator,
@@ -89,51 +67,62 @@ import {
     handleDocumentSurfaceMouseMove,
     handleDocumentSurfaceMouseOut,
     handleDocumentSurfaceMouseOver,
-    handleEditorMouseDown as handleEditorMouseDownCommand,
     syncLinkOpenIntentFromKeyboard,
 } from "./pointer-interactions";
-import { applyZoomShortcut } from "../app/zoom";
-import {
-    appMenuCommandEvent,
-    type AppMenuCommandDetail,
-} from "../platform/window-controls/window-controls";
-import { getDocumentFormats } from "../formats/registry";
-import type { DocumentEditorEventContext, DocumentPasteContext } from "../formats/types";
+import { configureCaret } from "./selection/caret";
 import {
     installFindReplaceController,
-    type FindReplaceController,
 } from "./find-replace";
 
-let isComposingText = false;
-let shouldFlushTypingBatchAfterInput = false;
-let openDirectoryFromShortcut: (() => Promise<void>) | null = null;
-let toggleFileTreeFromShortcut: (() => void) | null = null;
-let findReplaceController: FindReplaceController | null = null;
-let lastSelectionSignature = "";
-
 export function installEditorController(): void {
-    const surface = getElement<HTMLElement>("document-surface");
-    const editor = getElement<HTMLElement>("editor");
-    const title = getElement<HTMLInputElement>("document-title");
-    const shell = document.querySelector<HTMLElement>(".editor-shell");
+    const dom = readEditorDom();
+    const editorHooks = createDocumentEditorHooks();
 
-    if (!shell) {
-        throw new Error("Editor shell is missing");
-    }
-
-    installDocumentOutline(shell, editor);
-    const fileTree = installFileTree(shell, {
+    installDocumentOutline(dom.shell, dom.editor);
+    const fileTree = installFileTree(dom.shell, {
         openDocumentPath,
     });
-    openDirectoryFromShortcut = fileTree.openDirectory;
-    toggleFileTreeFromShortcut = fileTree.toggle;
-    findReplaceController = installFindReplaceController({
-        editor,
-        shell,
+    const findReplaceController = installFindReplaceController({
+        editor: dom.editor,
+        shell: dom.shell,
         onDirty: markEditorDirty,
     });
+    const inputController = createEditorInputController({
+        hooks: editorHooks,
+        getActiveDocumentFormat,
+        getActiveFilePath: () => documentState.activeFilePath,
+        ensureDocumentSaved: saveCurrentDocument,
+    });
+    const titleController = createTitleController({
+        getActiveDocumentFormat,
+        isComposingText: inputController.isComposingText,
+        hasActiveFileWithUnsavedChanges: () =>
+            Boolean(documentState.activeFilePath && documentState.hasUnsavedChanges),
+        markDocumentDirty,
+        saveDocument: () => saveCurrentDocument(),
+        syncActiveBlockIndicator,
+        syncBlockSourceReveal,
+    });
+    const selectionController = createSelectionController({
+        hooks: editorHooks,
+        getActiveDocumentFormat,
+        isComposingText: inputController.isComposingText,
+    });
+    const appMenuController = createAppMenuController({
+        editor: dom.editor,
+        surface: dom.surface,
+        findReplaceController,
+        createNewDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
+        openDocument,
+        openDirectory: fileTree.openDirectory,
+        saveDocument: saveDocumentFromEditor,
+        ensureMarkdownExportSaved,
+        toggleFileTree: fileTree.toggle,
+        isMarkdownDocument: () => documentState.activeFormatId === "markdown",
+    });
+
     installEditorEventListeners(
-        { surface, editor, title },
+        { surface: dom.surface, editor: dom.editor, title: dom.title },
         {
             onSurfaceMouseDown: handleDocumentSurfaceMouseDown,
             onSurfaceMouseMove: handleDocumentSurfaceMouseMove,
@@ -142,33 +131,49 @@ export function installEditorController(): void {
             onSurfaceMouseOut: handleDocumentSurfaceMouseOut,
             onDocumentMouseMove: handleDocumentMouseMove,
             onDocumentMouseUp: handleDocumentMouseUp,
-            onEditorKeydown: handleEditorKeydown,
-            onEditorMouseDown: handleEditorMouseDown,
-            onEditorBeforeInput: handleEditorBeforeInput,
-            onEditorInput: handleEditorInput,
-            onEditorCopy: handleEditorCopy,
-            onEditorCut: handleEditorCut,
-            onEditorPaste: handleEditorPaste,
-            onEditorDragOver: handleEditorDragOver,
-            onEditorDrop: handleEditorDrop,
-            onEditorChange: handleEditorChange,
-            onEditorClick: handleEditorClick,
-            onEditorCompositionStart: handleEditorCompositionStart,
-            onEditorCompositionEnd: handleEditorCompositionEnd,
-            onTitleBeforeInput: handleTitleBeforeInput,
-            onTitleKeydown: handleTitleKeydown,
-            onTitleInput: handleTitleInput,
-            onTitleFocus: handleTitleFocus,
-            onTitleBlur: handleTitleBlur,
-            onSelectionChange: handleEditorSelectionChange,
-            onWindowKeydown: handleGlobalKeydown,
+            onEditorKeydown: inputController.handleEditorKeydown,
+            onEditorMouseDown: inputController.handleEditorMouseDown,
+            onEditorBeforeInput: inputController.handleEditorBeforeInput,
+            onEditorInput: inputController.handleEditorInput,
+            onEditorCopy: inputController.handleEditorCopy,
+            onEditorCut: inputController.handleEditorCut,
+            onEditorPaste: inputController.handleEditorPaste,
+            onEditorDragOver: inputController.handleEditorDragOver,
+            onEditorDrop: inputController.handleEditorDrop,
+            onEditorChange: inputController.handleEditorChange,
+            onEditorClick: inputController.handleEditorClick,
+            onEditorCompositionStart: inputController.handleEditorCompositionStart,
+            onEditorCompositionEnd: inputController.handleEditorCompositionEnd,
+            onTitleBeforeInput: titleController.handleTitleBeforeInput,
+            onTitleKeydown: titleController.handleTitleKeydown,
+            onTitleInput: titleController.handleTitleInput,
+            onTitleFocus: titleController.handleTitleFocus,
+            onTitleBlur: titleController.handleTitleBlur,
+            onSelectionChange: selectionController.handleEditorSelectionChange,
+            onWindowKeydown: (event) =>
+                handleGlobalKeydown(event, {
+                    openFind: () => findReplaceController.openFind(),
+                    openReplace: () => findReplaceController.openReplace(),
+                    newDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
+                    openDocument,
+                    openDirectory: fileTree.openDirectory,
+                    saveDocument: saveDocumentFromEditor,
+                    toggleFileTree: fileTree.toggle,
+                }),
             onWindowKeyup: syncLinkOpenIntentFromKeyboard,
             onWindowBlur: clearLinkOpenIntent,
-            onDocumentStateChanged: handleDocumentStateChanged,
+            onDocumentStateChanged: () => {
+                selectionController.resetSelectionSignature();
+                syncDocumentFormatUi();
+                syncBlockViewContext();
+                syncDocumentWindowTitle();
+                appMenuController.syncExportMenuState();
+                findReplaceController.refresh();
+            },
         },
         documentStateChangedEvent,
     );
-    window.addEventListener(appMenuCommandEvent, handleAppMenuCommand as EventListener);
+    window.addEventListener(appMenuCommandEvent, appMenuController.handleAppMenuCommand as EventListener);
     configureCaret({
         onBlockFocused: (block) => {
             syncActiveBlockIndicator(block);
@@ -182,7 +187,7 @@ export function installEditorController(): void {
     configureEditorUiState({
         hasBlockSource: (type) => Boolean(getActiveDocumentFormat().hasBlockSource?.(type)),
     });
-    installDocumentFormatEditorBehaviors();
+    installDocumentFormatEditorBehaviors(editorHooks);
     configureBlockOperations({
         parseFragment: (content) => getActiveDocumentFormat().parseFragment(content),
     });
@@ -196,7 +201,7 @@ export function installEditorController(): void {
     syncBlockViewContext();
     syncFirstBlockPlaceholder();
     syncDocumentWindowTitle();
-    syncExportMenuState();
+    appMenuController.syncExportMenuState();
 }
 
 async function restoreStartupDocument(): Promise<void> {
@@ -205,14 +210,13 @@ async function restoreStartupDocument(): Promise<void> {
     }
 }
 
-function installDocumentFormatEditorBehaviors(): void {
-    const hooks = createDocumentEditorHooks();
+function installDocumentFormatEditorBehaviors(hooks: DocumentEditorHooks): void {
     for (const format of getDocumentFormats()) {
         format.editorBehavior?.install?.(hooks);
     }
 }
 
-function createDocumentEditorHooks() {
+function createDocumentEditorHooks(): DocumentEditorHooks {
     return {
         markDocumentDirty,
         markEditorDirty,
@@ -222,79 +226,11 @@ function createDocumentEditorHooks() {
     };
 }
 
-function createDocumentEditorEventContext(): DocumentEditorEventContext {
-    return {
-        ...createDocumentEditorHooks(),
-        isComposingText,
-    };
-}
-
-function createDocumentPasteContext(): DocumentPasteContext {
-    return {
-        ...createDocumentEditorEventContext(),
-        getActiveDocumentFormat,
-        getActiveFilePath: () => documentState.activeFilePath,
-        ensureDocumentSaved: () =>
-            saveCurrentDocument({
-                promptForPath: true,
-                suggestedFileName: getSuggestedFileName(),
-            }),
-        runDiscreteEdit,
-    };
-}
-
-function handleEditorSelectionChange(): void {
-    const selectionState = readSelectionState();
-    if (selectionState.signature === lastSelectionSignature) {
-        return;
-    }
-
-    lastSelectionSignature = selectionState.signature;
-    syncActiveBlockIndicator(selectionState.focusBlock);
-    getActiveDocumentFormat().editorBehavior?.selectionChange?.(createDocumentEditorEventContext());
-    syncSelectedBlockSourceReveal();
-    syncDocumentOutlineToSelection();
-}
-
-function syncSelectedBlockSourceReveal(): void {
-    const selectedRange = getSelectedBlockRange();
-    if (selectedRange) {
-        syncBlockSourceRevealBlocks(selectedRange.blocks);
-        return;
-    }
-
-    const selection = document.getSelection();
-    if (!selection || selection.isCollapsed) {
-        return;
-    }
-
-    const selectedBlocks = Array.from(
-        new Set([findBlock(selection.anchorNode ?? null), findBlock(selection.focusNode ?? null)]),
-    ).filter((block): block is HTMLElement => Boolean(block));
-
-    if (selectedBlocks.length > 0) {
-        syncBlockSourceRevealBlocks(selectedBlocks);
-    }
-}
-
-function handleDocumentStateChanged(): void {
-    lastSelectionSignature = "";
-    syncDocumentFormatUi();
-    syncBlockViewContext();
-    syncDocumentWindowTitle();
-    syncExportMenuState();
-    findReplaceController?.refresh();
-}
-
-function handleGlobalKeydown(event: KeyboardEvent): void {
-    handleGlobalKeydownCommand(event, {
-        openFind: () => findReplaceController?.openFind(),
-        openReplace: () => findReplaceController?.openReplace(),
-        newDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
-        openDirectory: () => openDirectoryFromShortcut?.(),
-        saveDocument: saveDocumentFromEditor,
-        toggleFileTree: () => toggleFileTreeFromShortcut?.(),
-    });
+function handleGlobalKeydown(
+    event: KeyboardEvent,
+    options: Parameters<typeof handleGlobalKeydownCommand>[1],
+): void {
+    handleGlobalKeydownCommand(event, options);
 }
 
 async function saveDocumentFromEditor(promptForPath = false): Promise<void> {
@@ -304,615 +240,13 @@ async function saveDocumentFromEditor(promptForPath = false): Promise<void> {
     });
 }
 
-function handleAppMenuCommand(event: CustomEvent<AppMenuCommandDetail>): void {
-    switch (event.detail.command) {
-        case "file:new":
-            void createNewMarkdownDocument(getSuggestedFileName());
-            return;
-        case "file:open":
-            void openDocument();
-            return;
-        case "file:open-directory":
-            void openDirectoryFromShortcut?.();
-            return;
-        case "file:save":
-            void saveDocumentFromEditor();
-            return;
-        case "file:save-as":
-            void saveDocumentFromEditor(true);
-            return;
-        case "file:export":
-            void exportCurrentDocumentToPdf();
-            return;
-        case "edit:undo":
-            undoFromMenu();
-            return;
-        case "edit:redo":
-            redoFromMenu();
-            return;
-        case "edit:cut":
-            runEditableCommand("cut");
-            return;
-        case "edit:copy":
-            runEditableCommand("copy");
-            return;
-        case "edit:paste":
-            runEditableCommand("paste");
-            return;
-        case "edit:select-all":
-            selectAllFromMenu();
-            return;
-        case "edit:find":
-            findReplaceController?.openFind();
-            return;
-        case "edit:replace":
-            findReplaceController?.openReplace();
-            return;
-        case "view:toggle-file-tree":
-            toggleFileTreeFromShortcut?.();
-            return;
-        case "view:zoom-in":
-            void applyZoomShortcut("in");
-            return;
-        case "view:zoom-out":
-            void applyZoomShortcut("out");
-            return;
-        case "view:zoom-reset":
-            void applyZoomShortcut("reset");
-            return;
-        case "help:about":
-            window.alert("Glyph\nA lightweight, minimalistic cross-platform document editor.");
-            return;
-        default:
-            assertUnhandledMenuCommand(event.detail.command);
-    }
-}
-
-async function exportCurrentDocumentToPdf(): Promise<void> {
-    if (documentState.activeFormatId !== "markdown") {
-        return;
-    }
-
-    if (canUseDesktopFileSystem()) {
-        const saved = await saveCurrentDocument({
-            promptForPath: !documentState.activeFilePath,
-            suggestedFileName: getSuggestedFileName(),
-        });
-        if (!saved) {
-            return;
-        }
-    }
-
-    try {
-        document.body.dataset.printingMarkdown = "true";
-        await waitForMarkdownExportView();
-        if (canUseWindowPrintRuntime()) {
-            await Window.Print();
-        } else {
-            window.print();
-        }
-    } catch (error) {
-        console.error("Failed to export PDF:", error);
-    } finally {
-        delete document.body.dataset.printingMarkdown;
-        getElement<HTMLElement>("editor").focus();
-    }
-}
-
-function syncExportMenuState(): void {
-    const exportButton = document.querySelector<HTMLButtonElement>('[data-app-command="file:export"]');
-    if (!exportButton) {
-        return;
-    }
-
-    exportButton.disabled = documentState.activeFormatId !== "markdown";
-}
-
-async function waitForMarkdownExportView(): Promise<void> {
-    await nextAnimationFrame();
-    await waitForPreviewImages(getElement<HTMLElement>("document-surface"));
-    await nextAnimationFrame();
-}
-
-function nextAnimationFrame(): Promise<void> {
-    return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
-}
-
-function waitForPreviewImages(root: HTMLElement): Promise<void> {
-    const pendingImages = Array.from(root.querySelectorAll<HTMLImageElement>("img")).filter((image) => !image.complete);
-    if (pendingImages.length === 0) {
-        return Promise.resolve();
-    }
-
-    return Promise.all(
-        pendingImages.map(
-            (image) =>
-                new Promise<void>((resolve) => {
-                    const finish = () => resolve();
-                    image.addEventListener("load", finish, { once: true });
-                    image.addEventListener("error", finish, { once: true });
-                }),
-        ),
-    ).then(() => undefined);
-}
-
-function canUseWindowPrintRuntime(): boolean {
-    return Boolean(
-        (window as Window & { _wails?: { environment?: unknown } })._wails?.environment ||
-            (window as Window & { chrome?: { webview?: { postMessage?: unknown } } }).chrome?.webview?.postMessage ||
-            (window as Window & { webkit?: { messageHandlers?: { external?: { postMessage?: unknown } } } }).webkit
-                ?.messageHandlers?.external?.postMessage ||
-            (window as Window & { wails?: { invoke?: unknown } }).wails?.invoke,
-    );
-}
-
-function undoFromMenu(): void {
-    undoHistoryChange();
-}
-
-function redoFromMenu(): void {
-    redoHistoryChange();
-}
-
-function undoHistoryChange(): void {
-    if (undoEditorChange()) {
-        syncEditorDirtyState();
-    }
-}
-
-function redoHistoryChange(): void {
-    if (redoEditorChange()) {
-        syncEditorDirtyState();
-    }
-}
-
-function runDiscreteEdit(edit: () => void): void {
-    beginDiscreteUndoTransaction();
-    try {
-        edit();
-    } finally {
-        commitUndoTransaction();
-    }
-}
-
-function runEditableCommand(command: "cut" | "copy" | "paste"): void {
-    document.execCommand(command);
-}
-
-function selectAllFromMenu(): void {
-    const activeElement = document.activeElement;
-    if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
-        activeElement.select();
-        return;
-    }
-
-    getElement<HTMLElement>("editor").focus();
-    document.execCommand("selectAll");
-}
-
-function assertUnhandledMenuCommand(command: never): never {
-    throw new Error(`Unhandled app menu command: ${command}`);
-}
-
-function handleTitleBeforeInput(event: InputEvent): void {
-    if (!getActiveDocumentFormat().supportsTitle) {
-        return;
-    }
-
-    const undoKind = readBeforeInputUndoKind(event);
-    if (undoKind === "history-undo" || undoKind === "history-redo") {
-        event.preventDefault();
-        if (undoKind === "history-undo") {
-            undoHistoryChange();
-        } else {
-            redoHistoryChange();
-        }
-        return;
-    }
-
-    if (undoKind === "typing") {
-        beginTypingUndoTransaction();
-        shouldFlushTypingBatchAfterInput = shouldEndTypingBatchAfterInput(event);
-    } else if (undoKind === "discrete") {
-        beginDiscreteUndoTransaction();
-        shouldFlushTypingBatchAfterInput = false;
-    }
-}
-
-function handleTitleKeydown(event: KeyboardEvent): void {
-    if (isUndoShortcut(event)) {
-        event.preventDefault();
-        undoHistoryChange();
-        return;
-    }
-
-    if (isRedoShortcut(event)) {
-        event.preventDefault();
-        redoHistoryChange();
-        return;
-    }
-
-    if (isTypingBoundaryKeydown(event)) {
-        flushPendingUndoTransaction();
-    }
-}
-
-function handleTitleInput(): void {
-    if (!getActiveDocumentFormat().supportsTitle) {
-        return;
-    }
-
-    commitUndoTransaction();
-    flushTypingBatchAfterInputIfNeeded();
-    syncDocumentWindowTitle();
-    markDocumentDirty();
-}
-
-function handleTitleFocus(): void {
-    flushPendingUndoTransaction();
-    syncActiveBlockIndicator(null);
-    syncBlockSourceReveal(null);
-}
-
-function handleTitleBlur(): void {
-    flushPendingUndoTransaction();
-    if (documentState.activeFilePath && documentState.hasUnsavedChanges) {
-        void saveCurrentDocument();
-    }
-}
-
-function handleEditorMouseDown(event: MouseEvent): void {
-    const target = event.target;
-    if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
-        beginDiscreteUndoTransaction();
-    } else {
-        flushPendingUndoTransaction();
-    }
-
-    const context = createDocumentEditorEventContext();
-    const handledByFormat = getActiveDocumentFormat().editorBehavior?.mouseDown?.(event, context) ?? false;
-    if (!handledByFormat) {
-        handleEditorMouseDownCommand(event);
-    }
-}
-
-function handleEditorChange(event: Event): void {
-    const target = event.target;
-    if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
-        const block = findBlock(target);
-        if (block) {
-            setBlockText(block, getBlockText(block));
-        }
-
-        syncActiveBlockIndicator(block);
-        syncBlockSourceReveal(block);
-        commitUndoTransaction();
-        markDocumentDirty();
-    }
-}
-
-function handleEditorKeydown(event: KeyboardEvent): void {
-    if (isUndoShortcut(event)) {
-        event.preventDefault();
-        undoHistoryChange();
-        return;
-    }
-
-    if (isRedoShortcut(event)) {
-        event.preventDefault();
-        redoHistoryChange();
-        return;
-    }
-
-    if (isTodoCheckboxActivation(event)) {
-        beginDiscreteUndoTransaction();
-        return;
-    }
-
-    if (isTypingBoundaryKeydown(event)) {
-        flushPendingUndoTransaction();
-    }
-
-    const shouldTrackPlainTextSelectionReplacement = isPlainTextKey(event) && Boolean(getSelectedBlockRange());
-    if (shouldTrackPlainTextSelectionReplacement) {
-        beginTypingUndoTransaction();
-    }
-
-    const shouldTrackDiscreteEdit = !shouldTrackPlainTextSelectionReplacement && isDiscreteEditorKeydown(event);
-    if (shouldTrackDiscreteEdit) {
-        beginDiscreteUndoTransaction();
-    }
-
-    const context = createDocumentEditorEventContext();
-    const handledByFormat = getActiveDocumentFormat().editorBehavior?.keydown?.(event, context) ?? false;
-    if (!handledByFormat) {
-        handleEditorKeydownCommand(event, context);
-    }
-
-    if (shouldTrackDiscreteEdit || shouldTrackPlainTextSelectionReplacement) {
-        commitUndoTransaction();
-    }
-}
-
-function handleEditorBeforeInput(event: InputEvent): void {
-    const undoKind = readBeforeInputUndoKind(event);
-    if (undoKind === "history-undo" || undoKind === "history-redo") {
-        event.preventDefault();
-        if (undoKind === "history-undo") {
-            undoHistoryChange();
-        } else {
-            redoHistoryChange();
-        }
-        return;
-    }
-
-    if (undoKind === "typing") {
-        beginTypingUndoTransaction();
-        shouldFlushTypingBatchAfterInput = shouldEndTypingBatchAfterInput(event);
-    } else if (undoKind === "discrete") {
-        beginDiscreteUndoTransaction();
-        shouldFlushTypingBatchAfterInput = false;
-    }
-
-    const context = createDocumentEditorEventContext();
-    const handledByFormat = getActiveDocumentFormat().editorBehavior?.beforeInput?.(event, context) ?? false;
-    if (!handledByFormat) {
-        handleEditorBeforeInputCommand(event, context);
-    }
-
-    if (event.defaultPrevented && undoKind) {
-        commitUndoTransaction();
-        flushTypingBatchAfterInputIfNeeded();
-    }
-}
-
-function handleEditorCompositionStart(): void {
-    isComposingText = true;
-    beginTypingUndoTransaction();
-}
-
-function handleEditorCompositionEnd(event: CompositionEvent): void {
-    isComposingText = false;
-    handleEditorInput(event);
-}
-
-function handleEditorInput(event: Event): void {
-    const context = createDocumentEditorEventContext();
-    const handledByFormat = getActiveDocumentFormat().editorBehavior?.input?.(event, context) ?? false;
-    if (!handledByFormat) {
-        handleEditorInputCommand(event, context);
-    }
-    commitUndoTransaction();
-    flushTypingBatchAfterInputIfNeeded();
-}
-
-function handleEditorPaste(event: ClipboardEvent): void {
-    handleEditorPasteFromFormatOrGeneric(event);
-}
-
-function handleEditorCopy(event: ClipboardEvent): void {
-    const context = createDocumentEditorEventContext();
-    const handledByFormat = getActiveDocumentFormat().editorBehavior?.copy?.(event, context) ?? false;
-    if (handledByFormat) {
-        return;
-    }
-
-    handleEditorCopyCommand(event, {
-        getActiveDocumentFormat,
-        markEditorDirty,
-    });
-}
-
-function handleEditorCut(event: ClipboardEvent): void {
-    runDiscreteEdit(() => {
-        const context = createDocumentEditorEventContext();
-        const handledByFormat = getActiveDocumentFormat().editorBehavior?.cut?.(event, context) ?? false;
-        if (handledByFormat) {
-            return;
-        }
-
-        handleEditorCutCommand(event, {
-            getActiveDocumentFormat,
-            markEditorDirty,
-        });
-    });
-}
-
-function handleEditorPasteFromFormatOrGeneric(event: ClipboardEvent): void {
-    const context = createDocumentPasteContext();
-    const handledByFormat = getActiveDocumentFormat().editorBehavior?.paste?.(event, context) ?? false;
-    if (isPromiseLike(handledByFormat)) {
-        void handledByFormat.then((handled) => {
-            if (!handled) {
-                runGenericPaste(event);
-            }
-        });
-        return;
-    }
-
-    if (handledByFormat) {
-        return;
-    }
-
-    runGenericPaste(event);
-}
-
-function runGenericPaste(event: ClipboardEvent): void {
-    runDiscreteEdit(() => {
-        handleEditorPasteCommand(event, {
-            getActiveDocumentFormat,
-            markEditorDirty,
-        });
-    });
-}
-
-function handleEditorDragOver(event: DragEvent): void {
-    handleEditorDragOverCommand(event);
-}
-
-function handleEditorDrop(event: DragEvent): void {
-    handleEditorDropFromFormatOrGeneric(event);
-}
-
-function handleEditorDropFromFormatOrGeneric(event: DragEvent): void {
-    const context = createDocumentPasteContext();
-    const handledByFormat = getActiveDocumentFormat().editorBehavior?.drop?.(event, context) ?? false;
-    if (isPromiseLike(handledByFormat)) {
-        void handledByFormat.then((handled) => {
-            if (!handled) {
-                runGenericDrop(event);
-            }
-        });
-        return;
-    }
-
-    if (handledByFormat) {
-        return;
-    }
-
-    runGenericDrop(event);
-}
-
-function runGenericDrop(event: DragEvent): void {
-    runDiscreteEdit(() => {
-        handleEditorDropCommand(event, {
-            getActiveDocumentFormat,
-            markEditorDirty,
-        });
-    });
-}
-
-function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
-    return Boolean(value && typeof (value as Promise<T>).then === "function");
-}
-
-function handleEditorClick(event: MouseEvent): void {
-    getActiveDocumentFormat().editorBehavior?.click?.(event, createDocumentEditorEventContext());
-}
-
-function isDiscreteEditorKeydown(event: KeyboardEvent): boolean {
-    if (isComposingText) {
-        return false;
-    }
-
-    if (readInlineFormatShortcut(event)) {
+async function ensureMarkdownExportSaved(): Promise<boolean> {
+    if (!canUseDesktopFileSystem()) {
         return true;
     }
 
-    if (event.key === "Enter" || event.key === "Tab") {
-        return true;
-    }
-
-    if ((event.key === "Backspace" || event.key === "Delete") && !event.ctrlKey && !event.metaKey && !event.altKey) {
-        return true;
-    }
-
-    return false;
-}
-
-function isTodoCheckboxActivation(event: KeyboardEvent): boolean {
-    return (
-        event.target instanceof HTMLInputElement &&
-        event.target.classList.contains("todo-checkbox") &&
-        (event.key === " " || event.key === "Enter")
-    );
-}
-
-function isTypingBoundaryKeydown(event: KeyboardEvent): boolean {
-    if (event.ctrlKey || event.metaKey || event.altKey) {
-        return false;
-    }
-
-    return (
-        event.key.startsWith("Arrow") ||
-        event.key === "Home" ||
-        event.key === "End" ||
-        event.key === "PageUp" ||
-        event.key === "PageDown" ||
-        event.key === "Escape"
-    );
-}
-
-function readBeforeInputUndoKind(event: InputEvent): "typing" | "discrete" | "history-undo" | "history-redo" | null {
-    if (event.inputType === "historyUndo") {
-        return "history-undo";
-    }
-
-    if (event.inputType === "historyRedo") {
-        return "history-redo";
-    }
-
-    if (isComposingText) {
-        return null;
-    }
-
-    if (event.inputType === "insertText" || event.inputType === "insertCompositionText") {
-        return "typing";
-    }
-
-    if (event.inputType.startsWith("delete")) {
-        return "typing";
-    }
-
-    if (
-        event.inputType === "insertFromDrop" ||
-        event.inputType === "insertReplacementText" ||
-        event.inputType.startsWith("format") ||
-        event.inputType.startsWith("insert")
-    ) {
-        return "discrete";
-    }
-
-    return null;
-}
-
-function shouldEndTypingBatchAfterInput(event: InputEvent): boolean {
-    if (event.inputType !== "insertText" || event.data === null) {
-        return false;
-    }
-
-    return /[\s.,;:!?()[\]{}"'`]/.test(event.data);
-}
-
-function flushTypingBatchAfterInputIfNeeded(): void {
-    if (!shouldFlushTypingBatchAfterInput) {
-        return;
-    }
-
-    shouldFlushTypingBatchAfterInput = false;
-    flushPendingUndoTransaction();
-}
-
-function readSelectionState(): { signature: string; focusBlock: HTMLElement | null } {
-    const selection = document.getSelection();
-    if (!selection || selection.rangeCount === 0) {
-        return { signature: "none", focusBlock: null };
-    }
-
-    const anchorBlock = findBlock(selection.anchorNode ?? null);
-    const focusBlock = findBlock(selection.focusNode ?? null);
-    const anchorOffset = readSelectionBoundaryOffset(anchorBlock, selection.anchorNode, selection.anchorOffset);
-    const focusOffset = readSelectionBoundaryOffset(focusBlock, selection.focusNode, selection.focusOffset);
-    const signature = [
-        selection.isCollapsed ? "caret" : "range",
-        anchorBlock ? getBlockIndex(anchorBlock) : -1,
-        focusBlock ? getBlockIndex(focusBlock) : -1,
-        anchorOffset,
-        focusOffset,
-    ].join(":");
-
-    return { signature, focusBlock };
-}
-
-function readSelectionBoundaryOffset(block: HTMLElement | null, node: Node | null, offset: number): number {
-    if (!block || !node) {
-        return offset;
-    }
-
-    const content = getBlockContent(block);
-    if (node !== content && !content.contains(node)) {
-        return offset;
-    }
-
-    return getCaretOffset(content, node, offset);
+    return saveCurrentDocument({
+        promptForPath: !documentState.activeFilePath,
+        suggestedFileName: getSuggestedFileName(),
+    });
 }

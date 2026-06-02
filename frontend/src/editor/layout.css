@@ -1,0 +1,243 @@
+.editor-shell {
+    background: #ffffff;
+    height: 100vh;
+    width: 100vw;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
+    overscroll-behavior: none;
+    scroll-padding: 72px 0 120px;
+    scrollbar-gutter: stable;
+    scrollbar-color: #b8b8b8 transparent;
+    scrollbar-width: thin;
+}
+
+.editor-shell::-webkit-scrollbar {
+    width: 10px;
+}
+
+.editor-shell::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+body.app-titlebar-host .editor-shell::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+body.app-titlebar-host .editor-shell {
+    position: fixed;
+    top: var(--glyph-titlebar-height, 37px);
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: auto;
+    scroll-padding-top: calc(72px - var(--glyph-titlebar-height, 37px));
+}
+
+.editor-shell::-webkit-scrollbar-thumb {
+    border: 3px solid #ffffff;
+    border-radius: 999px;
+    background: #b8b8b8;
+}
+
+.editor-shell::-webkit-scrollbar-thumb:hover {
+    background: #8d8d8d;
+}
+
+.document-surface {
+    width: min(65vw, 1280px);
+    min-height: 100vh;
+    margin: 0 auto;
+    padding: 72px 48px 120px 48px;
+    cursor: text;
+    zoom: var(--glyph-editor-zoom, 1);
+}
+
+body.app-titlebar-host .document-surface {
+    min-height: calc(100vh - var(--glyph-titlebar-height, 37px));
+    padding-top: calc(72px - var(--glyph-titlebar-height, 37px));
+}
+
+.document-title {
+    width: 100%;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: #191919;
+    font-family: var(--glyph-font-title, var(--glyph-font-text));
+    font-size: 2.75rem;
+    font-weight: 700;
+    line-height: 1.22;
+    padding: 0 0 0.08em;
+}
+
+.block-editor {
+    display: grid;
+    gap: 0;
+    margin-top: 20px;
+    cursor: text;
+    outline: 0;
+}
+
+.block {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    min-height: 24px;
+    position: relative;
+}
+
+.todo-checkbox {
+    display: none;
+    width: 1rem;
+    height: 1rem;
+    cursor: pointer;
+}
+
+.block[data-type="todo"] .todo-checkbox {
+    display: block;
+}
+
+.block-content {
+    position: relative;
+    width: 100%;
+    min-height: 24px;
+    cursor: text;
+    outline: 0;
+    padding: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.block-content:empty::before {
+    color: #9a9a9a;
+    content: attr(data-placeholder);
+    pointer-events: none;
+}
+
+.block::after {
+    content: "";
+    position: absolute;
+    top: 0.2rem;
+    left: -34px;
+    width: 3px;
+    height: calc(100% - 0.4rem);
+    min-height: 1rem;
+    max-height: 2.5rem;
+    border-radius: 999px;
+    background: transparent;
+    opacity: 0;
+    pointer-events: none;
+    transform: scaleY(0.55);
+    transform-origin: center;
+    transition:
+        opacity 70ms ease,
+        transform 80ms ease,
+        background-color 80ms ease;
+}
+
+.block[data-active-block="true"]::after {
+    background: var(--glyph-active-block-indicator);
+    opacity: 1;
+    transform: scaleY(1);
+}
+
+.block[data-gutter-hover="true"]:not([data-active-block="true"])::after {
+    background: var(--glyph-hover-block-indicator);
+    opacity: 1;
+    transform: scaleY(0.7);
+}
+
+@media (max-width: 1060px) {
+    .document-surface {
+        width: 100%;
+    }
+}
+
+@media (max-width: 640px) {
+    .document-surface {
+        width: 100%;
+        padding: 56px 24px 96px;
+    }
+
+    .document-title {
+        font-size: 2.2rem;
+    }
+
+    .block::after {
+        left: -20px;
+    }
+}
+
+@page {
+    size: Letter;
+    margin: 0.75in;
+}
+
+@media print {
+    html,
+    body {
+        width: auto;
+        min-width: 0;
+        height: auto;
+        min-height: 0;
+        overflow: visible;
+        background: #ffffff;
+    }
+
+    .app-titlebar,
+    .latex-preview,
+    .find-replace-panel,
+    .find-highlight-layer,
+    .document-outline,
+    .centered-frame,
+    .file-tree-frame {
+        display: none !important;
+    }
+
+    .editor-shell,
+    body.app-titlebar-host .editor-shell {
+        position: static;
+        width: auto;
+        height: auto;
+        overflow: visible;
+        scrollbar-gutter: auto;
+    }
+
+    .document-surface {
+        width: auto;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        cursor: default;
+        zoom: 1;
+    }
+
+    .document-title {
+        color: #191919;
+        font-size: 28pt;
+    }
+
+    .block-editor {
+        margin-top: 18pt;
+    }
+
+    .block-content,
+    .markdown-link {
+        cursor: default;
+    }
+
+    .block[data-type="footnote-definition"] {
+        display: none !important;
+    }
+
+    .document-render-footer {
+        width: auto;
+        margin: 18pt 0 0;
+    }
+
+    .block::after {
+        display: none;
+    }
+}

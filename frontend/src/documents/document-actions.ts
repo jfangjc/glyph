@@ -9,11 +9,21 @@ import {
 import { onOpenDocumentRequested, takePendingOpenDocumentPaths } from "../bridge/launch";
 import type { DocumentFile } from "../bridge/types";
 import { getDocumentFormatById } from "../formats/registry";
-import { titleFromFileName } from "../formats/file-names";
 import { getElement } from "../utils/dom";
 import { fileNameFromPath } from "../utils/text";
+import { canUseNativeRuntime } from "../platform/runtime";
 import { documentState, notifyDocumentStateChanged } from "./document-state";
+import {
+    forgetLastOpenDocumentPath,
+    getLastOpenDocumentPath,
+    rememberLastOpenDocumentPath,
+} from "./document-storage";
 import { refreshOpenDirectoryTree } from "./file-tree";
+import {
+    areSamePath,
+    normalizeSuggestedFileName,
+    resolveEditedActiveFilePath,
+} from "./save-paths";
 
 type DocumentActionHost = {
     loadDocument: (documentFile: DocumentFile) => void;
@@ -26,7 +36,6 @@ type SaveDocumentOptions = {
 };
 
 const autoSaveIntervalMs = 30_000;
-const lastOpenDocumentPathStorageKey = "glyph:last-open-document-path";
 
 let host: DocumentActionHost | null = null;
 let pendingOpenDocumentDrain: Promise<boolean> | null = null;
@@ -104,13 +113,7 @@ async function drainPendingLaunchDocuments(): Promise<boolean> {
 }
 
 export function canUseDesktopFileSystem(): boolean {
-    return Boolean(
-        (window as Window & { _wails?: { environment?: unknown } })._wails?.environment ||
-            (window as Window & { chrome?: { webview?: { postMessage?: unknown } } }).chrome?.webview?.postMessage ||
-            (window as Window & { webkit?: { messageHandlers?: { external?: { postMessage?: unknown } } } }).webkit
-                ?.messageHandlers?.external?.postMessage ||
-            (window as Window & { wails?: { invoke?: unknown } }).wails?.invoke,
-    );
+    return canUseNativeRuntime();
 }
 
 export async function openDocument(): Promise<void> {
@@ -284,7 +287,11 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
 
 async function resolveSavePath(options: SaveDocumentOptions): Promise<string | null> {
     if (!options.promptForPath && documentState.activeFilePath) {
-        return resolveEditedActiveFilePath(documentState.activeFilePath);
+        return resolveEditedActiveFilePath(
+            documentState.activeFilePath,
+            getElement<HTMLInputElement>("document-title").value,
+            getDocumentFormatById(documentState.activeFormatId).defaultExtension,
+        );
     }
 
     const selectedPath = await chooseDocumentToSave(
@@ -301,65 +308,6 @@ async function resolveSavePath(options: SaveDocumentOptions): Promise<string | n
     }
 
     return selectedPath;
-}
-
-function resolveEditedActiveFilePath(activeFilePath: string): string {
-    const currentFileName = fileNameFromPath(activeFilePath);
-    const title = getElement<HTMLInputElement>("document-title").value.trim();
-
-    if (!title || title === titleFromFileName(currentFileName)) {
-        return activeFilePath;
-    }
-
-    const extension = readFileExtension(currentFileName) ?? getDocumentFormatById(documentState.activeFormatId).defaultExtension;
-    const nextFileName = normalizeSuggestedFileName(sanitizeFileNameBase(title), extension);
-    const separatorIndex = Math.max(activeFilePath.lastIndexOf("\\"), activeFilePath.lastIndexOf("/"));
-
-    return separatorIndex >= 0 ? `${activeFilePath.slice(0, separatorIndex + 1)}${nextFileName}` : nextFileName;
-}
-
-function normalizeSuggestedFileName(value: string, defaultExtension: string): string {
-    const trimmed = value.trim() || "Untitled";
-
-    if (/[\\/]$/.test(trimmed)) {
-        return `Untitled.${defaultExtension}`;
-    }
-
-    return /\.[^\\/.\s]+$/.test(trimmed) ? trimmed : `${trimmed}.${defaultExtension}`;
-}
-
-function sanitizeFileNameBase(value: string): string {
-    return value
-        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
-        .replace(/\s+/g, " ")
-        .replace(/[. ]+$/g, "")
-        .slice(0, 80)
-        .trim();
-}
-
-function readFileExtension(fileName: string): string | null {
-    const extensionMatch = fileName.match(/\.([^\\/.\s]+)$/);
-    return extensionMatch?.[1] ?? null;
-}
-
-function areSamePath(left: string, right: string): boolean {
-    return normalizeComparablePath(left) === normalizeComparablePath(right);
-}
-
-function normalizeComparablePath(path: string): string {
-    return path.replace(/\\/g, "/").toLowerCase();
-}
-
-function getLastOpenDocumentPath(): string | null {
-    return window.localStorage.getItem(lastOpenDocumentPathStorageKey);
-}
-
-function rememberLastOpenDocumentPath(path: string): void {
-    window.localStorage.setItem(lastOpenDocumentPathStorageKey, path);
-}
-
-function forgetLastOpenDocumentPath(): void {
-    window.localStorage.removeItem(lastOpenDocumentPathStorageKey);
 }
 
 function getHost(): DocumentActionHost {

@@ -1,6 +1,12 @@
 import { chooseDirectoryToOpen, readDirectoryTree } from "../bridge/documents";
-import type { DirectoryTree, DirectoryTreeItem } from "../bridge/types";
+import type { DirectoryTree } from "../bridge/types";
 import { createCenteredFrame } from "../ui/centered-frame";
+import { renderFileTreeHtml } from "./file-tree-rendering";
+import {
+    getFileTreeItem,
+    moveFileTreeSelection,
+    syncFileTreeSelection,
+} from "./file-tree-selection";
 
 type FileTreeHost = {
     openDocumentPath: (path: string) => Promise<void>;
@@ -193,17 +199,13 @@ function renderTree(root: HTMLElement): void {
         searchRenderTimer = null;
     }
 
-    if (!tree) {
-        root.innerHTML = `<div class="file-tree-empty">Open a directory with Ctrl+Shift+O</div>`;
-        return;
-    }
-
-    const state = { rendered: 0, truncated: false };
-    const matchCache = new WeakMap<DirectoryTreeItem, boolean>();
-    const children = tree.children.map((child) => renderItem(child, 0, matchCache, state)).join("");
-    const truncated = state.truncated ? `<div class="file-tree-empty">Keep typing to narrow results</div>` : "";
-
-    root.innerHTML = `<div role="group">${children || `<div class="file-tree-empty">No matching files</div>`}${truncated}</div>`;
+    root.innerHTML = renderFileTreeHtml({
+        tree,
+        query,
+        selectedPath,
+        collapsedDirectories,
+        maxSearchResults,
+    });
     syncSelection(root);
 }
 
@@ -218,72 +220,8 @@ function scheduleRenderTree(root: HTMLElement): void {
     }, searchRenderDelayMs);
 }
 
-function renderItem(
-    item: DirectoryTreeItem,
-    depth: number,
-    matchCache: WeakMap<DirectoryTreeItem, boolean>,
-    state: { rendered: number; truncated: boolean },
-): string {
-    if (!matchesQuery(item, matchCache)) {
-        return "";
-    }
-
-    if (query && state.rendered >= maxSearchResults) {
-        state.truncated = true;
-        return "";
-    }
-
-    const isCollapsed = !query && collapsedDirectories.has(item.path);
-    const children =
-        item.isDir && !isCollapsed
-            ? (item.children ?? []).map((child) => renderItem(child, depth + 1, matchCache, state)).join("")
-            : "";
-    const disclosure = item.isDir ? (isCollapsed ? ">" : "v") : "";
-    const expanded = item.isDir ? ` aria-expanded="${!isCollapsed}"` : "";
-    state.rendered += 1;
-
-    return `
-        <div class="file-tree-node">
-            <button
-                class="file-tree-row"
-                type="button"
-                role="treeitem"
-                data-file-tree-path="${escapeHtml(item.path)}"
-                data-file-tree-dir="${item.isDir ? "true" : "false"}"
-                data-file-tree-selectable="true"
-                style="--file-tree-depth: ${depth}"
-                ${selectedPath === item.path ? `data-selected="true"` : ""}
-                ${expanded}
-            >
-                <span class="file-tree-disclosure">${disclosure}</span>
-                <span class="file-tree-name">${escapeHtml(item.name)}</span>
-            </button>
-            ${children ? `<div role="group">${children}</div>` : ""}
-        </div>
-    `;
-}
-
-function matchesQuery(item: DirectoryTreeItem, cache: WeakMap<DirectoryTreeItem, boolean>): boolean {
-    if (!query) {
-        return true;
-    }
-
-    const cached = cache.get(item);
-    if (cached !== undefined) {
-        return cached;
-    }
-
-    const matches =
-        item.name.toLowerCase().includes(query) ||
-        item.path.toLowerCase().includes(query) ||
-        (item.isDir && Boolean(item.children?.some((child) => matchesQuery(child, cache))));
-
-    cache.set(item, matches);
-    return matches;
-}
-
 function activateSelectedItem(root: HTMLElement, path: string, closeFrame: () => void): void {
-    const item = root.querySelector<HTMLButtonElement>(`[data-file-tree-path="${cssEscape(path)}"]`);
+    const item = getFileTreeItem(root, path);
     if (!item) {
         return;
     }
@@ -300,42 +238,12 @@ function activateSelectedItem(root: HTMLElement, path: string, closeFrame: () =>
 function moveSelection(root: HTMLElement, direction: 1 | -1): void {
     renderPendingSearch(root);
 
-    const items = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-file-tree-selectable="true"]'));
-    if (!items.length) {
-        selectedPath = null;
-        return;
-    }
-
-    const currentIndex = selectedPath ? items.findIndex((item) => item.dataset.fileTreePath === selectedPath) : -1;
-    const fallbackIndex = direction > 0 ? 0 : items.length - 1;
-    const nextIndex = currentIndex >= 0 ? (currentIndex + direction + items.length) % items.length : fallbackIndex;
-    selectedPath = items[nextIndex].dataset.fileTreePath ?? null;
+    selectedPath = moveFileTreeSelection(root, selectedPath, direction);
     syncSelection(root);
-    items[nextIndex].scrollIntoView({ block: "nearest" });
 }
 
 function syncSelection(root: HTMLElement): void {
-    const items = Array.from(root.querySelectorAll<HTMLButtonElement>("[data-file-tree-path]"));
-    let hasSelectedPath = false;
-
-    for (const item of items) {
-        const isSelected = Boolean(selectedPath && item.dataset.fileTreePath === selectedPath);
-        if (isSelected) {
-            item.dataset.selected = "true";
-            item.classList.add("is-selected");
-        } else {
-            delete item.dataset.selected;
-            item.classList.remove("is-selected");
-        }
-        item.setAttribute("aria-selected", isSelected ? "true" : "false");
-        if (isSelected) {
-            hasSelectedPath = true;
-        }
-    }
-
-    if (!hasSelectedPath) {
-        selectedPath = null;
-    }
+    selectedPath = syncFileTreeSelection(root, selectedPath);
 }
 
 function toggleDirectory(path: string): void {
@@ -374,27 +282,6 @@ function getHost(): FileTreeHost {
     }
 
     return host;
-}
-
-function escapeHtml(value: string): string {
-    return value.replace(/[&<>"']/g, (character) => {
-        switch (character) {
-            case "&":
-                return "&amp;";
-            case "<":
-                return "&lt;";
-            case ">":
-                return "&gt;";
-            case '"':
-                return "&quot;";
-            default:
-                return "&#39;";
-        }
-    });
-}
-
-function cssEscape(value: string): string {
-    return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
 }
 
 function getLastOpenDirectoryPath(): string | null {

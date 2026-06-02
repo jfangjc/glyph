@@ -1,4 +1,4 @@
-import { parseMarkdownFragment } from "../document";
+import { parseMarkdownFragment } from "../parse";
 import {
     applyBlockProperties,
     createBlock,
@@ -34,10 +34,24 @@ import {
 import { readInlineFormatShortcut } from "../../../editor/input/keyboard-shortcuts";
 import { getRenderedContentText } from "../../../editor/selection/rendered-content-dom";
 import { hasMarkdownBlockSource } from "../block-source";
-import { formatMarkdownTableSource, readMarkdownTableRowCellRanges } from "../table";
+import { formatMarkdownTableSource } from "../table";
 import { readMathSourceText } from "../math";
 import { serializeListIndent } from "../utils";
 import { clearPendingMarkdownTokenNavigation } from "./token-controller";
+import {
+    getCodeBlockRawMarkdown,
+    isValidCodeBlockSource,
+    readCodeBlockSourceParts,
+    serializeInvalidCodeBlockSource,
+} from "./source-code";
+import {
+    createEmptyTableRow,
+    isEditableTableSource,
+    readTableCellBoundary,
+    readTableColumnCount,
+    readTableRowCellBoundaries,
+    type TableCellBoundary,
+} from "./source-table";
 
 type MarkdownSourceHooks = {
     markEditorDirty?: () => void;
@@ -141,13 +155,6 @@ function indentListBlockFromSource(event: KeyboardEvent, source: HTMLElement): b
 
     return indentListBlocks(block, event.shiftKey ? -1 : 1);
 }
-
-type TableCellBoundary = {
-    lineIndex: number;
-    cellIndex: number;
-    start: number;
-    end: number;
-};
 
 type TableSourceFocus = {
     lineIndex: number;
@@ -326,34 +333,6 @@ function readTableCellBoundaryAtOffset(text: string, offset: number): TableCellB
     }
 
     return null;
-}
-
-function readTableCellBoundary(text: string, lineIndex: number, cellIndex: number): TableCellBoundary | null {
-    const lines = text.split("\n");
-    if (lineIndex < 0 || lineIndex >= lines.length) {
-        return null;
-    }
-
-    const lineStart = lines.slice(0, lineIndex).join("\n").length + (lineIndex > 0 ? 1 : 0);
-    return readTableRowCellBoundaries(lines[lineIndex], lineStart, lineIndex)[cellIndex] ?? null;
-}
-
-function readTableRowCellBoundaries(line: string, lineStart: number, lineIndex: number): TableCellBoundary[] {
-    return readMarkdownTableRowCellRanges(line, lineStart).map((range, cellIndex) => ({
-        lineIndex,
-        cellIndex,
-        start: range.start,
-        end: range.end,
-    }));
-}
-
-function readTableColumnCount(text: string): number {
-    const header = text.split("\n")[0] ?? "";
-    return readTableRowCellBoundaries(header, 0, 0).length;
-}
-
-function createEmptyTableRow(columnCount: number): string {
-    return `| ${Array.from({ length: columnCount }, () => "").join(" | ")} |`;
 }
 
 export function moveCaretIntoCodeBlockSourceAtBoundary(event: KeyboardEvent, block: HTMLElement): boolean {
@@ -894,11 +873,6 @@ function parseEditedRawMarkdownBlock(
     return parsedBlocks.length === 1 ? parsedBlocks[0] : { type: "paragraph", text: rawMarkdown };
 }
 
-function isEditableTableSource(rawMarkdown: string): boolean {
-    const lines = rawMarkdown.replace(/\r\n?/g, "\n").split("\n");
-    return lines.length >= 2 && lines[0].includes("|") && lines[1].includes("|");
-}
-
 function getBlockRawMarkdown(block: HTMLElement): string {
     if (readBlockType(block.dataset.type) === "code") {
         return getCodeBlockRawMarkdown(block);
@@ -927,54 +901,6 @@ function getBlockSourceRawMarkdown(block: HTMLElement, source: HTMLElement): str
 function isListSourceBlock(block: HTMLElement): boolean {
     const type = readBlockType(block.dataset.type);
     return type === "list" || type === "ordered-list" || type === "todo";
-}
-
-function getCodeBlockRawMarkdown(block: HTMLElement): string {
-    const source = readCodeBlockSourceParts(block);
-
-    return source ? `${source.prefix}\n${source.text}\n${source.suffix}` : getRenderedContentText(getBlockContent(block));
-}
-
-function readCodeBlockSourceParts(block: HTMLElement): { prefix: string; text: string; suffix: string } | null {
-    const content = getBlockContent(block);
-    const prefix = getBlockSourceElement(content, "prefix");
-    const body = content.querySelector<HTMLElement>(".markdown-code-block-body");
-    const suffix = getBlockSourceElement(content, "suffix");
-
-    if (!prefix || !body || !suffix) {
-        return null;
-    }
-
-    return {
-        prefix: prefix.textContent ?? "",
-        text: getRenderedContentText(body),
-        suffix: suffix.textContent ?? "",
-    };
-}
-
-function isValidCodeBlockSource(source: { prefix: string; suffix: string }): boolean {
-    const opening = source.prefix.trim().match(/^(`{3,}|~{3,})(.*)$/);
-    if (!opening) {
-        return false;
-    }
-
-    const marker = opening[1];
-    const closing = source.suffix.trim();
-    const markerCharacter = marker[0];
-
-    return (
-        closing.length >= marker.length &&
-        closing.split("").every((character) => character === markerCharacter)
-    );
-}
-
-function serializeInvalidCodeBlockSource(source: { prefix: string; text: string; suffix: string }): string {
-    const lines = [source.prefix, source.text];
-    if (source.suffix !== "") {
-        lines.push(source.suffix);
-    }
-
-    return lines.join("\n");
 }
 
 function isBlockMarkdownSource(node: Node): node is HTMLElement {

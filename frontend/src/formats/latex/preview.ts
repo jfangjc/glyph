@@ -1,5 +1,5 @@
 import { readSiblingPdfPreview } from "../../bridge/documents";
-import { getElement } from "../../utils/dom";
+import { readEditorDom } from "../../editor/editor-dom";
 import type { DocumentPreviewBehavior, DocumentPreviewContext } from "../types";
 
 let latexPreviewSourcePath: string | null = null;
@@ -12,9 +12,7 @@ export const latexPreviewBehavior: DocumentPreviewBehavior = {
 };
 
 function syncLatexPdfPreview(context: DocumentPreviewContext): void {
-    const preview = getElement<HTMLElement>("latex-preview");
-    const frame = getElement<HTMLIFrameElement>("latex-pdf-frame");
-    const status = getElement<HTMLElement>("latex-preview-status");
+    const { latexPreview: preview, latexFrame: frame, latexStatus: status } = readEditorDom();
     const saveJustFinished = wasSavingDocumentForLatexPreview && !context.isSavingDocument;
 
     wasSavingDocumentForLatexPreview = context.isSavingDocument;
@@ -37,9 +35,7 @@ function syncLatexPdfPreview(context: DocumentPreviewContext): void {
 }
 
 function deactivateLatexPdfPreview(_context: DocumentPreviewContext): void {
-    const preview = getElement<HTMLElement>("latex-preview");
-    const frame = getElement<HTMLIFrameElement>("latex-pdf-frame");
-    const status = getElement<HTMLElement>("latex-preview-status");
+    const { latexPreview: preview, latexFrame: frame, latexStatus: status } = readEditorDom();
 
     latexPreviewRequestId += 1;
     latexPreviewSourcePath = null;
@@ -52,9 +48,7 @@ function deactivateLatexPdfPreview(_context: DocumentPreviewContext): void {
 
 async function loadLatexPdfPreview(sourcePath: string): Promise<void> {
     const requestId = latexPreviewRequestId + 1;
-    const preview = getElement<HTMLElement>("latex-preview");
-    const frame = getElement<HTMLIFrameElement>("latex-pdf-frame");
-    const status = getElement<HTMLElement>("latex-preview-status");
+    const { latexPreview: preview, latexFrame: frame, latexStatus: status } = readEditorDom();
 
     latexPreviewRequestId = requestId;
     latexPreviewSourcePath = sourcePath;
@@ -86,8 +80,7 @@ async function loadLatexPdfPreview(sourcePath: string): Promise<void> {
 }
 
 function setLatexPreviewActive(isActive: boolean): void {
-    const surface = getElement<HTMLElement>("document-surface");
-    const shell = document.querySelector<HTMLElement>(".editor-shell");
+    const { shell, surface } = readEditorDom();
 
     if (isActive) {
         surface.dataset.latexPreview = "active";

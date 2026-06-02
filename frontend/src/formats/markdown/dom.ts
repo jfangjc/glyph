@@ -67,7 +67,16 @@ function findContainingInactiveMarkdownToken(node: Node): HTMLElement | null {
     const element = node instanceof Element ? node : node.parentElement;
     const token = element?.closest<HTMLElement>(".markdown-token");
 
-    return token && token.dataset.active !== "true" ? token : null;
+    if (!token || token.dataset.active === "true") {
+        return null;
+    }
+
+    const containingToken = token.parentElement?.closest<HTMLElement>(".markdown-token");
+    if (containingToken && token.closest("[data-source-ignore='true']")) {
+        return containingToken.dataset.active !== "true" ? containingToken : null;
+    }
+
+    return token;
 }
 
 function getSelectionBoundary(
