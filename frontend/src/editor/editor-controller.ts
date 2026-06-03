@@ -32,7 +32,6 @@ import {
     appMenuCommandEvent,
 } from "../platform/window-controls/window-controls";
 import { configureBlockOperations } from "./blocks/operations";
-import { syncFirstBlockPlaceholder } from "./blocks/view";
 import {
     createAppMenuController,
 } from "./controllers/app-menu-controller";
@@ -199,7 +198,6 @@ export function installEditorController(): void {
 
     syncDocumentFormatUi();
     syncBlockViewContext();
-    syncFirstBlockPlaceholder();
     syncDocumentWindowTitle();
     appMenuController.syncExportMenuState();
 }

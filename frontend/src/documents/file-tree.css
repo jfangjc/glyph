@@ -39,10 +39,6 @@
     font: 500 0.95rem/1 var(--glyph-font-text);
 }
 
-.file-tree-search::placeholder {
-    color: #777b80;
-}
-
 .file-tree {
     max-height: 560px;
     padding: 10px 0 12px;

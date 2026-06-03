@@ -8,7 +8,6 @@ import {
     readEditorBlock,
     setBlockText,
     setBlockType,
-    syncFirstBlockPlaceholder,
 } from "../blocks/view";
 import { readBlockType } from "../blocks/model";
 import {
@@ -50,7 +49,6 @@ export function deleteSelectedContent(): SelectionInsertionTarget | null {
     if (startBlock === endBlock) {
         setBlockText(startBlock, startText.slice(0, startOffset) + startText.slice(endOffset));
         focusBlockAtOffset(startBlock, startOffset);
-        syncFirstBlockPlaceholder();
         return { block: startBlock, offset: startOffset };
     }
 
@@ -66,7 +64,6 @@ export function deleteSelectedContent(): SelectionInsertionTarget | null {
         }
 
         focusBlockAtOffset(startBlock, startOffset);
-        syncFirstBlockPlaceholder();
         return { block: startBlock, offset: startOffset };
     }
 
@@ -152,7 +149,6 @@ function replaceSelectedBlockRangeWithRemainders(selectedRange: SelectedBlockRan
     const focusBlock = replacementBlocks[0];
     const focusOffset = startRemainder ? getBlockText(focusBlock).length : 0;
     focusBlockAtOffset(focusBlock, focusOffset);
-    syncFirstBlockPlaceholder();
     return { block: focusBlock, offset: focusOffset };
 }
 

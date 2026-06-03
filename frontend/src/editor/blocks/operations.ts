@@ -17,7 +17,6 @@ import {
     setBlockIndent,
     setBlockText,
     shouldResetEmptyBlock,
-    syncFirstBlockPlaceholder,
 } from "./view";
 import { readBlockType, type ParsedBlock } from "./model";
 import {
@@ -188,7 +187,6 @@ function deletePreviousBoundary(block: HTMLElement): BlockBoundaryDeleteResult |
     if (readBlockEditingKind(type) === "rich" && type !== "paragraph") {
         clearBlockProperties(block);
         focusBlockAtOffset(block, 0);
-        syncFirstBlockPlaceholder();
         return "changed";
     }
 
@@ -200,7 +198,6 @@ function deletePreviousBoundary(block: HTMLElement): BlockBoundaryDeleteResult |
     if (getBlockText(block) === "") {
         if (readBlockEditingKind(type) === "rich") {
             block.remove();
-            syncFirstBlockPlaceholder();
             focusBlockBoundary(previous, "end");
             return "changed";
         }
@@ -218,7 +215,6 @@ function deletePreviousBoundary(block: HTMLElement): BlockBoundaryDeleteResult |
     const offset = getBlockText(previous).length;
     setBlockText(previous, getBlockText(previous) + getBlockText(block));
     block.remove();
-    syncFirstBlockPlaceholder();
     focusBlockAtOffset(previous, offset);
     return "changed";
 }
@@ -239,7 +235,6 @@ function deleteNextBoundary(block: HTMLElement): BlockBoundaryDeleteResult {
             readBlockEditingKind(nextType) === "rich"
         ) {
             next.remove();
-            syncFirstBlockPlaceholder();
             focusBlockBoundary(block, "end");
             return "changed";
         }
@@ -250,14 +245,12 @@ function deleteNextBoundary(block: HTMLElement): BlockBoundaryDeleteResult {
 
     if (getBlockText(block) === "" && readBlockEditingKind(type) === "rich") {
         block.remove();
-        syncFirstBlockPlaceholder();
         focusBlockBoundary(next, "start");
         return "changed";
     }
 
     if (getBlockText(next) === "" && readBlockEditingKind(nextType) === "rich") {
         next.remove();
-        syncFirstBlockPlaceholder();
         focusBlockBoundary(block, "end");
         return "changed";
     }
@@ -265,7 +258,6 @@ function deleteNextBoundary(block: HTMLElement): BlockBoundaryDeleteResult {
     const offset = getBlockText(block).length;
     setBlockText(block, getBlockText(block) + getBlockText(next));
     next.remove();
-    syncFirstBlockPlaceholder();
     focusBlockAtOffset(block, offset);
     return "changed";
 }
@@ -311,7 +303,6 @@ function replaceSingleLineBlockStartWithPastedContent(block: HTMLElement, text: 
     const nextBlock = createBlock(parsedBlock.type, parsedBlock.text, parsedBlock);
 
     block.replaceWith(nextBlock);
-    syncFirstBlockPlaceholder();
     focusBlockAtOffset(nextBlock, Math.max(0, getBlockText(nextBlock).length - after.length));
     return true;
 }
@@ -323,7 +314,6 @@ function replaceBlockWithPastedContent(block: HTMLElement, text: string, after =
     const focusBlock = nextBlocks[focusTarget.blockIndex];
 
     block.replaceWith(...nextBlocks);
-    syncFirstBlockPlaceholder();
     focusBlockAtOffset(focusBlock, focusTarget.offset);
 }
 
@@ -334,7 +324,6 @@ function insertParsedPastedBlocksAfter(block: HTMLElement, text: string, after: 
     const focusBlock = nextBlocks[focusTarget.blockIndex];
 
     block.after(...nextBlocks);
-    syncFirstBlockPlaceholder();
     focusBlockAtOffset(focusBlock, focusTarget.offset);
 }
 

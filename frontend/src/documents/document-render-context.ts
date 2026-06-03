@@ -8,7 +8,6 @@ import {
     isRichTextBlockType,
     readEditorBlock,
     setBlockText,
-    syncFirstBlockPlaceholder,
 } from "../editor/blocks/view";
 import { readBlockType, type ParsedBlock } from "../editor/blocks/model";
 import { focusBlockAtOffset, getCurrentBlockOffset } from "../editor/selection/caret";
@@ -108,7 +107,6 @@ export function replaceEditorBlocks(blocks: ParsedBlock[]): void {
     const nextBlocks = blocks.map((block) => createBlock(block.type, block.text, block));
 
     editor.replaceChildren(...nextBlocks);
-    syncFirstBlockPlaceholder();
     focusBlockAtOffset(nextBlocks[0], 0);
 }
 

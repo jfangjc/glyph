@@ -153,8 +153,6 @@ export function setBlockText(block: HTMLElement, text: string): void {
     if (text !== "") {
         delete block.dataset.transient;
     }
-    syncBlockPlaceholder(block, content, type, text);
-
     if (type === "code") {
         renderCodeBlockContent(content, text, source);
         clearRenderCache(content);
@@ -865,33 +863,4 @@ export function ensureEditableBlockAfter(block: HTMLElement): void {
 
 export function commitTransientBlock(block: HTMLElement): void {
     delete block.dataset.transient;
-}
-
-export function syncFirstBlockPlaceholder(): void {
-    const [firstBlock, ...remainingBlocks] = getEditorBlocks();
-
-    if (!firstBlock) {
-        return;
-    }
-
-    const firstContent = getBlockContent(firstBlock);
-    if (readBlockType(firstBlock.dataset.type) === "paragraph" && getBlockText(firstBlock) === "") {
-        firstContent.dataset.placeholder = "Start writing...";
-    } else {
-        delete firstContent.dataset.placeholder;
-    }
-
-    for (const block of remainingBlocks) {
-        delete getBlockContent(block).dataset.placeholder;
-    }
-}
-
-function syncBlockPlaceholder(block: HTMLElement, content: HTMLElement, type: BlockType, text: string): void {
-    const firstBlock = getEditorBlocks()[0] ?? null;
-    if (block === firstBlock && type === "paragraph" && text === "") {
-        content.dataset.placeholder = "Start writing...";
-        return;
-    }
-
-    delete content.dataset.placeholder;
 }

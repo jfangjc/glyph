@@ -4,7 +4,6 @@ import {
     getBlockContent,
     getBlockText,
     getEditorBlocks,
-    syncFirstBlockPlaceholder,
 } from "./blocks/view";
 import { readBlockType } from "./blocks/model";
 import {
@@ -265,7 +264,6 @@ function ensurePointerTrailingParagraph(): HTMLElement {
         getElement<HTMLElement>("editor").append(nextBlock);
     }
 
-    syncFirstBlockPlaceholder();
     return nextBlock;
 }
 

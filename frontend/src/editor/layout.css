@@ -110,12 +110,6 @@ body.app-titlebar-host .document-surface {
     word-break: break-word;
 }
 
-.block-content:empty::before {
-    color: #9a9a9a;
-    content: attr(data-placeholder);
-    pointer-events: none;
-}
-
 .block::after {
     content: "";
     position: absolute;

@@ -8,7 +8,6 @@ import {
     getEditorBlocks,
     getSerializableEditorBlocks,
     readEditorBlock,
-    syncFirstBlockPlaceholder,
 } from "../blocks/view";
 import {
     focusBlockAtOffset,
@@ -181,7 +180,6 @@ function restoreEditorSnapshot(snapshot: EditorSnapshot): void {
 
         title.value = snapshot.title;
         editor.replaceChildren(...nextBlocks);
-        syncFirstBlockPlaceholder();
         restoreSelectionSnapshot(snapshot.selection);
     } finally {
         isRestoring = false;

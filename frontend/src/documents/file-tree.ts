@@ -2,11 +2,7 @@ import { chooseDirectoryToOpen, readDirectoryTree } from "../bridge/documents";
 import type { DirectoryTree } from "../bridge/types";
 import { createCenteredFrame } from "../ui/centered-frame";
 import { renderFileTreeHtml } from "./file-tree-rendering";
-import {
-    getFileTreeItem,
-    moveFileTreeSelection,
-    syncFileTreeSelection,
-} from "./file-tree-selection";
+import { getFileTreeItem, moveFileTreeSelection, syncFileTreeSelection } from "./file-tree-selection";
 
 type FileTreeHost = {
     openDocumentPath: (path: string) => Promise<void>;
