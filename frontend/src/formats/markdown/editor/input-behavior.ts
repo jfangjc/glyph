@@ -24,9 +24,9 @@ import {
     rerenderPlainTextBlockMarkdownSource,
 } from "./source-controller";
 import {
-    activateMarkdownTokenAtCaret,
     getFocusedMarkdownTokenSource,
     normalizeActiveMarkdownTokenSource,
+    revealMarkdownTokenAtCaret,
     suppressAdjacentFormatTokenActivation,
 } from "./token-controller";
 
@@ -121,7 +121,7 @@ function renderInlineBlockContent(block: HTMLElement, currentOffset: number): vo
 
     focusBlockAtOffset(block, focusOffset);
     if (!suppressAdjacentFormatTokenActivation(block, focusOffset)) {
-        activateMarkdownTokenAtCaret();
+        revealMarkdownTokenAtCaret();
     }
 }
 

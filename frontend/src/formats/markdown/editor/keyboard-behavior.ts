@@ -38,16 +38,11 @@ import {
     handleBlockMarkdownSourceKeydown,
     moveCaretAfterCodeBlockSourceAtSelection,
     moveCaretIntoCodeBlockSourceAtBoundary,
-    trackVerticalBlockSourceNavigation,
 } from "./source-controller";
 import {
-    moveCaretOutOfInactiveMarkdownTokenVerticalNavigation,
     moveCaretAfterActiveDisplayMathTokenSource,
     moveCaretOutOfActiveMarkdownTokenSource,
     moveCaretOutOfActiveMarkdownTokenSourceVertically,
-    trackHorizontalMarkdownNavigation,
-    trackVerticalLeadingTokenNavigation,
-    trackVerticalMarkdownImageNavigation,
 } from "./token-controller";
 
 export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEditorEventContext): boolean {
@@ -94,18 +89,6 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
         event.preventDefault();
         return true;
     }
-
-    if (trackVerticalBlockSourceNavigation(event, block)) {
-        return true;
-    }
-    trackHorizontalMarkdownNavigation(event);
-    if (moveCaretOutOfInactiveMarkdownTokenVerticalNavigation(event)) {
-        return true;
-    }
-    if (trackVerticalMarkdownImageNavigation(event, block)) {
-        return true;
-    }
-    trackVerticalLeadingTokenNavigation(event, block);
 
     if (event.key === "Tab" && indentListBlocks(block, event.shiftKey ? -1 : 1)) {
         event.preventDefault();

@@ -35,8 +35,8 @@ export const markdownEditorBehavior: DocumentEditorBehavior = {
         handleMarkdownEditorClick(event);
         return true;
     },
-    selectionChange: () => {
-        handleMarkdownSelectionChange();
+    selectionChange: (_context, selection) => {
+        handleMarkdownSelectionChange(selection);
         return true;
     },
     copy: handleMarkdownCopy,
@@ -49,11 +49,8 @@ export const markdownEditorBehavior: DocumentEditorBehavior = {
 function installMarkdownEditorBehavior(hooks: DocumentEditorHooks): void {
     configureMarkdownSourceController({
         markEditorDirty: hooks.markEditorDirty,
-        syncBlockMarkdownSourceReveal: hooks.syncBlockSourceReveal,
     });
     configureMarkdownTokenController({
-        syncActiveBlockIndicator: hooks.syncActiveBlockIndicator,
         syncActiveBlockMarkdownSource,
-        syncBlockMarkdownSourceReveal: hooks.syncBlockSourceReveal,
     });
 }

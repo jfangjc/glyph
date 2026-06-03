@@ -33,7 +33,6 @@ import {
 } from "../../../editor/selection/caret";
 import { readInlineFormatShortcut } from "../../../editor/input/keyboard-shortcuts";
 import { getRenderedContentText } from "../../../editor/selection/rendered-content-dom";
-import { hasMarkdownBlockSource } from "../block-source";
 import { formatMarkdownTableSource } from "../table";
 import { readMathSourceText } from "../math";
 import { serializeListIndent } from "../utils";
@@ -55,7 +54,6 @@ import {
 
 type MarkdownSourceHooks = {
     markEditorDirty?: () => void;
-    syncBlockMarkdownSourceReveal?: (block: HTMLElement | null) => void;
 };
 
 let hooks: MarkdownSourceHooks = {};
@@ -363,37 +361,6 @@ export function moveCaretAfterCodeBlockSourceAtSelection(block: HTMLElement): bo
     ensureEditableBlockAfter(block);
     focusBlockAtOffset(getSiblingBlock(block, "next") ?? block, 0);
     return true;
-}
-
-export function trackVerticalBlockSourceNavigation(event: KeyboardEvent, block: HTMLElement): boolean {
-    if (
-        (event.key !== "ArrowUp" && event.key !== "ArrowDown") ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey
-    ) {
-        return false;
-    }
-
-    const direction = event.key === "ArrowUp" ? "previous" : "next";
-    const edge = direction === "previous" ? "start" : "end";
-    if (!isCaretAtBlockEdge(block, edge)) {
-        return false;
-    }
-
-    const target = getSiblingBlock(block, direction);
-    if (target && hasMarkdownBlockSource(readBlockType(target.dataset.type))) {
-        hooks.syncBlockMarkdownSourceReveal?.(target);
-
-        if (direction === "previous" && getBlockText(block) === "") {
-            event.preventDefault();
-            focusBlockAtOffset(target, getBlockText(target).length, { scroll: "minimal" });
-            return true;
-        }
-    }
-
-    return false;
 }
 
 export function getFocusedBlockMarkdownSource(): HTMLElement | null {

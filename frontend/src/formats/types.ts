@@ -35,6 +35,20 @@ export type DocumentEditorEventContext = DocumentEditorHooks & {
     isComposingText: boolean;
 };
 
+export type DocumentEditorSelectionState = {
+    selection: Selection | null;
+    isCollapsed: boolean;
+    anchorNode: Node | null;
+    focusNode: Node | null;
+    anchorOffset: number;
+    focusOffset: number;
+    anchorBlock: HTMLElement | null;
+    focusBlock: HTMLElement | null;
+    anchorBlockOffset: number | null;
+    focusBlockOffset: number | null;
+    selectedBlocks: HTMLElement[];
+};
+
 export type DocumentPasteContext = DocumentEditorEventContext & {
     getActiveDocumentFormat: () => DocumentFormat;
     getActiveFilePath: () => string | null;
@@ -49,7 +63,7 @@ export type DocumentEditorBehavior = {
     keydown?: (event: KeyboardEvent, context: DocumentEditorEventContext) => boolean;
     mouseDown?: (event: MouseEvent, context: DocumentEditorEventContext) => boolean;
     click?: (event: MouseEvent, context: DocumentEditorEventContext) => boolean;
-    selectionChange?: (context: DocumentEditorEventContext) => boolean;
+    selectionChange?: (context: DocumentEditorEventContext, selection: DocumentEditorSelectionState) => boolean;
     copy?: (event: ClipboardEvent, context: DocumentEditorEventContext) => boolean;
     cut?: (event: ClipboardEvent, context: DocumentEditorEventContext) => boolean;
     paste?: (event: ClipboardEvent, context: DocumentPasteContext) => boolean | Promise<boolean>;

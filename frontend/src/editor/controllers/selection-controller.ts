@@ -1,4 +1,9 @@
-import type { DocumentEditorEventContext, DocumentEditorHooks, DocumentFormat } from "../../formats/types";
+import type {
+    DocumentEditorEventContext,
+    DocumentEditorHooks,
+    DocumentEditorSelectionState,
+    DocumentFormat,
+} from "../../formats/types";
 import {
     findBlock,
     getBlockContent,
@@ -37,8 +42,11 @@ export function createSelectionController(options: SelectionControllerOptions): 
 
         lastSelectionSignature = selectionState.signature;
         options.hooks.syncActiveBlockIndicator(selectionState.focusBlock);
-        options.getActiveDocumentFormat().editorBehavior?.selectionChange?.(createDocumentEditorEventContext());
-        syncSelectedBlockSourceReveal();
+        options.getActiveDocumentFormat().editorBehavior?.selectionChange?.(
+            createDocumentEditorEventContext(),
+            selectionState,
+        );
+        syncBlockSourceReveal(selectionState);
         syncDocumentOutlineToSelection();
     }
 
@@ -53,47 +61,69 @@ export function createSelectionController(options: SelectionControllerOptions): 
         };
     }
 
-    function syncSelectedBlockSourceReveal(): void {
-        const selectedRange = getSelectedBlockRange();
-        if (selectedRange) {
-            options.hooks.syncBlockSourceRevealBlocks(selectedRange.blocks);
+    function syncBlockSourceReveal(selectionState: DocumentEditorSelectionState): void {
+        if (selectionState.isCollapsed) {
+            options.hooks.syncBlockSourceReveal(selectionState.focusBlock);
             return;
         }
 
-        const selection = document.getSelection();
-        if (!selection || selection.isCollapsed) {
-            return;
-        }
-
-        const selectedBlocks = Array.from(
-            new Set([findBlock(selection.anchorNode ?? null), findBlock(selection.focusNode ?? null)]),
-        ).filter((block): block is HTMLElement => Boolean(block));
-
-        if (selectedBlocks.length > 0) {
-            options.hooks.syncBlockSourceRevealBlocks(selectedBlocks);
-        }
+        options.hooks.syncBlockSourceRevealBlocks(selectionState.selectedBlocks);
     }
 }
 
-function readSelectionState(): { signature: string; focusBlock: HTMLElement | null } {
+type SelectionStateWithSignature = DocumentEditorSelectionState & {
+    signature: string;
+};
+
+function readSelectionState(): SelectionStateWithSignature {
     const selection = document.getSelection();
     if (!selection || selection.rangeCount === 0) {
-        return { signature: "none", focusBlock: null };
+        return {
+            signature: "none",
+            selection: null,
+            isCollapsed: true,
+            anchorNode: null,
+            focusNode: null,
+            anchorOffset: 0,
+            focusOffset: 0,
+            anchorBlock: null,
+            focusBlock: null,
+            anchorBlockOffset: null,
+            focusBlockOffset: null,
+            selectedBlocks: [],
+        };
     }
 
+    const selectedRange = getSelectedBlockRange();
     const anchorBlock = findBlock(selection.anchorNode ?? null);
     const focusBlock = findBlock(selection.focusNode ?? null);
-    const anchorOffset = readSelectionBoundaryOffset(anchorBlock, selection.anchorNode, selection.anchorOffset);
-    const focusOffset = readSelectionBoundaryOffset(focusBlock, selection.focusNode, selection.focusOffset);
+    const anchorBlockOffset = readSelectionBoundaryOffset(anchorBlock, selection.anchorNode, selection.anchorOffset);
+    const focusBlockOffset = readSelectionBoundaryOffset(focusBlock, selection.focusNode, selection.focusOffset);
+    const selectedBlocks = selection.isCollapsed
+        ? []
+        : selectedRange?.blocks ?? readSelectedBoundaryBlocks(anchorBlock, focusBlock);
     const signature = [
         selection.isCollapsed ? "caret" : "range",
         anchorBlock ? getBlockIndex(anchorBlock) : -1,
         focusBlock ? getBlockIndex(focusBlock) : -1,
-        anchorOffset,
-        focusOffset,
+        anchorBlockOffset,
+        focusBlockOffset,
     ].join(":");
 
-    return { signature, focusBlock };
+    return {
+        signature,
+        selection,
+        isCollapsed: selection.isCollapsed,
+        anchorNode: selection.anchorNode,
+        focusNode: selection.focusNode,
+        anchorOffset: selection.anchorOffset,
+        focusOffset: selection.focusOffset,
+        anchorBlock,
+        focusBlock,
+        anchorBlockOffset,
+        focusBlockOffset,
+        selectedBlocks,
+    };
 }
 
 function readSelectionBoundaryOffset(block: HTMLElement | null, node: Node | null, offset: number): number {
@@ -107,4 +137,13 @@ function readSelectionBoundaryOffset(block: HTMLElement | null, node: Node | nul
     }
 
     return getCaretOffset(content, node, offset);
+}
+
+function readSelectedBoundaryBlocks(
+    anchorBlock: HTMLElement | null,
+    focusBlock: HTMLElement | null,
+): HTMLElement[] {
+    return Array.from(new Set([anchorBlock, focusBlock])).filter(
+        (block): block is HTMLElement => Boolean(block),
+    );
 }
