@@ -10,7 +10,7 @@ import {
     readBlockIndent,
     setBlockText,
 } from "../../../editor/blocks/view";
-import { readBlockType, type ParsedBlock } from "../../../editor/blocks/model";
+import { headingTypes, readBlockType, type ParsedBlock } from "../../../editor/blocks/model";
 import {
     deleteBlockBoundary,
     indentListBlocks,
@@ -125,6 +125,12 @@ export function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean 
     }
 
     if (event.key === "Enter" && moveCaretAfterCodeBlockSource(source)) {
+        event.preventDefault();
+        hooks.markEditorDirty?.();
+        return true;
+    }
+
+    if (event.key === "Enter" && insertParagraphBeforeHeadingFromPrefix(event, source)) {
         event.preventDefault();
         hooks.markEditorDirty?.();
         return true;
@@ -352,6 +358,27 @@ export function moveCaretIntoCodeBlockSourceAtBoundary(event: KeyboardEvent, blo
     return false;
 }
 
+export function deleteHeadingPrefixCharacterAtBoundary(event: KeyboardEvent, block: HTMLElement): boolean {
+    if (event.key !== "Backspace" || event.ctrlKey || event.metaKey || event.altKey) {
+        return false;
+    }
+
+    if (!headingTypes.has(readBlockType(block.dataset.type)) || !isCaretAtBlockEdge(block, "start")) {
+        return false;
+    }
+
+    const source = getBlockSourceElement(getBlockContent(block), "prefix");
+    const text = source?.textContent ?? "";
+    if (!source || text === "") {
+        return false;
+    }
+
+    source.textContent = text.slice(0, -1);
+    focusPlainTextElement(source, source.textContent.length);
+    applyFocusedBlockMarkdownSourceInput(source);
+    return true;
+}
+
 export function moveCaretAfterCodeBlockSourceAtSelection(block: HTMLElement): boolean {
     if (readBlockType(block.dataset.type) !== "code" || !isCaretAfterCodeBlockSuffixSource(block)) {
         return false;
@@ -566,7 +593,37 @@ function removeOrMergeBackwardFromSourceStart(source: HTMLElement): BlockBoundar
     }
 
     const block = findBlock(source);
-    return block ? deleteBlockBoundary(block, "previous") : null;
+    if (!block) {
+        return null;
+    }
+
+    if (readBlockSourcePosition(source) === "prefix" && headingTypes.has(readBlockType(block.dataset.type))) {
+        const previous = getSiblingBlock(block, "previous");
+        if (previous) {
+            if (readBlockType(previous.dataset.type) === "paragraph" && getBlockText(previous) === "") {
+                previous.remove();
+                focusPlainTextElement(source, 0);
+                return "changed";
+            }
+
+            if (readBlockType(previous.dataset.type) === "paragraph") {
+                const previousText = getBlockText(previous);
+                if (previousText !== "") {
+                    const focusOffset = previousText.length;
+                    setBlockText(previous, previousText + getBlockRawMarkdown(block));
+                    block.remove();
+                    focusBlockAtOffset(previous, focusOffset, { scroll: "minimal" });
+                    return "changed";
+                }
+            }
+
+            focusBlockAtOffset(previous, getBlockText(previous).length, { scroll: "minimal" });
+        }
+
+        return "moved";
+    }
+
+    return deleteBlockBoundary(block, "previous");
 }
 
 function removeFollowingEmptyParagraphFromCodeSuffix(source: HTMLElement): boolean {
@@ -596,6 +653,42 @@ function focusBlockMarkdownSource(
 
     focusPlainTextElement(source, edge === "start" ? 0 : (source.textContent ?? "").length);
     return true;
+}
+
+function insertParagraphBeforeHeadingFromPrefix(event: KeyboardEvent, source: HTMLElement): boolean {
+    const block = findBlock(source);
+    if (
+        !block ||
+        event.ctrlKey ||
+        event.metaKey ||
+        readBlockSourcePosition(source) !== "prefix" ||
+        !headingTypes.has(readBlockType(block.dataset.type))
+    ) {
+        return false;
+    }
+
+    const sourceOffset = getFocusedSourceOffset(source);
+    const sourceText = source.textContent ?? "";
+    if (sourceOffset > 0 && getBlockText(block) !== "") {
+        splitHeadingTextAfterPrefix(block, sourceText);
+        return true;
+    }
+
+    const previousBlock = createBlock("paragraph");
+    block.before(previousBlock);
+    focusPlainTextElement(source, sourceOffset);
+    return true;
+}
+
+function splitHeadingTextAfterPrefix(block: HTMLElement, sourceText: string): void {
+    const text = getBlockText(block);
+    const nextBlock = createBlock("paragraph", text);
+
+    activeBlockMarkdownSource = null;
+    applyBlockProperties(block, { type: "paragraph" });
+    setBlockText(block, sourceText);
+    block.after(nextBlock);
+    focusBlockAtOffset(nextBlock, 0, { scroll: "minimal" });
 }
 
 function splitAfterBlockMarkdownSource(source: HTMLElement): boolean {
@@ -687,6 +780,14 @@ function isCaretAtPlainTextEdge(element: HTMLElement, edge: "start" | "end"): bo
 
     const offset = getPlainTextBoundaryOffset(element, focusNode, selection.focusOffset);
     return edge === "start" ? offset === 0 : offset === (element.textContent ?? "").length;
+}
+
+function getFocusedSourceOffset(source: HTMLElement): number {
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    return selection?.isCollapsed && focusNode && (focusNode === source || source.contains(focusNode))
+        ? getPlainTextBoundaryOffset(source, focusNode, selection.focusOffset)
+        : 0;
 }
 
 function readTableSourceFocus(block: HTMLElement, source: HTMLElement, sourceOffset: number): TableSourceFocus {

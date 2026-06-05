@@ -475,7 +475,7 @@ function renderBlockInnerHtml(block: HTMLElement, type: BlockType, text: string,
 }
 
 function renderBlockEditableTextHtml(text: string, source: BlockSource): string {
-    if (text === "" && source.prefix && source.prefixEditable === false) {
+    if (text === "" && source.prefix) {
         return caretSpacerCharacter;
     }
 

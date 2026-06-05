@@ -1,7 +1,8 @@
-import { type ParsedBlock, readBlockType } from "../../../editor/blocks/model";
+import { headingTypes, type ParsedBlock, readBlockType } from "../../../editor/blocks/model";
 import { getBlockSourceElement } from "../../../editor/blocks/rendering";
 import {
     ensureEditableBlockAfter,
+    createBlock,
     getBlockContent,
     getBlockText,
     getSiblingBlock,
@@ -123,7 +124,51 @@ export function removeTrailingLineBreakInOpenCodeFenceParagraph(block: HTMLEleme
     return true;
 }
 
-export function applyMarkdownShortcut(block: HTMLElement): boolean {
+export function insertParagraphBeforeHeadingAtStart(block: HTMLElement): boolean {
+    if (!headingTypes.has(readBlockType(block.dataset.type)) || !isCaretAtBlockEdge(block, "start")) {
+        return false;
+    }
+
+    const source = getBlockSourceElement(getBlockContent(block), "prefix");
+    if (source && block.dataset.blockSourceActive === "true" && getBlockText(block) !== "") {
+        const nextBlock = createBlock("paragraph", getBlockText(block));
+
+        setBlockType(block, "paragraph");
+        setBlockText(block, source.textContent ?? "");
+        block.after(nextBlock);
+        focusBlockAtOffset(nextBlock, 0, { scroll: "minimal" });
+        return true;
+    }
+
+    const previousBlock = createBlock("paragraph");
+    block.before(previousBlock);
+    focusBlockAtOffset(block, 0, { scroll: "minimal" });
+    return true;
+}
+
+export function splitParagraphAtHeadingMarker(block: HTMLElement): boolean {
+    if (readBlockType(block.dataset.type) !== "paragraph") {
+        return false;
+    }
+
+    const text = getBlockText(block);
+    const offset = getCurrentBlockOffset(block);
+    const before = text.slice(0, offset);
+    const after = text.slice(offset);
+    const headingShortcut = readHeadingShortcut(after);
+    if (!headingShortcut) {
+        return false;
+    }
+
+    const nextBlock = createBlock(headingShortcut.type, after.slice(headingShortcut.marker.length));
+    setBlockText(block, before);
+    block.after(nextBlock);
+    ensureEditableBlockAfter(nextBlock);
+    focusBlockAtOffset(nextBlock, 0, { scroll: "minimal" });
+    return true;
+}
+
+export function applyMarkdownShortcut(block: HTMLElement, caretOffset = getCurrentBlockOffset(block)): boolean {
     if (readBlockType(block.dataset.type) !== "paragraph") {
         return false;
     }
@@ -184,6 +229,11 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
     ensureEmptyShortcutCaretAnchor(block, shortcutText);
     ensureEditableBlockAfter(block);
 
+    if (headingTypes.has(shortcut.type)) {
+        focusBlockAtOffset(block, readShortcutTextCaretOffset(caretOffset, shortcut.marker.length, shortcutText));
+        return true;
+    }
+
     if (shortcut.type === "rule") {
         const nextBlock = getSiblingBlock(block, "next");
         focusBlockAtOffset(nextBlock ?? block, 0);
@@ -200,6 +250,11 @@ export function applyMarkdownShortcut(block: HTMLElement): boolean {
 
     focusBlock(block);
     return true;
+}
+
+function readHeadingShortcut(text: string): { marker: string; type: ParsedBlock["type"] } | null {
+    const shortcut = markdownShortcuts.find((candidate) => headingTypes.has(candidate.type) && text.startsWith(candidate.marker));
+    return shortcut ? { marker: shortcut.marker, type: shortcut.type } : null;
 }
 
 
@@ -266,7 +321,16 @@ function ensureEmptyShortcutCaretAnchor(block: HTMLElement, text: string): void 
         return;
     }
 
-    getBlockContent(block).append(document.createTextNode(caretSpacerCharacter));
+    const content = getBlockContent(block);
+    if (content.textContent?.includes(caretSpacerCharacter)) {
+        return;
+    }
+
+    content.append(document.createTextNode(caretSpacerCharacter));
+}
+
+function readShortcutTextCaretOffset(caretOffset: number, markerLength: number, shortcutText: string): number {
+    return Math.min(Math.max(0, caretOffset - markerLength), shortcutText.length);
 }
 
 function readMathShortcutCaretOffset(source: HTMLElement): number {

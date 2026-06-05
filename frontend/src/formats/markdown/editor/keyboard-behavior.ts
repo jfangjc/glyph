@@ -30,11 +30,14 @@ import {
 import type { DocumentEditorEventContext } from "../../types";
 import {
     insertLineBreakInOpenCodeFenceParagraph,
+    insertParagraphBeforeHeadingAtStart,
     removeTrailingLineBreakInOpenCodeFenceParagraph,
+    splitParagraphAtHeadingMarker,
     startCodeBlockFromFence,
     startTableFromHeader,
 } from "./block-operations";
 import {
+    deleteHeadingPrefixCharacterAtBoundary,
     handleBlockMarkdownSourceKeydown,
     moveCaretAfterCodeBlockSourceAtSelection,
     moveCaretIntoCodeBlockSourceAtBoundary,
@@ -100,6 +103,11 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
         event.preventDefault();
         const targetBlock = deleteSelectedContent()?.block ?? block;
 
+        if (insertParagraphBeforeHeadingAtStart(targetBlock)) {
+            context.markEditorDirty();
+            return true;
+        }
+
         if (startCodeBlockFromFence(targetBlock)) {
             context.markEditorDirty();
             return true;
@@ -122,6 +130,11 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
         }
 
         if (insertLineBreakInOpenCodeFenceParagraph(targetBlock)) {
+            context.markEditorDirty();
+            return true;
+        }
+
+        if (splitParagraphAtHeadingMarker(targetBlock)) {
             context.markEditorDirty();
             return true;
         }
@@ -162,6 +175,12 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
         }
 
         if (deleteSelectedContent()) {
+            event.preventDefault();
+            context.markEditorDirty();
+            return true;
+        }
+
+        if (deleteHeadingPrefixCharacterAtBoundary(event, block)) {
             event.preventDefault();
             context.markEditorDirty();
             return true;

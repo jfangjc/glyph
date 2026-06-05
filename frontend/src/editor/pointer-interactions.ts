@@ -11,6 +11,7 @@ import {
     focusPlainTextElement,
     getCaretOffset,
     getCaretPositionFromPoint,
+    getTextPosition,
 } from "./selection/caret";
 import { getBlockSourceElement } from "./blocks/rendering";
 import { getElement } from "../utils/dom";
@@ -21,6 +22,12 @@ type PointerBlockTarget = {
     offset: number;
 };
 
+type PointerDownSelection = {
+    x: number;
+    y: number;
+    anchor: PointerBlockTarget | null;
+};
+
 type PointerInteractionHooks = {
     onBlockActivated?: (block: HTMLElement | null) => void;
 };
@@ -28,10 +35,12 @@ type PointerInteractionHooks = {
 let hooks: PointerInteractionHooks = {};
 let gutterHoverBlock: HTMLElement | null = null;
 let gutterHoverTimer = 0;
-let pointerDownSelectionStart: { x: number; y: number } | null = null;
+let pointerDownSelectionStart: PointerDownSelection | null = null;
 let isPointerSelecting = false;
 let pendingGutterHoverEvent: { x: number; y: number } | null = null;
 let pendingGutterHoverFrame = 0;
+
+const lineStartProbeWidth = 24;
 
 export function configurePointerInteractions(nextHooks: PointerInteractionHooks): void {
     hooks = { ...hooks, ...nextHooks };
@@ -42,15 +51,27 @@ export function handleDocumentSurfaceMouseDown(event: MouseEvent): void {
         return;
     }
 
-    if (event.button !== 0 || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+    if (
+        event.button !== 0 ||
+        event.detail > 1 ||
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+    ) {
         return;
     }
 
-    pointerDownSelectionStart = { x: event.clientX, y: event.clientY };
+    pointerDownSelectionStart = { x: event.clientX, y: event.clientY, anchor: null };
     setPointerSelecting(false);
 
     const target = event.target;
-    if (!(target instanceof Element) || shouldLetBrowserHandlePointerTarget(target)) {
+    if (!(target instanceof Element)) {
+        return;
+    }
+
+    if (shouldLetBrowserHandlePointerTarget(target)) {
         return;
     }
 
@@ -60,6 +81,7 @@ export function handleDocumentSurfaceMouseDown(event: MouseEvent): void {
     }
 
     event.preventDefault();
+    pointerDownSelectionStart.anchor = pointerTarget;
     focusPointerTargetBlock(pointerTarget);
 }
 
@@ -95,6 +117,7 @@ export function handleDocumentMouseMove(event: MouseEvent): void {
     const deltaY = Math.abs(event.clientY - pointerDownSelectionStart.y);
     if (deltaX > 3 || deltaY > 3) {
         setPointerSelecting(true);
+        extendPointerSelection(event);
     }
 }
 
@@ -181,7 +204,7 @@ function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
 
     return Boolean(
         target.closest(
-            "#document-title, .block-content, .todo-checkbox, button, input, textarea, select, [contenteditable='false']",
+            "#document-title, .format-block-source, .todo-checkbox, button, input, textarea, select, [contenteditable='false']",
         ),
     );
 }
@@ -243,6 +266,76 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
     return { block: trailingBlock, offset: 0 };
 }
 
+function extendPointerSelection(event: MouseEvent): void {
+    const anchor = pointerDownSelectionStart?.anchor;
+    if (!anchor) {
+        return;
+    }
+
+    const target = readPointerEventTarget(event);
+    const focus = findPointerTargetBlock(target, event.clientX, event.clientY);
+    if (!focus) {
+        return;
+    }
+
+    event.preventDefault();
+    selectPointerTargetRange(anchor, focus);
+}
+
+function readPointerEventTarget(event: MouseEvent): Element {
+    if (event.target instanceof Element) {
+        return event.target;
+    }
+
+    const pointTarget = document.elementFromPoint(event.clientX, event.clientY);
+    return pointTarget instanceof Element ? pointTarget : getElement<HTMLElement>("document-surface");
+}
+
+function selectPointerTargetRange(anchor: PointerBlockTarget, focus: PointerBlockTarget): void {
+    const selection = document.getSelection();
+    if (!selection) {
+        return;
+    }
+
+    const range = document.createRange();
+    const anchorPosition = getPointerTargetTextPosition(anchor);
+    const focusPosition = getPointerTargetTextPosition(focus);
+
+    getElement<HTMLElement>("editor").focus();
+    range.setStart(anchorPosition.node, anchorPosition.offset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    selection.extend(focusPosition.node, focusPosition.offset);
+    hooks.onBlockActivated?.(focus.block);
+}
+
+function getPointerTargetTextPosition(target: PointerBlockTarget): { node: Node; offset: number } {
+    if (target.offset <= 0) {
+        const sourceStart = getPointerTargetSourceStartPosition(target.block);
+        if (sourceStart) {
+            return sourceStart;
+        }
+    }
+
+    return getTextPosition(getBlockContent(target.block), target.offset);
+}
+
+function getPointerTargetSourceStartPosition(block: HTMLElement): { node: Node; offset: number } | null {
+    if (block.dataset.blockSourceActive !== "true") {
+        return null;
+    }
+
+    const content = getBlockContent(block);
+    const source = getBlockSourceElement(content, "prefix");
+    if (!source || source.getAttribute("contenteditable") === "false") {
+        return null;
+    }
+
+    const sourceIndex = Array.from(content.childNodes).findIndex((child) => child === source);
+    return sourceIndex >= 0 ? { node: content, offset: sourceIndex } : null;
+}
+
 function ensurePointerTrailingParagraph(): HTMLElement {
     const blocks = getEditorBlocks();
     const lastBlock = blocks[blocks.length - 1];
@@ -275,7 +368,8 @@ function getPointerCaretOffset(block: HTMLElement, clientX: number, clientY: num
     const caretPosition = getCaretPositionFromPoint(clampedX, clampedY);
 
     if (caretPosition && (caretPosition.node === content || content.contains(caretPosition.node))) {
-        return getCaretOffset(content, caretPosition.node, caretPosition.offset);
+        const offset = getCaretOffset(content, caretPosition.node, caretPosition.offset);
+        return snapPointerCaretOffsetToLineStart(content, offset, clientX, clientY);
     }
 
     if (clientY < rect.top || clientX <= rect.left) {
@@ -283,6 +377,113 @@ function getPointerCaretOffset(block: HTMLElement, clientX: number, clientY: num
     }
 
     return getBlockText(block).length;
+}
+
+function snapPointerCaretOffsetToLineStart(
+    content: HTMLElement,
+    offset: number,
+    clientX: number,
+    clientY: number,
+): number {
+    if (offset <= 0) {
+        return offset;
+    }
+
+    const contentRect = content.getBoundingClientRect();
+    if (clientX > contentRect.left + lineStartProbeWidth) {
+        return offset;
+    }
+
+    const caretRect = getCaretRectForOffset(content, offset);
+    if (!caretRect) {
+        return offset;
+    }
+
+    const lineStartOffset = findCaretLineStartOffset(content, offset, caretRect);
+    if (lineStartOffset === offset) {
+        return offset;
+    }
+
+    const lineStartRect = getCaretRectForOffset(content, lineStartOffset);
+    if (!lineStartRect || !isPointOnCaretLine(lineStartRect, clientY)) {
+        return offset;
+    }
+
+    const snapWidth = getLineStartSnapWidth(content, lineStartOffset, lineStartRect);
+    return clientX <= lineStartRect.left + snapWidth ? lineStartOffset : offset;
+}
+
+function findCaretLineStartOffset(content: HTMLElement, offset: number, caretRect: DOMRect): number {
+    let lineStartOffset = offset;
+
+    while (lineStartOffset > 0) {
+        const previousRect = getCaretRectForOffset(content, lineStartOffset - 1);
+        if (!previousRect || !areCaretRectsOnSameLine(caretRect, previousRect)) {
+            break;
+        }
+
+        lineStartOffset -= 1;
+    }
+
+    return lineStartOffset;
+}
+
+function getLineStartSnapWidth(content: HTMLElement, lineStartOffset: number, lineStartRect: DOMRect): number {
+    const firstCharacterRect = getTextRangeRect(content, lineStartOffset, lineStartOffset + 1, lineStartRect);
+    if (!firstCharacterRect) {
+        return 12;
+    }
+
+    return clamp(firstCharacterRect.right - lineStartRect.left + 2, 8, 22);
+}
+
+function getCaretRectForOffset(content: HTMLElement, offset: number): DOMRect | null {
+    const range = document.createRange();
+    const position = getTextPosition(content, offset);
+
+    range.setStart(position.node, position.offset);
+    range.collapse(true);
+
+    return readVisibleRangeRect(range);
+}
+
+function getTextRangeRect(
+    content: HTMLElement,
+    startOffset: number,
+    endOffset: number,
+    lineRect: DOMRect,
+): DOMRect | null {
+    const range = document.createRange();
+    const start = getTextPosition(content, startOffset);
+    const end = getTextPosition(content, endOffset);
+
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+
+    return Array.from(range.getClientRects()).find((rect) => isVisibleRect(rect) && areCaretRectsOnSameLine(lineRect, rect)) ?? null;
+}
+
+function readVisibleRangeRect(range: Range): DOMRect | null {
+    const rect = Array.from(range.getClientRects()).find(isVisibleRect);
+    if (rect) {
+        return rect;
+    }
+
+    const boundingRect = range.getBoundingClientRect();
+    return isVisibleRect(boundingRect) ? boundingRect : null;
+}
+
+function isVisibleRect(rect: DOMRect): boolean {
+    return rect.width > 0 || rect.height > 0;
+}
+
+function isPointOnCaretLine(rect: DOMRect, clientY: number): boolean {
+    return clientY >= rect.top - 2 && clientY <= rect.bottom + 2;
+}
+
+function areCaretRectsOnSameLine(first: DOMRect, second: DOMRect): boolean {
+    const overlap = Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top);
+    return overlap > Math.min(first.height || 1, second.height || 1) * 0.5;
 }
 
 function focusPointerTargetBlock(pointerTarget: PointerBlockTarget): void {
