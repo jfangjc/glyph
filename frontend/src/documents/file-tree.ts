@@ -1,6 +1,7 @@
 import { chooseDirectoryToOpen, readDirectoryTree } from "../bridge/documents";
-import type { DirectoryTree } from "../bridge/types";
+import type { DirectoryTree, DirectoryTreeItem } from "../bridge/types";
 import { createCenteredFrame } from "../ui/centered-frame";
+import { documentState, documentStateChangedEvent } from "./document-state";
 import { renderFileTreeHtml } from "./file-tree-rendering";
 import { getFileTreeItem, moveFileTreeSelection, syncFileTreeSelection } from "./file-tree-selection";
 
@@ -19,9 +20,9 @@ let query = "";
 let selectedPath: string | null = null;
 let searchRenderTimer: number | null = null;
 let treeRootElement: HTMLElement | null = null;
+let activeFilePathForCollapsedState: string | null = null;
 const collapsedDirectories = new Set<string>();
 const lastOpenDirectoryPathStorageKey = "glyph:last-open-directory-path";
-const searchRenderDelayMs = 120;
 const maxSearchResults = 500;
 
 export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): FileTreeController {
@@ -53,7 +54,7 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
     search.addEventListener("input", () => {
         query = search.value.trim().toLowerCase();
         selectedPath = null;
-        scheduleRenderTree(treeRoot);
+        renderTree(treeRoot);
     });
 
     document.addEventListener(
@@ -76,9 +77,13 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
         }
     });
 
+    window.addEventListener(documentStateChangedEvent, () => {
+        syncCollapsedDirectoriesToActiveFile(treeRoot);
+    });
+
     treeRoot.addEventListener("click", (event) => {
         const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-file-tree-path]");
-        if (!button) {
+        if (!button || button.dataset.fileTreeSelectable !== "true") {
             return;
         }
 
@@ -111,6 +116,7 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
                 return;
             }
 
+            syncCollapsedDirectoriesToActiveFile(treeRoot);
             frame.show();
             search.focus();
         },
@@ -138,6 +144,7 @@ export async function refreshOpenDirectoryTree(): Promise<void> {
 
     try {
         tree = await readDirectoryTree(tree.path);
+        resetCollapsedDirectories();
         renderTree(treeRootElement);
     } catch (error) {
         console.error("Failed to refresh file tree:", error);
@@ -146,7 +153,7 @@ export async function refreshOpenDirectoryTree(): Promise<void> {
 
 async function openDirectoryPath(path: string, treeRoot: HTMLElement, search?: HTMLInputElement): Promise<void> {
     tree = await readDirectoryTree(path);
-    collapsedDirectories.clear();
+    resetCollapsedDirectories();
     query = "";
     selectedPath = null;
     if (search) {
@@ -195,6 +202,10 @@ function renderTree(root: HTMLElement): void {
         searchRenderTimer = null;
     }
 
+    if (!query && !selectedPath) {
+        selectedPath = documentState.activeFilePath;
+    }
+
     root.innerHTML = renderFileTreeHtml({
         tree,
         query,
@@ -202,23 +213,13 @@ function renderTree(root: HTMLElement): void {
         collapsedDirectories,
         maxSearchResults,
     });
+    selectFirstSearchResult(root);
     syncSelection(root);
-}
-
-function scheduleRenderTree(root: HTMLElement): void {
-    if (searchRenderTimer !== null) {
-        window.clearTimeout(searchRenderTimer);
-    }
-
-    searchRenderTimer = window.setTimeout(() => {
-        searchRenderTimer = null;
-        renderTree(root);
-    }, searchRenderDelayMs);
 }
 
 function activateSelectedItem(root: HTMLElement, path: string, closeFrame: () => void): void {
     const item = getFileTreeItem(root, path);
-    if (!item) {
+    if (!item || item.dataset.fileTreeSelectable !== "true") {
         return;
     }
 
@@ -242,11 +243,95 @@ function syncSelection(root: HTMLElement): void {
     selectedPath = syncFileTreeSelection(root, selectedPath);
 }
 
+function selectFirstSearchResult(root: HTMLElement): void {
+    if (!query || selectedPath) {
+        return;
+    }
+
+    selectedPath = root.querySelector<HTMLButtonElement>('[data-file-tree-selectable="true"]')?.dataset.fileTreePath ?? null;
+}
+
 function toggleDirectory(path: string): void {
     if (collapsedDirectories.has(path)) {
         collapsedDirectories.delete(path);
     } else {
         collapsedDirectories.add(path);
+    }
+}
+
+function resetCollapsedDirectories(): void {
+    collapsedDirectories.clear();
+    activeFilePathForCollapsedState = documentState.activeFilePath;
+
+    if (!tree) {
+        return;
+    }
+
+    const expandedDirectories = getActiveFileAncestorDirectories(tree.children, documentState.activeFilePath);
+    collapseInactiveDirectories(tree.children, expandedDirectories);
+}
+
+function collapseInactiveDirectories(items: DirectoryTreeItem[], expandedDirectories: Set<string>): void {
+    for (const item of items) {
+        if (!item.isDir) {
+            continue;
+        }
+
+        if (!expandedDirectories.has(item.path)) {
+            collapsedDirectories.add(item.path);
+            continue;
+        }
+
+        collapseInactiveDirectories(item.children ?? [], expandedDirectories);
+    }
+}
+
+function getActiveFileAncestorDirectories(items: DirectoryTreeItem[], activeFilePath: string | null): Set<string> {
+    const ancestors = new Set<string>();
+    if (!activeFilePath) {
+        return ancestors;
+    }
+
+    findActiveFileAncestors(items, normalizePath(activeFilePath), ancestors);
+    return ancestors;
+}
+
+function findActiveFileAncestors(
+    items: DirectoryTreeItem[],
+    activeFilePath: string,
+    ancestors: Set<string>,
+    parentDirectories: string[] = [],
+): boolean {
+    for (const item of items) {
+        const nextParents = item.isDir ? [...parentDirectories, item.path] : parentDirectories;
+        if (normalizePath(item.path) === activeFilePath) {
+            for (const path of parentDirectories) {
+                ancestors.add(path);
+            }
+            return true;
+        }
+
+        if (item.isDir && findActiveFileAncestors(item.children ?? [], activeFilePath, ancestors, nextParents)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function normalizePath(path: string): string {
+    return path.replace(/\\/g, "/").toLowerCase();
+}
+
+function syncCollapsedDirectoriesToActiveFile(root: HTMLElement): void {
+    if (documentState.activeFilePath === activeFilePathForCollapsedState) {
+        return;
+    }
+
+    resetCollapsedDirectories();
+    if (!query) {
+        selectedPath = documentState.activeFilePath;
+        renderTree(root);
     }
 }
 

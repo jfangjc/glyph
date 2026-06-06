@@ -35,6 +35,10 @@ function renderItem(
         return "";
     }
 
+    if (options.query && item.isDir) {
+        return (item.children ?? []).map((child) => renderItem(child, depth, matchCache, state, options)).join("");
+    }
+
     if (options.query && state.rendered >= options.maxSearchResults) {
         state.truncated = true;
         return "";
