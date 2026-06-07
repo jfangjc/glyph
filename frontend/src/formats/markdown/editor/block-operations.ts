@@ -178,7 +178,7 @@ export function applyMarkdownShortcut(block: HTMLElement, caretOffset = getCurre
         return true;
     }
 
-    if (startFootnoteDefinitionFromShortcut(block, text)) {
+    if (startFootnoteDefinitionFromShortcut(block, text, caretOffset)) {
         return true;
     }
 
@@ -187,7 +187,7 @@ export function applyMarkdownShortcut(block: HTMLElement, caretOffset = getCurre
         setBlockType(block, "reference");
         setBlockText(block, text);
         ensureEditableBlockAfter(block);
-        focusBlock(block);
+        focusBlockAtOffset(block, Math.min(caretOffset, getBlockText(block).length));
         return true;
     }
 
@@ -208,7 +208,14 @@ export function applyMarkdownShortcut(block: HTMLElement, caretOffset = getCurre
         setBlockText(block, orderedListShortcut.text);
         ensureEmptyShortcutCaretAnchor(block, orderedListShortcut.text);
         ensureEditableBlockAfter(block);
-        focusBlock(block);
+        focusBlockAtOffset(
+            block,
+            readShortcutTextCaretOffset(
+                caretOffset,
+                text.length - orderedListShortcut.text.length,
+                orderedListShortcut.text,
+            ),
+        );
         return true;
     }
 
@@ -225,12 +232,13 @@ export function applyMarkdownShortcut(block: HTMLElement, caretOffset = getCurre
     setBlockListMarker(block, shortcut.listMarker);
     setBlockListNumber(block, shortcut.listNumber);
     const shortcutText = text.slice(shortcut.marker.length);
+    const focusOffset = readShortcutTextCaretOffset(caretOffset, shortcut.marker.length, shortcutText);
     setBlockText(block, shortcutText);
     ensureEmptyShortcutCaretAnchor(block, shortcutText);
     ensureEditableBlockAfter(block);
 
     if (headingTypes.has(shortcut.type)) {
-        focusBlockAtOffset(block, readShortcutTextCaretOffset(caretOffset, shortcut.marker.length, shortcutText));
+        focusBlockAtOffset(block, focusOffset);
         return true;
     }
 
@@ -248,7 +256,7 @@ export function applyMarkdownShortcut(block: HTMLElement, caretOffset = getCurre
         }
     }
 
-    focusBlock(block);
+    focusBlockAtOffset(block, focusOffset);
     return true;
 }
 
@@ -258,7 +266,7 @@ function readHeadingShortcut(text: string): { marker: string; type: ParsedBlock[
 }
 
 
-function startFootnoteDefinitionFromShortcut(block: HTMLElement, text: string): boolean {
+function startFootnoteDefinitionFromShortcut(block: HTMLElement, text: string, caretOffset: number): boolean {
     if (!/^ {0,3}\[\^[^\]]+\]:/.test(text)) {
         return false;
     }
@@ -266,7 +274,7 @@ function startFootnoteDefinitionFromShortcut(block: HTMLElement, text: string): 
     setBlockType(block, "footnote-definition");
     setBlockText(block, text);
     ensureEditableBlockAfter(block);
-    focusBlock(block);
+    focusBlockAtOffset(block, Math.min(caretOffset, getBlockText(block).length));
     return true;
 }
 
