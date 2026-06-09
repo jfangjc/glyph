@@ -1,15 +1,6 @@
 import { canUseDesktopFileSystem } from "../documents/document-actions";
-import {
-    isFindShortcut,
-    isNewFileShortcut,
-    isOpenDirectoryShortcut,
-    isOpenFileShortcut,
-    isReplaceShortcut,
-    isSaveFileShortcut,
-    isToggleFileTreeShortcut,
-    readZoomShortcut,
-} from "../editor/input/keyboard-shortcuts";
 import { syncLinkOpenIntentFromKeyboard } from "../editor/pointer-interactions";
+import { readShortcutCommand } from "./keymap";
 import { applyZoomShortcut } from "./zoom";
 
 type GlobalShortcutOptions = {
@@ -22,62 +13,83 @@ type GlobalShortcutOptions = {
     toggleFileTree: () => void;
 };
 
+type GlobalShortcutCommand =
+    | "file:new"
+    | "file:open"
+    | "file:open-directory"
+    | "file:save"
+    | "file:save-as"
+    | "edit:find"
+    | "edit:replace"
+    | "view:toggle-file-tree"
+    | "view:zoom-in"
+    | "view:zoom-out"
+    | "view:zoom-reset";
+
 export function handleGlobalKeydown(event: KeyboardEvent, options: GlobalShortcutOptions): void {
     syncLinkOpenIntentFromKeyboard(event);
 
-    if (isFindShortcut(event)) {
-        event.preventDefault();
-        options.openFind();
+    const command = readGlobalShortcutCommand(event);
+    if (!command) {
         return;
     }
 
-    if (isReplaceShortcut(event)) {
-        event.preventDefault();
-        options.openReplace();
-        return;
-    }
-
-    const zoomShortcut = readZoomShortcut(event);
-    if (zoomShortcut) {
-        event.preventDefault();
-        void applyZoomShortcut(zoomShortcut);
-        return;
-    }
-
-    if (!canUseDesktopFileSystem()) {
-        if (isToggleFileTreeShortcut(event)) {
-            event.preventDefault();
+    event.preventDefault();
+    switch (command) {
+        case "edit:find":
+            options.openFind();
+            return;
+        case "edit:replace":
+            options.openReplace();
+            return;
+        case "view:zoom-in":
+            void applyZoomShortcut("in");
+            return;
+        case "view:zoom-out":
+            void applyZoomShortcut("out");
+            return;
+        case "view:zoom-reset":
+            void applyZoomShortcut("reset");
+            return;
+        case "view:toggle-file-tree":
             options.toggleFileTree();
-        }
-        return;
+            return;
+        case "file:open-directory":
+            void options.openDirectory();
+            return;
+        case "file:new":
+            void options.newDocument();
+            return;
+        case "file:open":
+            void options.openDocument();
+            return;
+        case "file:save":
+            void options.saveDocument(false);
+            return;
+        case "file:save-as":
+            void options.saveDocument(true);
     }
+}
 
-    if (isOpenDirectoryShortcut(event)) {
-        event.preventDefault();
-        void options.openDirectory();
-        return;
-    }
+function readGlobalShortcutCommand(event: KeyboardEvent): GlobalShortcutCommand | null {
+    const command = readShortcutCommand(event, "global", {
+        canUseNativeFileSystem: canUseDesktopFileSystem(),
+    });
 
-    if (isNewFileShortcut(event)) {
-        event.preventDefault();
-        void options.newDocument();
-        return;
-    }
-
-    if (isToggleFileTreeShortcut(event)) {
-        event.preventDefault();
-        options.toggleFileTree();
-        return;
-    }
-
-    if (isOpenFileShortcut(event)) {
-        event.preventDefault();
-        void options.openDocument();
-        return;
-    }
-
-    if (isSaveFileShortcut(event)) {
-        event.preventDefault();
-        void options.saveDocument(event.shiftKey);
+    switch (command) {
+        case "file:new":
+        case "file:open":
+        case "file:open-directory":
+        case "file:save":
+        case "file:save-as":
+        case "edit:find":
+        case "edit:replace":
+        case "view:toggle-file-tree":
+        case "view:zoom-in":
+        case "view:zoom-out":
+        case "view:zoom-reset":
+            return command;
+        default:
+            return null;
     }
 }

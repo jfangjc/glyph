@@ -1,36 +1,21 @@
 import "./window-controls.css";
 import windowControlsHtml from "./window-controls.html?raw";
 import { System, Window } from "@wailsio/runtime";
+import {
+    readShortcutLabel,
+    type AppMenuCommand,
+    type ShortcutLabelPlatform,
+} from "../../app/keymap";
 import { getElement } from "../../utils/dom";
 
 export const appMenuCommandEvent = "glyph:app-menu-command";
-
-export type AppMenuCommand =
-    | "file:new"
-    | "file:open"
-    | "file:open-directory"
-    | "file:save"
-    | "file:save-as"
-    | "file:export"
-    | "edit:undo"
-    | "edit:redo"
-    | "edit:cut"
-    | "edit:copy"
-    | "edit:paste"
-    | "edit:select-all"
-    | "edit:find"
-    | "edit:replace"
-    | "view:toggle-file-tree"
-    | "view:zoom-in"
-    | "view:zoom-out"
-    | "view:zoom-reset"
-    | "help:about";
+export type { AppMenuCommand } from "../../app/keymap";
 
 export type AppMenuCommandDetail = {
     command: AppMenuCommand;
 };
 
-type AppPlatform = "windows" | "mac" | "linux";
+type AppPlatform = ShortcutLabelPlatform;
 
 let maximiseButton: HTMLButtonElement | null = null;
 let snapAssistTimer = 0;
@@ -38,27 +23,28 @@ let activeMenuId: string | null = null;
 let hostPlatform: AppPlatform | null = null;
 
 export function installWindowControls(): void {
-    hostPlatform = readHostPlatform();
-    if (!hostPlatform) {
+    const platform = readHostPlatform();
+    if (!platform) {
         return;
     }
 
+    hostPlatform = platform;
     document.body.insertAdjacentHTML("afterbegin", windowControlsHtml);
-    document.body.classList.add("app-titlebar-host", `${hostPlatform}-host`);
+    document.body.classList.add("app-titlebar-host", `${platform}-host`);
 
     const titlebar = getElement<HTMLElement>("app-titlebar");
     titlebar.hidden = false;
-    titlebar.dataset.platform = hostPlatform;
-    syncPlatformShortcutLabels(titlebar);
+    titlebar.dataset.platform = platform;
+    syncAppMenuShortcutLabels(titlebar, platform);
     titlebar.addEventListener("click", handleTitlebarClick);
     titlebar.addEventListener("keydown", handleTitlebarKeydown);
     titlebar.addEventListener("pointerover", handleTitlebarPointerOver);
     titlebar.addEventListener("pointerleave", handleTitlebarPointerLeave);
 
     const controls = getElement<HTMLElement>("app-window-controls");
-    if (hostPlatform === "windows" || hostPlatform === "linux") {
+    if (platform === "windows" || platform === "linux") {
         controls.hidden = false;
-        if (hostPlatform === "linux") {
+        if (platform === "linux") {
             syncLinuxWindowControlIcons(controls);
         }
 
@@ -99,13 +85,27 @@ function readHostPlatform(): AppPlatform | null {
     return null;
 }
 
-function syncPlatformShortcutLabels(titlebar: HTMLElement): void {
-    if (hostPlatform !== "mac") {
-        return;
-    }
+function syncAppMenuShortcutLabels(titlebar: HTMLElement, platform: AppPlatform): void {
+    for (const item of Array.from(titlebar.querySelectorAll<HTMLButtonElement>("[data-app-command]"))) {
+        const command = item.dataset.appCommand;
+        if (!command) {
+            continue;
+        }
 
-    for (const shortcut of Array.from(titlebar.querySelectorAll<HTMLElement>(".app-menu-shortcut"))) {
-        shortcut.textContent = shortcut.textContent?.replace(/^Ctrl/, "Cmd") ?? "";
+        const label = readShortcutLabel(command as AppMenuCommand, platform);
+        let shortcut = item.querySelector<HTMLElement>(".app-menu-shortcut");
+        if (!label) {
+            shortcut?.remove();
+            continue;
+        }
+
+        if (!shortcut) {
+            shortcut = document.createElement("span");
+            shortcut.className = "app-menu-shortcut";
+            item.append(shortcut);
+        }
+
+        shortcut.textContent = label;
     }
 }
 

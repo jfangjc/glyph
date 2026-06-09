@@ -17,7 +17,7 @@ import {
     type SelectedBlockRange,
 } from "./caret";
 import type { ParsedBlock } from "../blocks/model";
-import type { InlineFormat } from "../input/keyboard-shortcuts";
+import type { InlineFormat } from "../../app/keymap";
 
 export type SelectionInsertionTarget = {
     block: HTMLElement;

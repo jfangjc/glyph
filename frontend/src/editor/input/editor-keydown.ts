@@ -1,4 +1,5 @@
 import type { DocumentEditorEventContext } from "../../formats/types";
+import { matchesShortcutCommand } from "../../app/keymap";
 import {
     indentListBlocks,
     deleteBlockBoundary,
@@ -20,8 +21,7 @@ import { getElement } from "../../utils/dom";
 import {
     isCompositionEvent,
     isPlainTextKey,
-    isSelectAllShortcut,
-} from "./keyboard-shortcuts";
+} from "./keyboard-events";
 import {
     deleteSelectedContent,
     replaceSelectionWithText,
@@ -34,7 +34,7 @@ export function handleEditorKeydown(event: KeyboardEvent, options: DocumentEdito
         return;
     }
 
-    if (isSelectAllShortcut(event)) {
+    if (matchesShortcutCommand(event, "edit:select-all", "editor")) {
         event.preventDefault();
         selectEditorContents(editor);
         return;

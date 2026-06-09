@@ -1,4 +1,5 @@
 import { syncDocumentWindowTitle } from "../../app/window-title";
+import { matchesShortcutCommand } from "../../app/keymap";
 import type { DocumentFormat } from "../../formats/types";
 import {
     beginDiscreteUndoTransaction,
@@ -6,7 +7,6 @@ import {
     commitUndoTransaction,
     flushPendingUndoTransaction,
 } from "../history/undo-history";
-import { isRedoShortcut, isUndoShortcut } from "../input/keyboard-shortcuts";
 import {
     isTypingBoundaryKeydown,
     readBeforeInputUndoKind,
@@ -69,13 +69,13 @@ export function createTitleController(options: TitleControllerOptions): TitleCon
     }
 
     function handleTitleKeydown(event: KeyboardEvent): void {
-        if (isUndoShortcut(event)) {
+        if (matchesShortcutCommand(event, "edit:undo", "title")) {
             event.preventDefault();
             undoHistoryChange();
             return;
         }
 
-        if (isRedoShortcut(event)) {
+        if (matchesShortcutCommand(event, "edit:redo", "title")) {
             event.preventDefault();
             redoHistoryChange();
             return;

@@ -9,7 +9,7 @@ import {
     getActiveBlock,
     getCurrentBlockOffset,
 } from "../selection/caret";
-import { isCompositionEvent } from "./keyboard-shortcuts";
+import { isCompositionEvent } from "./keyboard-events";
 
 export function handleEditorBeforeInput(_event: InputEvent, _options: DocumentEditorEventContext): void {
     // Format adapters own specialized beforeinput behavior.

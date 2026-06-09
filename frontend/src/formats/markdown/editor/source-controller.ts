@@ -31,7 +31,7 @@ import {
     getPlainTextBoundaryOffset,
     isCaretAtBlockEdge,
 } from "../../../editor/selection/caret";
-import { readInlineFormatShortcut } from "../../../editor/input/keyboard-shortcuts";
+import { readInlineFormatShortcut } from "../../../app/keymap";
 import { getRenderedContentText } from "../../../editor/selection/rendered-content-dom";
 import { formatMarkdownTableSource } from "../table";
 import { readMathSourceText } from "../math";
@@ -142,7 +142,7 @@ export function handleBlockMarkdownSourceKeydown(event: KeyboardEvent): boolean 
         return true;
     }
 
-    if (event.key === "Enter" || readInlineFormatShortcut(event)) {
+    if (event.key === "Enter" || readInlineFormatShortcut(event, "markdown")) {
         event.preventDefault();
     }
 

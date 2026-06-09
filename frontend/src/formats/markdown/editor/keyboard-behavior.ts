@@ -22,11 +22,13 @@ import {
 } from "../../../editor/blocks/operations";
 import { readEditorDom } from "../../../editor/editor-dom";
 import {
+    matchesShortcutCommand,
+    readInlineFormatShortcut,
+} from "../../../app/keymap";
+import {
     isCompositionEvent,
     isPlainTextKey,
-    isSelectAllShortcut,
-    readInlineFormatShortcut,
-} from "../../../editor/input/keyboard-shortcuts";
+} from "../../../editor/input/keyboard-events";
 import type { DocumentEditorEventContext } from "../../types";
 import {
     insertLineBreakInOpenCodeFenceParagraph,
@@ -55,7 +57,7 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
         return true;
     }
 
-    if (isSelectAllShortcut(event)) {
+    if (matchesShortcutCommand(event, "edit:select-all", "markdown")) {
         event.preventDefault();
         selectEditorContents(editor);
         return true;
@@ -70,7 +72,7 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
         return true;
     }
 
-    const inlineFormat = readInlineFormatShortcut(event);
+    const inlineFormat = readInlineFormatShortcut(event, "markdown");
     if (inlineFormat) {
         event.preventDefault();
         if (applyInlineFormatShortcut(block, inlineFormat)) {

@@ -12,7 +12,7 @@ import {
     setBlockText,
 } from "../../../editor/blocks/view";
 import { readBlockType } from "../../../editor/blocks/model";
-import { isCompositionEvent } from "../../../editor/input/keyboard-shortcuts";
+import { isCompositionEvent } from "../../../editor/input/keyboard-events";
 import type { DocumentEditorEventContext } from "../../types";
 import {
     applyMarkdownShortcut,

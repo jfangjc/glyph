@@ -1,4 +1,5 @@
 import type { DirectoryTree, DirectoryTreeItem } from "../bridge/types";
+import { readShortcutLabel } from "../app/keymap";
 import { escapeHtml } from "../utils/text";
 
 type FileTreeRenderOptions = {
@@ -11,7 +12,8 @@ type FileTreeRenderOptions = {
 
 export function renderFileTreeHtml(options: FileTreeRenderOptions): string {
     if (!options.tree) {
-        return `<div class="file-tree-empty">Open a directory with Ctrl+Shift+O</div>`;
+        const shortcut = readShortcutLabel("file:open-directory");
+        return `<div class="file-tree-empty">Open a directory${shortcut ? ` with ${escapeHtml(shortcut)}` : ""}</div>`;
     }
 
     const state = { rendered: 0, truncated: false };

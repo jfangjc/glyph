@@ -1,4 +1,8 @@
 import { getSuggestedFileName } from "../../app/window-title";
+import {
+    matchesShortcutCommand,
+    readInlineFormatShortcut,
+} from "../../app/keymap";
 import type {
     DocumentEditorEventContext,
     DocumentEditorHooks,
@@ -28,12 +32,7 @@ import {
     handleEditorInput as handleEditorInputCommand,
 } from "../input/editor-input";
 import { handleEditorKeydown as handleEditorKeydownCommand } from "../input/editor-keydown";
-import {
-    isPlainTextKey,
-    isRedoShortcut,
-    isUndoShortcut,
-    readInlineFormatShortcut,
-} from "../input/keyboard-shortcuts";
+import { isPlainTextKey } from "../input/keyboard-events";
 import { handleEditorMouseDown as handleEditorMouseDownCommand } from "../pointer-interactions";
 import { getSelectedBlockRange } from "../selection/caret";
 import {
@@ -144,13 +143,13 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorKeydown(event: KeyboardEvent): void {
-        if (isUndoShortcut(event)) {
+        if (matchesShortcutCommand(event, "edit:undo", "editor")) {
             event.preventDefault();
             undoHistoryChange();
             return;
         }
 
-        if (isRedoShortcut(event)) {
+        if (matchesShortcutCommand(event, "edit:redo", "editor")) {
             event.preventDefault();
             redoHistoryChange();
             return;
