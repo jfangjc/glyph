@@ -20,7 +20,6 @@ import {
     focusBlockAtOffset,
     getCaretOffset,
     getCaretPositionFromPoint,
-    getCurrentBlockOffset,
     getTextPosition,
 } from "../../../editor/selection/caret";
 import { getElement } from "../../../utils/dom";
@@ -625,16 +624,43 @@ export function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
         return;
     }
 
-    const text = getMarkdownText(source);
-    if (isCompleteInlineTokenSource(text)) {
+    const sourceText = getMarkdownText(source);
+    if (!isCompleteInlineTokenSource(sourceText)) {
         return;
     }
 
-    const offset = getCurrentBlockOffset(block);
+    const sourceOffset = getCaretOffset(source, focusNode, selection.focusOffset);
+    const blockOffset = getCaretOffset(getBlockContent(block), focusNode, selection.focusOffset);
     const markdown = getBlockText(block);
 
     setBlockText(block, markdown);
-    focusBlockAtOffset(block, Math.min(offset, getBlockText(block).length));
+    restoreInlineSourceFocusAfterRender(block, blockOffset, sourceOffset);
+}
+
+export function moveCaretOutOfInactiveMarkdownTokenSourceBoundary(block: HTMLElement, blockOffset: number): boolean {
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const source = getFocusedMarkdownTokenSource();
+    const token = source ? getMarkdownTokenForSource(source) : null;
+
+    if (!selection?.isCollapsed || !focusNode || !source || !token || token.dataset.active === "true") {
+        return false;
+    }
+
+    const sourceOffset = getCaretOffset(source, focusNode, selection.focusOffset);
+    const sourceLength = getMarkdownText(source).length;
+    const edge = sourceOffset === 0 ? "start" : sourceOffset === sourceLength ? "end" : null;
+
+    if (!edge) {
+        return false;
+    }
+
+    suppressedMarkdownTokenActivation = { block, offset: blockOffset };
+    suppressSelectionChangeForFrame();
+    return focusMarkdownTokenBoundaryAtOffset(block, blockOffset, {
+        edge,
+        advanceAcrossAdjacentText: false,
+    });
 }
 
 export function suppressAdjacentFormatTokenActivation(block: HTMLElement, offset: number): boolean {
@@ -881,6 +907,23 @@ function hasActiveMarkdownTokenSourceEdits(token: HTMLElement): boolean {
         token.dataset.sourceBeforeActivation !== undefined &&
         getMarkdownText(token) !== token.dataset.sourceBeforeActivation
     );
+}
+
+function restoreInlineSourceFocusAfterRender(block: HTMLElement, blockOffset: number, sourceOffset: number): void {
+    const content = getBlockContent(block);
+    const focusOffset = Math.min(blockOffset, getBlockText(block).length);
+    const tokenPosition = findMarkdownTokenAtBlockOffset(content, focusOffset, isEditableMarkdownToken);
+    const token = tokenPosition?.token;
+    const source = token ? getMarkdownTokenSource(token) : null;
+
+    if (!token || !source) {
+        focusBlockAtOffset(block, focusOffset);
+        return;
+    }
+
+    setActiveMarkdownToken(token);
+    suppressSelectionChangeForFrame();
+    focusMarkdownTokenSourceAtOffset(source, Math.min(sourceOffset, source.textContent?.length ?? 0));
 }
 
 function getMarkdownTokenSource(token: HTMLElement): HTMLElement | null {

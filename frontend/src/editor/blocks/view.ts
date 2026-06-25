@@ -163,7 +163,11 @@ export function setBlockText(block: HTMLElement, text: string): void {
     if (blockHtml !== undefined && blockHtml !== null) {
         const previewHtml = `${serializeBlockSource(source)}\u0000${blockHtml}`;
         const cache = getRenderCache(content);
-        if (cache.previewHtml === previewHtml && cache.previewRevision === renderRevision) {
+        if (
+            cache.previewHtml === previewHtml &&
+            cache.previewRevision === renderRevision &&
+            !content.querySelector(".format-block-source")
+        ) {
             return;
         }
 
@@ -191,11 +195,11 @@ export function setBlockText(block: HTMLElement, text: string): void {
     const html = renderBlockInnerHtml(block, type, text, source);
 
     const cache = getRenderCache(content);
-    if (cache.inlineHtml === html && cache.inlineRevision === renderRevision) {
+    if (cache.inlineHtml === html && cache.inlineRevision === renderRevision && content.innerHTML === html) {
         return;
     }
 
-    content.innerHTML = html;
+    replaceRenderedHtml(content, html);
     cache.inlineHtml = html;
     cache.inlineRevision = renderRevision;
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
@@ -243,7 +247,7 @@ export function rerenderInlineBlockContent(block: HTMLElement, offset: number): 
         return null;
     }
 
-    content.innerHTML = html;
+    replaceRenderedHtml(content, html);
     cache.inlineHtml = html;
     cache.inlineRevision = renderRevision;
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
@@ -402,12 +406,53 @@ function clearInlineAndPreviewCache(content: HTMLElement): void {
     delete cache.previewRevision;
 }
 
+function replaceRenderedHtml(content: HTMLElement, html: string): void {
+    const preserved = readPreservedRenderedElements(content);
+    content.innerHTML = html;
+    restorePreservedRenderedElements(content, preserved);
+}
+
+function readPreservedRenderedElements(content: HTMLElement): Map<string, HTMLElement[]> {
+    const preserved = new Map<string, HTMLElement[]>();
+
+    for (const element of Array.from(content.querySelectorAll<HTMLElement>("[data-render-preserve-key]"))) {
+        const key = element.dataset.renderPreserveKey;
+        if (!key) {
+            continue;
+        }
+
+        const elements = preserved.get(key) ?? [];
+        elements.push(element);
+        preserved.set(key, elements);
+    }
+
+    return preserved;
+}
+
+function restorePreservedRenderedElements(content: HTMLElement, preserved: Map<string, HTMLElement[]>): void {
+    if (preserved.size === 0) {
+        return;
+    }
+
+    for (const element of Array.from(content.querySelectorAll<HTMLElement>("[data-render-preserve-key]"))) {
+        const key = element.dataset.renderPreserveKey;
+        const replacement = key ? preserved.get(key)?.shift() : null;
+        if (!replacement || replacement.tagName !== element.tagName || replacement.className !== element.className) {
+            continue;
+        }
+
+        element.replaceWith(replacement);
+    }
+}
+
 function serializeBlockSource(source: BlockSource): string {
     return [
         source.prefix ?? "",
         source.prefixEditable === false ? "0" : "1",
         source.suffix ?? "",
+        source.suffixEditable === false ? "0" : "1",
         source.atomic ?? "",
+        source.atomicEditable === false ? "0" : "1",
     ].join("\u0000");
 }
 
@@ -467,11 +512,20 @@ function focusBlockContentAtOffset(block: HTMLElement, offset: number): void {
 }
 
 function renderBlockInnerHtml(block: HTMLElement, type: BlockType, text: string, source: BlockSource): string {
+    const bodyHtml = renderBlockEditableTextHtml(text, source);
     return (
         renderBlockSourceHtml(source.prefix, "prefix", source.prefixEditable ?? true) +
-        renderBlockEditableTextHtml(text, source) +
-        renderBlockSourceHtml(source.suffix, "suffix")
+        renderBlockBodyHtml(type, source, bodyHtml) +
+        renderBlockSourceHtml(source.suffix, "suffix", source.suffixEditable ?? true)
     );
+}
+
+function renderBlockBodyHtml(type: BlockType, source: BlockSource, html: string): string {
+    if (!source.prefix || !isIndentableListBlockType(type)) {
+        return html;
+    }
+
+    return `<span class="format-block-body">${html}</span>`;
 }
 
 function renderBlockEditableTextHtml(text: string, source: BlockSource): string {

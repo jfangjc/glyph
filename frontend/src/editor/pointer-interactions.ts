@@ -202,9 +202,13 @@ function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
         return false;
     }
 
+    if (target.closest(".format-block-source[data-block-source-editable='true'], .markdown-token-source")) {
+        return true;
+    }
+
     return Boolean(
         target.closest(
-            "#document-title, .format-block-source, .todo-checkbox, button, input, textarea, select, [contenteditable='false']",
+            "#document-title, .todo-checkbox, button, input, textarea, select, [contenteditable='false']",
         ),
     );
 }

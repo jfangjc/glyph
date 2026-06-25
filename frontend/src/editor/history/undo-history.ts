@@ -10,8 +10,15 @@ import {
     readEditorBlock,
 } from "../blocks/view";
 import {
+    focusBlockSourceAtOffset,
+    getBlockSourceElement,
+    type BlockSourcePosition,
+} from "../blocks/rendering";
+import {
     focusBlockAtOffset,
     getCaretOffset,
+    focusPlainTextElement,
+    readCurrentSourceSelectionTarget,
     getSelectedBlockRange,
     getTextPosition,
 } from "../selection/caret";
@@ -21,10 +28,19 @@ type SelectionPoint = {
     offset: number;
 };
 
-type SelectionSnapshot = {
-    anchor: SelectionPoint;
-    focus: SelectionPoint;
-};
+type SelectionSnapshot =
+    | {
+          kind: "content";
+          anchor: SelectionPoint;
+          focus: SelectionPoint;
+      }
+    | {
+          kind: "source";
+          blockIndex: number;
+          sourceKind: "block" | "inline";
+          sourcePositionOrTokenIndex: BlockSourcePosition | number;
+          offset: number;
+      };
 
 type EditorSnapshot = {
     title: string;
@@ -190,6 +206,7 @@ function readSelectionSnapshot(): SelectionSnapshot | null {
     const selectedRange = getSelectedBlockRange();
     if (selectedRange) {
         return {
+            kind: "content",
             anchor: {
                 blockIndex: getBlockIndex(selectedRange.startBlock),
                 offset: selectedRange.startOffset,
@@ -198,6 +215,27 @@ function readSelectionSnapshot(): SelectionSnapshot | null {
                 blockIndex: getBlockIndex(selectedRange.endBlock),
                 offset: selectedRange.endOffset,
             },
+        };
+    }
+
+    const sourceTarget = readCurrentSourceSelectionTarget();
+    if (sourceTarget) {
+        if (sourceTarget.kind === "block-source") {
+            return {
+                kind: "source",
+                blockIndex: getBlockIndex(sourceTarget.block),
+                sourceKind: "block",
+                sourcePositionOrTokenIndex: sourceTarget.sourcePosition,
+                offset: sourceTarget.sourceOffset,
+            };
+        }
+
+        return {
+            kind: "source",
+            blockIndex: getBlockIndex(sourceTarget.block),
+            sourceKind: "inline",
+            sourcePositionOrTokenIndex: getInlineTokenIndex(sourceTarget.block, sourceTarget.token),
+            offset: sourceTarget.sourceOffset,
         };
     }
 
@@ -210,7 +248,7 @@ function readSelectionSnapshot(): SelectionSnapshot | null {
 
     const offset = getCaretOffset(getBlockContent(block), focusNode, selection.focusOffset);
     const point = { blockIndex: getBlockIndex(block), offset };
-    return { anchor: point, focus: point };
+    return { kind: "content", anchor: point, focus: point };
 }
 
 function restoreSelectionSnapshot(selectionSnapshot: SelectionSnapshot | null): void {
@@ -221,6 +259,16 @@ function restoreSelectionSnapshot(selectionSnapshot: SelectionSnapshot | null): 
 
     if (!selectionSnapshot) {
         focusBlockAtOffset(blocks[0], 0);
+        return;
+    }
+
+    if (selectionSnapshot.kind === "source") {
+        if (restoreSourceSelectionSnapshot(blocks, selectionSnapshot)) {
+            return;
+        }
+
+        const fallbackBlock = blocks[clampIndex(selectionSnapshot.blockIndex, blocks.length)];
+        focusBlockAtOffset(fallbackBlock, Math.min(selectionSnapshot.offset, getBlockContent(fallbackBlock).textContent?.length ?? 0));
         return;
     }
 
@@ -239,6 +287,46 @@ function restoreSelectionSnapshot(selectionSnapshot: SelectionSnapshot | null): 
     if (selection && (anchorBlock !== focusBlock || selectionSnapshot.anchor.offset !== selectionSnapshot.focus.offset)) {
         selection.extend(focus.node, focus.offset);
     }
+}
+
+function restoreSourceSelectionSnapshot(blocks: HTMLElement[], snapshot: Extract<SelectionSnapshot, { kind: "source" }>): boolean {
+    const block = blocks[clampIndex(snapshot.blockIndex, blocks.length)];
+
+    if (snapshot.sourceKind === "block") {
+        const position = snapshot.sourcePositionOrTokenIndex;
+        if (typeof position !== "string") {
+            return false;
+        }
+
+        block.dataset.blockSourceActive = "true";
+        const source = getBlockSourceElement(getBlockContent(block), position);
+        if (!source) {
+            return false;
+        }
+
+        focusBlockSourceAtOffset(source, Math.min(snapshot.offset, source.textContent?.length ?? 0));
+        return true;
+    }
+
+    const tokenIndex = snapshot.sourcePositionOrTokenIndex;
+    if (typeof tokenIndex !== "number" || tokenIndex < 0) {
+        return false;
+    }
+
+    const token = getBlockContent(block).querySelectorAll<HTMLElement>(".markdown-token")[tokenIndex];
+    const source = token?.querySelector<HTMLElement>(".markdown-token-source");
+    if (!token || !source) {
+        return false;
+    }
+
+    token.dataset.active = "true";
+    token.dataset.sourceBeforeActivation = source.textContent ?? "";
+    focusPlainTextElement(source, Math.min(snapshot.offset, source.textContent?.length ?? 0));
+    return true;
+}
+
+function getInlineTokenIndex(block: HTMLElement, token: HTMLElement): number {
+    return Array.from(getBlockContent(block).querySelectorAll<HTMLElement>(".markdown-token")).indexOf(token);
 }
 
 function snapshotsHaveSameDocument(left: EditorSnapshot, right: EditorSnapshot): boolean {

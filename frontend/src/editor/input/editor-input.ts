@@ -4,6 +4,7 @@ import {
     rerenderInlineBlockContent,
     rerenderPlainTextBlockContent,
 } from "../blocks/view";
+import { resetEmptyBlockAfterDeleteInput } from "../blocks/operations";
 import {
     focusBlockAtOffset,
     getActiveBlock,
@@ -25,6 +26,11 @@ export function handleEditorInput(event: Event, options: DocumentEditorEventCont
 
     if (isCompositionEvent(event, options.isComposingText)) {
         options.markDocumentDirty();
+        return;
+    }
+
+    if (resetEmptyBlockAfterDeleteInput(block, event)) {
+        options.markEditorDirty();
         return;
     }
 

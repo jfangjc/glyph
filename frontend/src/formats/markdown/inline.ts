@@ -727,8 +727,13 @@ function renderImageToken(token: InlineToken): string {
     const alt = escapeHtml(unescapeMarkdownText(token.label));
     const raw = escapeHtml(token.raw);
     const title = token.title ? ` data-image-title="${escapeHtml(token.title)}"` : "";
+    const preserveKey = escapeHtml(createImagePreviewPreserveKey(token));
 
-    return `<span class="markdown-token markdown-image-token"><span class="markdown-image-preview" contenteditable="false" data-source-ignore="true" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>`;
+    return `<span class="markdown-token markdown-image-token"><span class="markdown-image-preview" contenteditable="false" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+}
+
+function createImagePreviewPreserveKey(token: InlineToken): string {
+    return JSON.stringify(["markdown-image", token.destination, unescapeMarkdownText(token.label), token.title ?? ""]);
 }
 
 function renderLinkToken(token: InlineToken, context: DocumentRenderContext, depth: number): string {

@@ -5,7 +5,9 @@ export type BlockSource = {
     prefix?: string;
     prefixEditable?: boolean;
     suffix?: string;
+    suffixEditable?: boolean;
     atomic?: string;
+    atomicEditable?: boolean;
 };
 
 export type BlockSourcePosition = "prefix" | "suffix" | "atomic";
@@ -19,19 +21,19 @@ export function renderPlainTextBlockContent(
     content.replaceChildren();
     appendBlockSourceElement(content, source.prefix, "prefix", false, source.prefixEditable);
     appendPlainTextBodyElement(content, text, highlightedHtml);
-    appendBlockSourceElement(content, source.suffix, "suffix");
+    appendBlockSourceElement(content, source.suffix, "suffix", false, source.suffixEditable);
 }
 
 export function renderCodeBlockContent(content: HTMLElement, text: string, source: BlockSource): void {
     content.replaceChildren();
     appendBlockSourceElement(content, source.prefix, "prefix", false, source.prefixEditable);
     appendCodeBlockBodyElement(content, text);
-    appendBlockSourceElement(content, source.suffix, "suffix");
+    appendBlockSourceElement(content, source.suffix, "suffix", false, source.suffixEditable);
 }
 
 export function renderAtomicBlockContent(content: HTMLElement, source: BlockSource): void {
     content.replaceChildren();
-    appendBlockSourceElement(content, source.atomic ?? source.prefix, "atomic");
+    appendBlockSourceElement(content, source.atomic ?? source.prefix, "atomic", false, source.atomicEditable);
 }
 
 export function renderPreviewBlockContent(
@@ -42,7 +44,13 @@ export function renderPreviewBlockContent(
     source: BlockSource = {},
 ): void {
     content.replaceChildren();
-    appendBlockSourceElement(content, source.atomic ?? text, "atomic", className === "markdown-math-preview");
+    appendBlockSourceElement(
+        content,
+        source.atomic ?? text,
+        "atomic",
+        className === "markdown-math-preview",
+        source.atomicEditable,
+    );
 
     const preview = document.createElement("div");
     preview.className = className;
@@ -58,8 +66,8 @@ export function renderBlockSourceHtml(value: string | undefined, position: Block
         return "";
     }
 
-    const editableAttribute = editable ? "" : ` contenteditable="false"`;
-    return `<span class="${getBlockSourceClassName(position)}" data-source-ignore="true"${editableAttribute} spellcheck="false">${escapeHtml(value)}</span>`;
+    const editableAttribute = ` contenteditable="${editable ? "true" : "false"}"`;
+    return `<span class="${getBlockSourceClassName(position)}" data-source-ignore="true" data-block-source="true" data-block-source-position="${position}" data-block-source-editable="${String(editable)}"${editableAttribute} spellcheck="false">${escapeHtml(value)}</span>`;
 }
 
 export function getBlockSourceElement(content: HTMLElement, position: BlockSourcePosition): HTMLElement | null {
@@ -67,6 +75,18 @@ export function getBlockSourceElement(content: HTMLElement, position: BlockSourc
 }
 
 export function readBlockSourcePosition(source: HTMLElement): BlockSourcePosition | null {
+    if (source.dataset.blockSourcePosition === "prefix") {
+        return "prefix";
+    }
+
+    if (source.dataset.blockSourcePosition === "suffix") {
+        return "suffix";
+    }
+
+    if (source.dataset.blockSourcePosition === "atomic") {
+        return "atomic";
+    }
+
     if (source.classList.contains("format-block-source-prefix")) {
         return "prefix";
     }
@@ -86,6 +106,31 @@ export function isBlockSourceElement(node: Node): node is HTMLElement {
     return node instanceof HTMLElement && node.classList.contains("format-block-source");
 }
 
+export function findBlockSourceElement(node: Node | null): HTMLElement | null {
+    const element = node instanceof Element ? node : node?.parentElement;
+    return element?.closest<HTMLElement>(".format-block-source") ?? null;
+}
+
+export function isEditableBlockSourceElement(source: HTMLElement): boolean {
+    return source.dataset.blockSourceEditable !== "false" && source.getAttribute("contenteditable") !== "false";
+}
+
+export function focusBlockSourceAtOffset(source: HTMLElement, offset: number): void {
+    const selection = document.getSelection();
+    const range = document.createRange();
+    const position = getPlainTextPosition(source, Math.max(0, offset));
+
+    source.closest<HTMLElement>("#editor")?.focus();
+    range.setStart(position.node, position.offset);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
+export function getBlockSourceOffset(source: HTMLElement, node: Node, offset: number): number {
+    return getPlainTextBoundaryOffset(source, node, offset);
+}
+
 function appendBlockSourceElement(
     content: HTMLElement,
     value: string | undefined,
@@ -100,7 +145,10 @@ function appendBlockSourceElement(
     const source = document.createElement("span");
     source.className = getBlockSourceClassName(position);
     source.dataset.sourceIgnore = "true";
-    source.contentEditable = editable ? "inherit" : "false";
+    source.dataset.blockSource = "true";
+    source.dataset.blockSourcePosition = position;
+    source.dataset.blockSourceEditable = String(editable);
+    source.contentEditable = editable ? "true" : "false";
     source.spellcheck = false;
     source.textContent = value ?? "";
     content.append(source);
@@ -140,4 +188,32 @@ function getBlockSourceClassName(position: BlockSourcePosition): string {
         "format-block-source",
         `format-block-source-${position}`,
     ].join(" ");
+}
+
+function getPlainTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } {
+    const text = root.firstChild ?? root.appendChild(document.createTextNode(""));
+    return { node: text, offset: Math.min(offset, text.textContent?.length ?? 0) };
+}
+
+function getPlainTextBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
+    if (current === anchorNode) {
+        if (current.nodeType === Node.TEXT_NODE) {
+            return (current.textContent ?? "").slice(0, anchorOffset).length;
+        }
+
+        return Array.from(current.childNodes)
+            .slice(0, Math.max(0, anchorOffset))
+            .reduce((offset, child) => offset + (child.textContent ?? "").length, 0);
+    }
+
+    let offset = 0;
+    for (const child of Array.from(current.childNodes)) {
+        if (child === anchorNode || child.contains(anchorNode)) {
+            return offset + getPlainTextBoundaryOffset(child, anchorNode, anchorOffset);
+        }
+
+        offset += (child.textContent ?? "").length;
+    }
+
+    return offset;
 }

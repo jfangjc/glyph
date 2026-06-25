@@ -4,5 +4,6 @@
     --glyph-font-code: ui-monospace, "Cascadia Mono", "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", "Noto Sans Mono", "Ubuntu Mono", monospace;
     --glyph-active-block-indicator: rgb(25 25 25 / 28%);
     --glyph-hover-block-indicator: rgb(25 25 25 / 14%);
+    --glyph-editor-caret: #1f1f1f;
     --glyph-editor-zoom: 1;
 }

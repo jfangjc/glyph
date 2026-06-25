@@ -169,12 +169,42 @@ export function deleteBlockBoundary(
     return direction === "previous" ? deletePreviousBoundary(block) : deleteNextBoundary(block);
 }
 
+export function removeEmptyBlockBackward(block: HTMLElement): BlockBoundaryDeleteResult | null {
+    if (!isCaretAtBlockEdge(block, "start") || getBlockText(block) !== "") {
+        return null;
+    }
+
+    const previous = getSiblingBlock(block, "previous");
+    if (!previous) {
+        return null;
+    }
+
+    block.remove();
+    focusBlockBoundary(previous, "end");
+    return "changed";
+}
+
 export function removeOrMergeBackward(block: HTMLElement): boolean {
     return deleteBlockBoundary(block, "previous") === "changed";
 }
 
 export function mergeForward(block: HTMLElement): boolean {
     return deleteBlockBoundary(block, "next") === "changed";
+}
+
+export function resetEmptyBlockAfterDeleteInput(block: HTMLElement, event: Event): boolean {
+    if (!(event instanceof InputEvent) || !event.inputType.startsWith("delete")) {
+        return false;
+    }
+
+    const type = readBlockType(block.dataset.type);
+    if (getBlockText(block) !== "" || !shouldResetEmptyBlock(type)) {
+        return false;
+    }
+
+    clearBlockProperties(block);
+    focusBlockAtOffset(block, 0, { scroll: "none" });
+    return true;
 }
 
 function deletePreviousBoundary(block: HTMLElement): BlockBoundaryDeleteResult | null {

@@ -8,7 +8,7 @@ export function serializeMarkdownDocument(_title: string, _usesTitle: boolean, b
     return body ? `${body}\n` : "";
 }
 
-function serializeMarkdownBlock(block: ParsedBlock): string {
+export function serializeMarkdownBlock(block: ParsedBlock): string {
     if (headingTypes.has(block.type)) {
         const id = block.headingIdExplicit && block.headingId ? ` {#${block.headingId}}` : "";
         return `${"#".repeat(Number(block.type.slice("heading-".length)))} ${block.text}${id}`;

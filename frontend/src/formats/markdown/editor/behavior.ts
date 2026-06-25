@@ -16,6 +16,7 @@ import { handleMarkdownKeydown } from "./keyboard-behavior";
 import {
     commitActiveBlockMarkdownSource,
     configureMarkdownSourceController,
+    handleBlockMarkdownSourceClick,
     syncActiveBlockMarkdownSource,
 } from "./source-controller";
 import {
@@ -32,10 +33,22 @@ export const markdownEditorBehavior: DocumentEditorBehavior = {
     keydown: handleMarkdownKeydown,
     mouseDown: handleMarkdownEditorMouseDown,
     click: (event) => {
+        if (handleBlockMarkdownSourceClick(event)) {
+            return true;
+        }
+
         handleMarkdownEditorClick(event);
         return true;
     },
     selectionChange: (_context, selection) => {
+        const sourceTarget = selection.sourceTarget;
+        const focusedBlockSource =
+            sourceTarget?.kind === "block-source" &&
+            selection.focusNode &&
+            (selection.focusNode === sourceTarget.source || sourceTarget.source.contains(selection.focusNode))
+                ? sourceTarget.source
+                : null;
+        syncActiveBlockMarkdownSource(selection.focusBlock, focusedBlockSource);
         handleMarkdownSelectionChange(selection);
         return true;
     },

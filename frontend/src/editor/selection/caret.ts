@@ -12,6 +12,14 @@ import {
     getEditorBlocks,
 } from "../blocks/view";
 import { getElement } from "../../utils/dom";
+import {
+    findBlockSourceElement,
+    focusBlockSourceAtOffset as focusBlockSourceElementAtOffset,
+    getBlockSourceOffset,
+    isEditableBlockSourceElement,
+    readBlockSourcePosition,
+} from "../blocks/rendering";
+import type { DocumentSourceSelectionTarget } from "../../formats/types";
 
 export type SelectedBlockRange = {
     blocks: HTMLElement[];
@@ -70,6 +78,84 @@ export function focusPlainTextElement(element: HTMLElement, offset: number): voi
     range.collapse(true);
     selection?.removeAllRanges();
     selection?.addRange(range);
+}
+
+export function readCurrentSourceSelectionTarget(): DocumentSourceSelectionTarget | null {
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    if (!selection?.isCollapsed || !focusNode) {
+        return null;
+    }
+
+    const blockSource = findBlockSourceElement(focusNode);
+    if (blockSource && isEditableBlockSourceElement(blockSource)) {
+        const target = createBlockSourceSelectionTarget(
+            blockSource,
+            getBlockSourceOffset(blockSource, focusNode, selection.focusOffset),
+        );
+        if (target) {
+            return target;
+        }
+    }
+
+    const focusElement = focusNode instanceof Element ? focusNode : focusNode.parentElement;
+    const inlineSource = focusElement?.closest<HTMLElement>(".markdown-token-source") ?? null;
+    const token = inlineSource?.parentElement;
+    const block = token ? findBlock(token) : null;
+    if (
+        inlineSource &&
+        token instanceof HTMLElement &&
+        token.classList.contains("markdown-token") &&
+        block &&
+        !inlineSource.parentElement?.closest("[data-source-ignore='true']")
+    ) {
+        return {
+            kind: "inline-source",
+            block,
+            token,
+            source: inlineSource,
+            sourceOffset: getPlainTextBoundaryOffset(inlineSource, focusNode, selection.focusOffset),
+        };
+    }
+
+    return null;
+}
+
+export function focusSourceSelectionTarget(target: DocumentSourceSelectionTarget): void {
+    if (!target.source.isConnected) {
+        focusBlockAtOffset(target.block, Math.min(target.sourceOffset, getBlockText(target.block).length));
+        return;
+    }
+
+    if (target.kind === "block-source") {
+        focusBlockSourceElementAtOffset(target.source, target.sourceOffset);
+        return;
+    }
+
+    focusPlainTextElement(target.source, target.sourceOffset);
+}
+
+export function isSelectionInsideEditableSource(): boolean {
+    return readCurrentSourceSelectionTarget() !== null;
+}
+
+function createBlockSourceSelectionTarget(
+    source: HTMLElement,
+    sourceOffset: number,
+): Extract<DocumentSourceSelectionTarget, { kind: "block-source" }> | null {
+    const block = findBlock(source);
+    const sourcePosition = readBlockSourcePosition(source);
+    if (!block || !sourcePosition) {
+        return null;
+    }
+
+    return {
+        kind: "block-source",
+        block,
+        source,
+        sourcePosition,
+        sourceOffset: Math.min(Math.max(0, sourceOffset), source.textContent?.length ?? 0),
+    };
 }
 
 export function getCaretPositionFromPoint(clientX: number, clientY: number): { node: Node; offset: number } | null {

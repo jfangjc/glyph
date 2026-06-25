@@ -5,18 +5,26 @@ import {
 } from "../../../editor/selection/commands";
 import {
     getActiveBlock,
+    getCurrentBlockOffset,
     getSelectedBlockRange,
     isCaretAtBlockEdge,
+    focusBlockAtOffset,
+    focusPlainTextElement,
     selectEditorContents,
 } from "../../../editor/selection/caret";
 import {
+    getBlockContent,
     getSiblingBlock,
+    getBlockText,
     isMultilinePlainTextBlockType,
+    setBlockText,
 } from "../../../editor/blocks/view";
 import { readBlockType } from "../../../editor/blocks/model";
+import { getBlockSourceElement } from "../../../editor/blocks/rendering";
 import {
     deleteBlockBoundary,
     indentListBlocks,
+    removeEmptyBlockBackward,
     removeTrailingLineBreakInMultilinePlainTextBlock,
     splitBlock,
 } from "../../../editor/blocks/operations";
@@ -39,6 +47,7 @@ import {
     startTableFromHeader,
 } from "./block-operations";
 import {
+    deletePrefixBlockMarkdownSourceCharacter,
     deleteHeadingPrefixCharacterAtBoundary,
     handleBlockMarkdownSourceKeydown,
     moveCaretAfterCodeBlockSourceAtSelection,
@@ -91,6 +100,11 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
     }
 
     if (moveCaretAfterActiveDisplayMathTokenSource(event, block)) {
+        event.preventDefault();
+        return true;
+    }
+
+    if (moveCaretIntoPrefixSourceFromBodyStart(event, block)) {
         event.preventDefault();
         return true;
     }
@@ -182,6 +196,12 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
             return true;
         }
 
+        if (deletePrefixSourceBackwardFromBodyStart(event, block)) {
+            event.preventDefault();
+            context.markEditorDirty();
+            return true;
+        }
+
         if (deleteHeadingPrefixCharacterAtBoundary(event, block)) {
             event.preventDefault();
             context.markEditorDirty();
@@ -193,6 +213,12 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
             return true;
         }
 
+        if (event.key === "Backspace" && deleteFinalCharacterInActiveListSourceBlock(block)) {
+            event.preventDefault();
+            context.markEditorDirty();
+            return true;
+        }
+
         if (event.key === "Backspace" && removeTrailingLineBreakInMultilinePlainTextBlock(block)) {
             event.preventDefault();
             context.markEditorDirty();
@@ -200,6 +226,12 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
         }
 
         if (event.key === "Backspace" && removeTrailingLineBreakInOpenCodeFenceParagraph(block)) {
+            event.preventDefault();
+            context.markEditorDirty();
+            return true;
+        }
+
+        if (event.key === "Backspace" && removeEmptyActiveListSourceBlockBackward(block)) {
             event.preventDefault();
             context.markEditorDirty();
             return true;
@@ -225,4 +257,83 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
     }
 
     return true;
+}
+
+function deleteFinalCharacterInActiveListSourceBlock(block: HTMLElement): boolean {
+    if (!isActiveListSourceBlock(block)) {
+        return false;
+    }
+
+    const text = getBlockText(block);
+    if (text.length !== 1 || getCurrentBlockOffset(block) !== text.length) {
+        return false;
+    }
+
+    setBlockText(block, "");
+    focusBlockAtOffset(block, 0, { scroll: "none" });
+    return true;
+}
+
+function moveCaretIntoPrefixSourceFromBodyStart(event: KeyboardEvent, block: HTMLElement): boolean {
+    if (
+        event.key !== "ArrowLeft" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        block.dataset.blockSourceActive !== "true" ||
+        getCurrentBlockOffset(block) !== 0
+    ) {
+        return false;
+    }
+
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const source = getBlockSourceElement(getBlockContent(block), "prefix");
+    if (!selection?.isCollapsed || !focusNode || !source || source.contains(focusNode)) {
+        return false;
+    }
+
+    focusPlainTextElement(source, source.textContent?.length ?? 0);
+    return true;
+}
+
+function deletePrefixSourceBackwardFromBodyStart(event: KeyboardEvent, block: HTMLElement): boolean {
+    if (
+        event.key !== "Backspace" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        block.dataset.blockSourceActive !== "true" ||
+        getCurrentBlockOffset(block) !== 0
+    ) {
+        return false;
+    }
+
+    const selection = document.getSelection();
+    const focusNode = selection?.focusNode;
+    const source = getBlockSourceElement(getBlockContent(block), "prefix");
+    if (!selection?.isCollapsed || !focusNode || !source || source.contains(focusNode)) {
+        return false;
+    }
+
+    return deletePrefixBlockMarkdownSourceCharacter(source);
+}
+
+function removeEmptyActiveListSourceBlockBackward(block: HTMLElement): boolean {
+    if (!isActiveListSourceBlock(block)) {
+        return false;
+    }
+
+    return removeEmptyBlockBackward(block) === "changed";
+}
+
+function isActiveListSourceBlock(block: HTMLElement): boolean {
+    const type = readBlockType(block.dataset.type);
+    if (type !== "list" && type !== "ordered-list" && type !== "todo") {
+        return false;
+    }
+
+    return block.dataset.blockSourceActive === "true";
 }

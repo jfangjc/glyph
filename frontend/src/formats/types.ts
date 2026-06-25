@@ -1,5 +1,5 @@
 import type { BlockType, ParsedBlock, ParsedDocument } from "../editor/blocks/model";
-import type { BlockSource } from "../editor/blocks/rendering";
+import type { BlockSource, BlockSourcePosition } from "../editor/blocks/rendering";
 
 export type DocumentFileLike = {
     name: string;
@@ -35,6 +35,22 @@ export type DocumentEditorEventContext = DocumentEditorHooks & {
     isComposingText: boolean;
 };
 
+export type DocumentSourceSelectionTarget =
+    | {
+          kind: "block-source";
+          block: HTMLElement;
+          source: HTMLElement;
+          sourcePosition: BlockSourcePosition;
+          sourceOffset: number;
+      }
+    | {
+          kind: "inline-source";
+          block: HTMLElement;
+          token: HTMLElement;
+          source: HTMLElement;
+          sourceOffset: number;
+      };
+
 export type DocumentEditorSelectionState = {
     selection: Selection | null;
     isCollapsed: boolean;
@@ -47,6 +63,7 @@ export type DocumentEditorSelectionState = {
     anchorBlockOffset: number | null;
     focusBlockOffset: number | null;
     selectedBlocks: HTMLElement[];
+    sourceTarget: DocumentSourceSelectionTarget | null;
 };
 
 export type DocumentPasteContext = DocumentEditorEventContext & {

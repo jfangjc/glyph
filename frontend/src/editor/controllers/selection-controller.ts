@@ -12,8 +12,12 @@ import {
 import {
     syncDocumentOutlineToSelection,
 } from "../document-outline";
-import { getSelectedBlockRange } from "../selection/caret";
-import { getCaretOffset } from "../selection/caret";
+import {
+    focusSourceSelectionTarget,
+    getCaretOffset,
+    getSelectedBlockRange,
+    readCurrentSourceSelectionTarget,
+} from "../selection/caret";
 
 export type SelectionController = {
     handleEditorSelectionChange: () => void;
@@ -36,6 +40,11 @@ export function createSelectionController(options: SelectionControllerOptions): 
 
     function handleEditorSelectionChange(): void {
         const selectionState = readSelectionState();
+        if (normalizeSourceSelection(selectionState)) {
+            lastSelectionSignature = "";
+            return;
+        }
+
         if (selectionState.signature === lastSelectionSignature) {
             return;
         }
@@ -91,10 +100,12 @@ function readSelectionState(): SelectionStateWithSignature {
             anchorBlockOffset: null,
             focusBlockOffset: null,
             selectedBlocks: [],
+            sourceTarget: null,
         };
     }
 
     const selectedRange = getSelectedBlockRange();
+    const sourceTarget = readCurrentSourceSelectionTarget();
     const anchorBlock = findBlock(selection.anchorNode ?? null);
     const focusBlock = findBlock(selection.focusNode ?? null);
     const anchorBlockOffset = readSelectionBoundaryOffset(anchorBlock, selection.anchorNode, selection.anchorOffset);
@@ -108,6 +119,9 @@ function readSelectionState(): SelectionStateWithSignature {
         focusBlock ? getBlockIndex(focusBlock) : -1,
         anchorBlockOffset,
         focusBlockOffset,
+        sourceTarget ? sourceTarget.kind : "content",
+        sourceTarget ? readSourceTargetSignature(sourceTarget) : "",
+        sourceTarget ? sourceTarget.sourceOffset : "",
     ].join(":");
 
     return {
@@ -123,7 +137,39 @@ function readSelectionState(): SelectionStateWithSignature {
         anchorBlockOffset,
         focusBlockOffset,
         selectedBlocks,
+        sourceTarget,
     };
+}
+
+function readSourceTargetSignature(sourceTarget: DocumentEditorSelectionState["sourceTarget"]): string {
+    if (!sourceTarget) {
+        return "";
+    }
+
+    if (sourceTarget.kind === "block-source") {
+        return sourceTarget.sourcePosition;
+    }
+
+    return String(
+        Array.from(sourceTarget.block.querySelectorAll<HTMLElement>(".markdown-token")).indexOf(sourceTarget.token),
+    );
+}
+
+function normalizeSourceSelection(selectionState: DocumentEditorSelectionState): boolean {
+    const sourceTarget = selectionState.sourceTarget;
+    const focusNode = selectionState.focusNode;
+    if (
+        !selectionState.isCollapsed ||
+        sourceTarget?.kind !== "block-source" ||
+        !focusNode ||
+        focusNode === sourceTarget.source ||
+        sourceTarget.source.contains(focusNode)
+    ) {
+        return false;
+    }
+
+    focusSourceSelectionTarget(sourceTarget);
+    return true;
 }
 
 function readSelectionBoundaryOffset(block: HTMLElement | null, node: Node | null, offset: number): number {
