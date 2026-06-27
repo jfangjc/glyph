@@ -11,6 +11,7 @@ import {
     focusPlainTextElement,
     getCaretOffset,
     getCaretPositionFromPoint,
+    getPlainTextBoundaryOffset,
     getTextPosition,
 } from "./selection/caret";
 import { getBlockSourceElement } from "./blocks/rendering";
@@ -20,6 +21,7 @@ import { clamp } from "../utils/text";
 type PointerBlockTarget = {
     block: HTMLElement;
     offset: number;
+    sourcePosition?: { node: Node; offset: number };
 };
 
 type PointerDownSelection = {
@@ -216,18 +218,22 @@ function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
 function findPointerTargetBlock(target: Element, clientX: number, clientY: number): PointerBlockTarget | null {
     const directBlock = findBlock(target);
     if (directBlock) {
+        const sourcePosition = readPointerBlockSourcePosition(directBlock, clientX, clientY);
         return {
             block: directBlock,
             offset: getPointerCaretOffset(directBlock, clientX, clientY),
+            sourcePosition,
         };
     }
 
     const pointTarget = document.elementFromPoint(clientX, clientY);
     const pointBlock = pointTarget instanceof Element ? findBlock(pointTarget) : null;
     if (pointBlock) {
+        const sourcePosition = readPointerBlockSourcePosition(pointBlock, clientX, clientY);
         return {
             block: pointBlock,
             offset: getPointerCaretOffset(pointBlock, clientX, clientY),
+            sourcePosition,
         };
     }
 
@@ -247,9 +253,11 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
         const rect = block.getBoundingClientRect();
 
         if (clientY >= rect.top && clientY <= rect.bottom) {
+            const sourcePosition = readPointerBlockSourcePosition(block, clientX, clientY);
             return {
                 block,
                 offset: getPointerCaretOffset(block, clientX, clientY),
+                sourcePosition,
             };
         }
 
@@ -315,29 +323,85 @@ function selectPointerTargetRange(anchor: PointerBlockTarget, focus: PointerBloc
 }
 
 function getPointerTargetTextPosition(target: PointerBlockTarget): { node: Node; offset: number } {
-    if (target.offset <= 0) {
-        const sourceStart = getPointerTargetSourceStartPosition(target.block);
-        if (sourceStart) {
-            return sourceStart;
-        }
+    if (target.sourcePosition) {
+        return target.sourcePosition;
     }
 
     return getTextPosition(getBlockContent(target.block), target.offset);
 }
 
-function getPointerTargetSourceStartPosition(block: HTMLElement): { node: Node; offset: number } | null {
+function readPointerBlockSourcePosition(
+    block: HTMLElement,
+    clientX: number,
+    clientY: number,
+): { node: Node; offset: number } | undefined {
     if (block.dataset.blockSourceActive !== "true") {
-        return null;
+        return undefined;
     }
 
-    const content = getBlockContent(block);
-    const source = getBlockSourceElement(content, "prefix");
-    if (!source || source.getAttribute("contenteditable") === "false") {
-        return null;
+    for (const source of Array.from(getBlockContent(block).querySelectorAll<HTMLElement>(".format-block-source"))) {
+        if (source.getAttribute("contenteditable") === "false" || !isPointInsideSourceBand(block, source, clientX, clientY)) {
+            continue;
+        }
+
+        const offset = readPointerPlainTextOffset(source, clientX, clientY);
+        return getTextPosition(source, offset);
     }
 
-    const sourceIndex = Array.from(content.childNodes).findIndex((child) => child === source);
-    return sourceIndex >= 0 ? { node: content, offset: sourceIndex } : null;
+    return undefined;
+}
+
+function readPointerPlainTextOffset(source: HTMLElement, clientX: number, clientY: number): number {
+    const rect = source.getBoundingClientRect();
+    const caretPosition = getCaretPositionFromPoint(
+        clamp(clientX, rect.left + 1, rect.right - 1),
+        clamp(clientY, rect.top + 1, rect.bottom - 1),
+    );
+
+    if (caretPosition && (caretPosition.node === source || source.contains(caretPosition.node))) {
+        return getPlainTextBoundaryOffset(source, caretPosition.node, caretPosition.offset);
+    }
+
+    return clientX <= rect.left + rect.width / 2 ? 0 : (source.textContent?.length ?? 0);
+}
+
+function isPointInsideSourceBand(block: HTMLElement, source: HTMLElement, clientX: number, clientY: number): boolean {
+    const rect = source.getBoundingClientRect();
+    if (source.classList.contains("format-block-source-prefix") && isPointInPrefixLineStartBand(block, rect, clientX, clientY)) {
+        return true;
+    }
+
+    const inlineSlop = 2;
+    const blockSlop = 2;
+
+    return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        clientX >= rect.left - inlineSlop &&
+        clientX <= rect.right + 2 &&
+        clientY >= rect.top - blockSlop &&
+        clientY <= rect.bottom + blockSlop
+    );
+}
+
+function isPointInPrefixLineStartBand(
+    block: HTMLElement,
+    sourceRect: DOMRect,
+    clientX: number,
+    clientY: number,
+): boolean {
+    if (sourceRect.width <= 0 || sourceRect.height <= 0) {
+        return false;
+    }
+
+    const contentRect = getBlockContent(block).getBoundingClientRect();
+    const rightBoundary = sourceRect.right + 4;
+
+    return (
+        clientX <= rightBoundary &&
+        clientY >= Math.min(contentRect.top, sourceRect.top) - 3 &&
+        clientY <= Math.max(contentRect.bottom, sourceRect.bottom) + 3
+    );
 }
 
 function ensurePointerTrailingParagraph(): HTMLElement {

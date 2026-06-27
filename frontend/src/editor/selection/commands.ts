@@ -106,11 +106,16 @@ function readSelectedEditorBlock(block: HTMLElement, selectedRange: SelectedBloc
     const startOffset = block === selectedRange.startBlock ? selectedRange.startOffset : 0;
     const endOffset = block === selectedRange.endBlock ? selectedRange.endOffset : text.length;
 
-    if (startOffset === 0 && endOffset === text.length) {
+    if (startOffset === 0 && endOffset === text.length && isCompleteSourceBlockSelection(block, selectedRange)) {
         return readEditorBlock(block);
     }
 
     return { type: "paragraph", text: text.slice(startOffset, endOffset) };
+}
+
+function isCompleteSourceBlockSelection(block: HTMLElement, selectedRange: SelectedBlockRange): boolean {
+    const sources = Array.from(getBlockContent(block).querySelectorAll<HTMLElement>(".format-block-source"));
+    return sources.every((source) => selectedRange.range.intersectsNode(source));
 }
 
 function canMergeSelectedBlockRange(selectedRange: SelectedBlockRange): boolean {

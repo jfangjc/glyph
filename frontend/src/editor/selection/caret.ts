@@ -27,6 +27,7 @@ export type SelectedBlockRange = {
     endBlock: HTMLElement;
     startOffset: number;
     endOffset: number;
+    range: Range;
 };
 
 type CaretHooks = {
@@ -234,6 +235,7 @@ export function getSelectedBlockRange(): SelectedBlockRange | null {
         endBlock,
         startOffset: getBoundaryOffset(startBlock, range.startContainer, range.startOffset, "start"),
         endOffset: getBoundaryOffset(endBlock, range.endContainer, range.endOffset, "end"),
+        range: range.cloneRange(),
     };
 }
 
