@@ -60,6 +60,7 @@ type PlainTextHighlightResult = {
 const renderCache = new WeakMap<HTMLElement, RenderCacheEntry>();
 const pendingPlainTextHighlights = new WeakMap<HTMLElement, { timer: number; text: string; revision: number }>();
 let renderRevision = 0;
+let orderedListMarkerWidthSyncFrame = 0;
 
 export function configureBlockView(context: Partial<BlockRenderContext>): void {
     const nextContext = { ...renderContext, ...context };
@@ -72,6 +73,17 @@ export function configureBlockView(context: Partial<BlockRenderContext>): void {
     }
 
     renderContext = nextContext;
+}
+
+export function scheduleOrderedListMarkerWidthSync(): void {
+    if (typeof window === "undefined" || orderedListMarkerWidthSyncFrame) {
+        return;
+    }
+
+    orderedListMarkerWidthSyncFrame = window.requestAnimationFrame(() => {
+        orderedListMarkerWidthSyncFrame = 0;
+        syncOrderedListMarkerWidths();
+    });
 }
 
 export function createBlock(type: BlockType = "paragraph", text = "", options: Partial<ParsedBlock> = {}): HTMLElement {
@@ -118,6 +130,8 @@ export function setBlockType(block: HTMLElement, type: BlockType): void {
 
     if (type !== "ordered-list") {
         delete block.dataset.listNumber;
+        delete block.dataset.listDigits;
+        delete block.dataset.listMaxDigits;
     }
 
     if (type !== "code") {
@@ -556,10 +570,12 @@ function isOpenFencedCodeParagraph(type: BlockType, text: string): boolean {
 export function setBlockIndent(block: HTMLElement, indent: number): void {
     if (isIndentableListBlockType(readBlockType(block.dataset.type)) && indent > 0) {
         block.dataset.indent = String(Math.min(indent, 3));
+        scheduleOrderedListMarkerWidthSync();
         return;
     }
 
     delete block.dataset.indent;
+    scheduleOrderedListMarkerWidthSync();
 }
 
 export function setBlockListMarker(block: HTMLElement, marker: string | undefined): void {
@@ -575,11 +591,17 @@ export function setBlockListMarker(block: HTMLElement, marker: string | undefine
 
 export function setBlockListNumber(block: HTMLElement, value: string | undefined): void {
     if (readBlockType(block.dataset.type) === "ordered-list") {
-        block.dataset.listNumber = value && /^\d{1,9}$/.test(value) ? value : "1";
+        const listNumber = value && /^\d{1,9}$/.test(value) ? value : "1";
+        block.dataset.listNumber = listNumber;
+        block.dataset.listDigits = String(Math.min(Math.max(listNumber.length, 1), 9));
+        scheduleOrderedListMarkerWidthSync();
         return;
     }
 
     delete block.dataset.listNumber;
+    delete block.dataset.listDigits;
+    delete block.dataset.listMaxDigits;
+    scheduleOrderedListMarkerWidthSync();
 }
 
 function setBlockQuoteLevel(block: HTMLElement, level: number | undefined): void {
@@ -872,6 +894,58 @@ export function getEditorBlocks(): HTMLElement[] {
     return Array.from(editor.children).filter(
         (child): child is HTMLElement => child instanceof HTMLElement && child.matches("[data-block]"),
     );
+}
+
+function syncOrderedListMarkerWidths(): void {
+    const editor = document.getElementById("editor");
+    if (!editor) {
+        return;
+    }
+
+    let run: HTMLElement[] = [];
+    let runIndent: number | null = null;
+
+    for (const block of Array.from(editor.children)) {
+        if (!(block instanceof HTMLElement) || !block.matches("[data-block]")) {
+            flushOrderedListRun(run);
+            run = [];
+            runIndent = null;
+            continue;
+        }
+
+        const isOrderedList = readBlockType(block.dataset.type) === "ordered-list";
+        const indent = isOrderedList ? readBlockIndent(block) : null;
+        if (!isOrderedList || (runIndent !== null && indent !== runIndent)) {
+            flushOrderedListRun(run);
+            run = [];
+            runIndent = null;
+        }
+
+        if (isOrderedList) {
+            run.push(block);
+            runIndent = indent;
+        } else {
+            delete block.dataset.listMaxDigits;
+        }
+    }
+
+    flushOrderedListRun(run);
+}
+
+function flushOrderedListRun(blocks: HTMLElement[]): void {
+    if (blocks.length === 0) {
+        return;
+    }
+
+    const maxDigits = blocks.reduce((max, block) => {
+        const digits = Number(block.dataset.listDigits ?? "1");
+        return Math.max(max, Number.isFinite(digits) ? digits : 1);
+    }, 1);
+    const value = String(Math.min(Math.max(maxDigits, 1), 9));
+
+    for (const block of blocks) {
+        block.dataset.listMaxDigits = value;
+    }
 }
 
 export function getBlockIndex(block: HTMLElement): number {

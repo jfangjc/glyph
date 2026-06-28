@@ -79,19 +79,46 @@
     --list-marker-gap: 0.6rem;
     --list-source-dash-width: 0.4em;
     --list-source-space-width: 0.275em;
-    --list-source-text-start: calc(
-        (var(--list-marker-column) + var(--list-source-dash-width)) / 2 + var(--list-marker-gap)
-    );
-    --ordered-list-marker-width: calc(var(--list-marker-column) / 2 + 0.32em);
+    --ordered-list-marker-width: 3ch;
+    --list-source-text-start: calc(var(--ordered-list-marker-width) + var(--list-marker-gap));
 
     column-gap: 0;
     grid-template-columns: var(--list-source-text-start) minmax(0, 1fr);
     position: relative;
 }
 
+.block[data-type="ordered-list"][data-list-max-digits="3"] {
+    --ordered-list-marker-width: 4ch;
+}
+
+.block[data-type="ordered-list"][data-list-max-digits="4"] {
+    --ordered-list-marker-width: 5ch;
+}
+
+.block[data-type="ordered-list"][data-list-max-digits="5"] {
+    --ordered-list-marker-width: 6ch;
+}
+
+.block[data-type="ordered-list"][data-list-max-digits="6"] {
+    --ordered-list-marker-width: 7ch;
+}
+
+.block[data-type="ordered-list"][data-list-max-digits="7"] {
+    --ordered-list-marker-width: 8ch;
+}
+
+.block[data-type="ordered-list"][data-list-max-digits="8"] {
+    --ordered-list-marker-width: 9ch;
+}
+
+.block[data-type="ordered-list"][data-list-max-digits="9"] {
+    --ordered-list-marker-width: 10ch;
+}
+
 .block[data-type="ordered-list"]::before {
     color: #6a6a6a;
     content: attr(data-list-number) ".";
+    direction: ltr;
     font-variant-numeric: tabular-nums;
     left: 0;
     line-height: inherit;
@@ -99,7 +126,9 @@
     position: absolute;
     text-align: end;
     top: 0;
+    unicode-bidi: isolate;
     user-select: none;
+    white-space: nowrap;
     width: var(--ordered-list-marker-width);
 }
 
@@ -720,14 +749,22 @@
 
 .block[data-block-source-active="true"][data-type="ordered-list"] .format-block-source-prefix {
     box-sizing: border-box;
+    direction: ltr;
     display: inline-block;
     grid-area: 1 / 1 / 2 / 2;
     inset: auto;
     overflow: hidden;
     position: static;
     text-align: end;
+    unicode-bidi: isolate;
     white-space: pre;
     width: calc(var(--ordered-list-marker-width) + var(--list-source-space-width));
+}
+
+.block[data-block-source-active="true"][data-type="ordered-list"] .format-block-source-prefix:focus {
+    overflow: visible;
+    text-align: start;
+    width: max-content;
 }
 
 .block[data-block-source-active="true"][data-type="ordered-list"] .block-content {
