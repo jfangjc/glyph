@@ -711,11 +711,11 @@
 .block[data-block-source-active="true"][data-type="list"] .format-block-source-prefix {
     box-sizing: border-box;
     display: inline-block;
-    grid-area: 1 / 1 / 2 / 2;
-    inset: auto;
+    inset-block-start: 0;
+    inset-inline-end: 100%;
     overflow: hidden;
     padding-inline-start: calc((var(--list-marker-column) - var(--list-source-dash-width)) / 2);
-    position: static;
+    position: absolute;
     text-align: start;
     width: var(--list-source-text-start);
     word-spacing: calc(var(--list-marker-gap) - var(--list-source-space-width));
@@ -723,17 +723,17 @@
 
 .block[data-block-source-active="true"][data-type="list"] .block-content {
     align-items: start;
-    grid-column: 1 / -1;
-    grid-template-columns: var(--list-source-text-start) minmax(0, 1fr);
+    grid-column: 2;
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .block[data-block-source-active="true"][data-type="list"] .format-block-body {
-    grid-area: 1 / 2 / 2 / 3;
+    grid-area: 1 / 1 / 2 / 2;
 }
 
 .block[data-block-source-active="true"][data-type="list"]
     .block-content:has(.format-block-source-prefix[data-block-source-draft="true"]) {
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .block[data-block-source-active="true"][data-type="list"]
@@ -748,10 +748,10 @@
     box-sizing: border-box;
     direction: ltr;
     display: inline-block;
-    grid-area: 1 / 1 / 2 / 2;
-    inset: auto;
+    inset-block-start: 0;
+    inset-inline-end: calc(100% + var(--list-source-space-width));
     overflow: hidden;
-    position: static;
+    position: absolute;
     text-align: end;
     unicode-bidi: isolate;
     white-space: pre;
@@ -766,17 +766,17 @@
 
 .block[data-block-source-active="true"][data-type="ordered-list"] .block-content {
     align-items: start;
-    grid-column: 1 / -1;
-    grid-template-columns: var(--list-source-text-start) minmax(0, 1fr);
+    grid-column: 2;
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .block[data-block-source-active="true"][data-type="ordered-list"] .format-block-body {
-    grid-area: 1 / 2 / 2 / 3;
+    grid-area: 1 / 1 / 2 / 2;
 }
 
 .block[data-block-source-active="true"][data-type="ordered-list"]
     .block-content:has(.format-block-source-prefix[data-block-source-draft="true"]) {
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .block[data-block-source-active="true"][data-type="ordered-list"]

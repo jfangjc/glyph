@@ -518,7 +518,7 @@ function focusBlockContentAtOffset(block: HTMLElement, offset: number): void {
         offset: content.childNodes.length,
     };
 
-    editor.focus();
+    editor.focus({ preventScroll: true });
     range.setStart(position.node, position.offset);
     range.collapse(true);
     selection?.removeAllRanges();

@@ -884,7 +884,7 @@ function focusMarkdownTokenSourceAtOffset(source: HTMLElement, offset: number): 
         return;
     }
 
-    getElement<HTMLElement>("editor").focus();
+    getElement<HTMLElement>("editor").focus({ preventScroll: true });
     const position = getTextPosition(source, offset);
     range.setStart(position.node, position.offset);
     range.collapse(true);
@@ -913,7 +913,7 @@ function focusMarkdownTokenSourceAtPoint(token: HTMLElement, clientX: number, cl
         return false;
     }
 
-    getElement<HTMLElement>("editor").focus();
+    getElement<HTMLElement>("editor").focus({ preventScroll: true });
     const range = document.createRange();
     range.setStart(position.node, position.offset);
     range.collapse(true);

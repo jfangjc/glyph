@@ -313,7 +313,7 @@ function selectPointerTargetRange(anchor: PointerBlockTarget, focus: PointerBloc
     const anchorPosition = getPointerTargetTextPosition(anchor);
     const focusPosition = getPointerTargetTextPosition(focus);
 
-    getElement<HTMLElement>("editor").focus();
+    getElement<HTMLElement>("editor").focus({ preventScroll: true });
     range.setStart(anchorPosition.node, anchorPosition.offset);
     range.collapse(true);
     selection.removeAllRanges();

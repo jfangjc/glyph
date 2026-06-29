@@ -120,7 +120,7 @@ export function focusBlockSourceAtOffset(source: HTMLElement, offset: number): v
     const range = document.createRange();
     const position = getPlainTextPosition(source, Math.max(0, offset));
 
-    source.closest<HTMLElement>("#editor")?.focus();
+    source.closest<HTMLElement>("#editor")?.focus({ preventScroll: true });
     range.setStart(position.node, position.offset);
     range.collapse(true);
     selection?.removeAllRanges();

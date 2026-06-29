@@ -57,7 +57,7 @@ export function focusBlockAtOffset(
     const range = document.createRange();
     const position = getTextPosition(content, offset);
 
-    editor.focus();
+    editor.focus({ preventScroll: true });
 
     range.setStart(position.node, position.offset);
     range.collapse(true);
@@ -75,6 +75,7 @@ export function focusPlainTextElement(element: HTMLElement, offset: number): voi
     const range = document.createRange();
     const text = element.firstChild ?? element.appendChild(document.createTextNode(""));
 
+    element.closest<HTMLElement>("#editor")?.focus({ preventScroll: true });
     range.setStart(text, Math.min(Math.max(0, offset), text.textContent?.length ?? 0));
     range.collapse(true);
     selection?.removeAllRanges();
@@ -291,7 +292,7 @@ export function selectEditorContents(editor: HTMLElement): void {
     const selection = document.getSelection();
     const range = document.createRange();
 
-    editor.focus();
+    editor.focus({ preventScroll: true });
     range.setStart(firstContent, 0);
     range.setEnd(lastContent, lastContent.childNodes.length);
     selection?.removeAllRanges();
@@ -377,8 +378,13 @@ function flushPendingScrollReveal(): void {
     const minimumTop = scrollerRect.top + topInset;
     const maximumBottom = scrollerRect.bottom - bottomInset;
     const visibleHeight = maximumBottom - minimumTop;
+    const selectionRect = getSelectionRectInsideBlock(request.block);
     const targetRect =
-        blockRect.height > visibleHeight ? getSelectionRectInsideBlock(request.block) ?? blockRect : blockRect;
+        request.mode === "minimal"
+            ? selectionRect ?? blockRect
+            : blockRect.height > visibleHeight
+              ? selectionRect ?? blockRect
+              : blockRect;
 
     if (targetRect.bottom > maximumBottom) {
         scroller.scrollTop += targetRect.bottom - maximumBottom;
