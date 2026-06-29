@@ -5,11 +5,6 @@ import {
     getMarkdownText,
 } from "../dom";
 import {
-    getTokenBoundaryPositionSkippingSpacer,
-    isCompleteInlineTokenSource,
-    readMarkdownTokenSourceFocusOffset,
-} from "./token-navigation";
-import {
     findBlock,
     getBlockContent,
     getBlockText,
@@ -34,6 +29,8 @@ type MarkdownTokenMatcher = (token: HTMLElement) => boolean;
 type MarkdownTokenHooks = {
     syncActiveBlockMarkdownSource?: (focusBlock: HTMLElement | null) => void;
 };
+
+const editingTokenClass = "markdown-token-editing";
 
 let hooks: MarkdownTokenHooks = {};
 let suppressSelectionChange = false;
@@ -63,7 +60,7 @@ export function handleEditorClick(event: MouseEvent): void {
 
     const token = findClickedMarkdownToken(target);
     if (token) {
-        if (target.closest(".markdown-token-source")) {
+        if (target.closest(`.${editingTokenClass}`)) {
             setActiveMarkdownToken(token);
             return;
         }
@@ -135,7 +132,7 @@ export function handleEditorMouseDown(event: MouseEvent): boolean {
     }
 
     const target = event.target;
-    if (!(target instanceof Element) || target.closest(".markdown-token-source")) {
+    if (!(target instanceof Element) || target.closest(`.${editingTokenClass}`)) {
         return false;
     }
 
@@ -193,6 +190,10 @@ export function handleSelectionChange(selectionState: DocumentEditorSelectionSta
         return;
     }
 
+    if (clearActiveMarkdownToken({ suppressTokenActivationAtFocus: true })) {
+        return;
+    }
+
     if (selection?.isCollapsed && shouldSuppressMarkdownTokenActivation(selection)) {
         return;
     }
@@ -220,12 +221,18 @@ export function handleSelectionChange(selectionState: DocumentEditorSelectionSta
 export function clearPendingMarkdownTokenNavigation(): void {
 }
 
+export function commitActiveMarkdownTokenSource(): void {
+    clearActiveMarkdownToken({ suppressTokenActivationAtFocus: true });
+}
+
 export function getFocusedMarkdownTokenSource(): HTMLElement | null {
     const focusNode = document.getSelection()?.focusNode;
     const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
-    const source = focusElement?.closest<HTMLElement>(".markdown-token-source") ?? null;
+    const source = focusElement?.closest<HTMLElement>(`.${editingTokenClass}`) ?? null;
 
-    return source && !isMarkdownTokenSourceInsideIgnoredContent(source) ? source : null;
+    return source && source.dataset.active === "true" && !isMarkdownTokenSourceInsideIgnoredContent(source)
+        ? source
+        : null;
 }
 
 export function readSelectedMarkdownTokenSourceText(): string | null {
@@ -257,25 +264,26 @@ export function insertTextIntoFocusedMarkdownTokenSource(text: string): boolean 
     return true;
 }
 
-function setActiveMarkdownToken(token: HTMLElement): void {
-    const activeTokens = getActiveMarkdownTokens();
-
-    if (activeTokens.length === 1 && activeTokens[0] === token && token.dataset.active === "true") {
-        return;
+function setActiveMarkdownToken(token: HTMLElement): HTMLElement | null {
+    if (!isEditableMarkdownToken(token)) {
+        return null;
     }
 
-    for (const activeToken of activeTokens) {
-        if (activeToken !== token) {
-            deactivateMarkdownToken(activeToken);
-        }
+    if (token.dataset.active === "true" && token.classList.contains(editingTokenClass)) {
+        activeMarkdownTokens.add(token);
+        return token;
     }
 
-    if (token.dataset.active !== "true") {
-        token.dataset.sourceBeforeActivation = getMarkdownText(token);
-    }
-
+    const raw = token.dataset.sourceRaw ?? getMarkdownText(token);
+    token.dataset.sourceBeforeActivation = raw;
     token.dataset.active = "true";
+    delete token.dataset.sourceRaw;
+    token.classList.add(editingTokenClass);
+    token.contentEditable = "true";
+    token.spellcheck = false;
+    token.replaceChildren(document.createTextNode(raw));
     activeMarkdownTokens.add(token);
+    return token;
 }
 
 function activateMarkdownTokenSource(
@@ -283,9 +291,13 @@ function activateMarkdownTokenSource(
     edge: "start" | "end" = "end",
     options: { advanceIntoSource?: boolean } = {},
 ): void {
-    setActiveMarkdownToken(token);
+    const source = setActiveMarkdownToken(token);
+    if (!source) {
+        return;
+    }
+
     suppressSelectionChangeForFrame();
-    focusMarkdownTokenSource(token, edge, options);
+    focusMarkdownTokenSource(source, edge, options);
 }
 
 function activateMarkdownTokenSourceAtPoint(
@@ -296,19 +308,23 @@ function activateMarkdownTokenSourceAtPoint(
 ): void {
     const renderedEdge = token.dataset.active === "true" ? null : readRenderedTokenClickEdge(token, clientX);
 
-    setActiveMarkdownToken(token);
+    const source = setActiveMarkdownToken(token);
+    if (!source) {
+        return;
+    }
+
     suppressSelectionChangeForFrame();
 
     if (renderedEdge) {
-        focusMarkdownTokenSource(token, renderedEdge);
+        focusMarkdownTokenSource(source, renderedEdge);
         return;
     }
 
-    if (focusMarkdownTokenSourceAtPoint(token, clientX, clientY)) {
+    if (focusMarkdownTokenSourceAtPoint(source, clientX, clientY)) {
         return;
     }
 
-    focusMarkdownTokenSource(token, fallbackEdge);
+    focusMarkdownTokenSource(source, fallbackEdge);
 }
 
 export function activateMarkdownTokenAtCaret(): boolean {
@@ -339,6 +355,17 @@ export function revealMarkdownTokenAtCaret(): boolean {
     }
 
     return revealMarkdownTokenAtPosition(focusNode, selection.focusOffset);
+}
+
+export function focusMarkdownTokenSourceSelection(token: HTMLElement, offset: number): boolean {
+    const source = setActiveMarkdownToken(token);
+    if (!source) {
+        return false;
+    }
+
+    suppressSelectionChangeForFrame();
+    focusMarkdownTokenSourceAtOffset(source, Math.min(offset, source.textContent?.length ?? 0));
+    return true;
 }
 
 function activateMarkdownTokenAtPosition(
@@ -373,7 +400,7 @@ function revealMarkdownTokenAtPosition(
         return false;
     }
 
-    setActiveMarkdownToken(tokenPosition.token);
+    activateMarkdownTokenSource(tokenPosition.token, tokenPosition.edge);
     return true;
 }
 
@@ -411,7 +438,7 @@ function findActiveMarkdownTokenAtPosition(node: Node): HTMLElement | null {
     const element = node instanceof Element ? node : node.parentElement;
     const token = element?.closest<HTMLElement>(".markdown-token");
 
-    return token?.dataset.active === "true" && isEditableMarkdownToken(token) ? token : null;
+    return token?.dataset.active === "true" && token.classList.contains(editingTokenClass) ? token : null;
 }
 
 function findPointBlock(target: Element, clientX: number, clientY: number): HTMLElement | null {
@@ -466,15 +493,13 @@ function clearActiveMarkdownToken(
     options: {
         focusBlock?: HTMLElement;
         focusOffset?: number;
-        focusTokenBoundaryEdge?: "start" | "end";
-        advanceAcrossAdjacentText?: boolean;
         suppressTokenActivationAtFocus?: boolean;
     } = {},
-): void {
+): boolean {
     const activeTokens = getActiveMarkdownTokens();
 
     if (activeTokens.length === 0) {
-        return;
+        return false;
     }
 
     const selection = document.getSelection();
@@ -494,47 +519,31 @@ function clearActiveMarkdownToken(
             block,
             tokens,
             text: getBlockText(block),
-            hasSourceEdits: tokens.some(hasActiveMarkdownTokenSourceEdits),
-            hasFormatToken: tokens.some(isFormatMarkdownToken),
         };
     });
 
     for (const update of updates) {
-        if (update.hasSourceEdits) {
-            setBlockText(update.block, update.text);
-            continue;
-        }
-
-        for (const token of update.tokens) {
-            deactivateMarkdownToken(token);
-        }
+        setBlockText(update.block, update.text);
     }
+
+    activeMarkdownTokens.clear();
 
     if (selectionBlock?.isConnected && selectionOffset !== null) {
         const focusOffset = Math.min(selectionOffset, getBlockText(selectionBlock).length);
-        const hasFormatTokenInFocusBlock = updates.some((update) => update.block === selectionBlock && update.hasFormatToken);
 
-        if (options.suppressTokenActivationAtFocus || hasFormatTokenInFocusBlock) {
+        if (options.suppressTokenActivationAtFocus) {
             suppressedMarkdownTokenActivation = { block: selectionBlock, offset: focusOffset };
         }
 
         suppressSelectionChangeForFrame();
-        if (
-            options.focusTokenBoundaryEdge &&
-            focusMarkdownTokenBoundaryAtOffset(selectionBlock, focusOffset, {
-                edge: options.focusTokenBoundaryEdge,
-                advanceAcrossAdjacentText: options.advanceAcrossAdjacentText ?? false,
-            })
-        ) {
-            return;
-        }
-
         focusBlockAtOffset(selectionBlock, focusOffset);
     }
+
+    return true;
 }
 
 function isEditableMarkdownToken(token: HTMLElement): boolean {
-    return getMarkdownTokenSource(token) !== null;
+    return token.dataset.sourceRaw !== undefined || token.classList.contains(editingTokenClass);
 }
 
 function isAutoActivatableMarkdownToken(token: HTMLElement): boolean {
@@ -542,56 +551,25 @@ function isAutoActivatableMarkdownToken(token: HTMLElement): boolean {
 }
 
 function getMarkdownTokenForSource(source: HTMLElement): HTMLElement | null {
+    if (source.classList.contains("markdown-token")) {
+        return source;
+    }
+
     const parent = source.parentElement;
     return parent instanceof HTMLElement && parent.classList.contains("markdown-token") ? parent : null;
 }
 
-function isMarkdownTokenSourceInsideIgnoredContent(source: HTMLElement): boolean {
-    return Boolean(source.parentElement?.closest("[data-source-ignore='true']"));
+function isFormatMarkdownToken(token: HTMLElement): boolean {
+    return token.classList.contains("markdown-format-token");
 }
 
-export function moveCaretOutOfActiveMarkdownTokenSource(event: KeyboardEvent, block: HTMLElement): boolean {
-    if (
-        (event.key !== "ArrowLeft" && event.key !== "ArrowRight") ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey
-    ) {
-        return false;
-    }
+function readMarkdownTokenRawText(token: HTMLElement): string {
+    return token.dataset.sourceRaw ?? token.textContent ?? "";
+}
 
-    const selection = document.getSelection();
-    const focusNode = selection?.focusNode;
-    const source = getFocusedMarkdownTokenSource();
-    const token = source ? getMarkdownTokenForSource(source) : null;
-
-    if (!selection?.isCollapsed || !focusNode || !source || token?.dataset.active !== "true") {
-        return false;
-    }
-
-    const sourceOffset = getCaretOffset(source, focusNode, selection.focusOffset);
-    const sourceLength = getMarkdownText(source).length;
-    const isLeavingStart = event.key === "ArrowLeft" && sourceOffset === 0;
-    const isLeavingEnd = event.key === "ArrowRight" && sourceOffset === sourceLength;
-
-    if (!isLeavingStart && !isLeavingEnd) {
-        return false;
-    }
-
-    const blockOffset = getMarkdownBoundaryOffset(
-        getBlockContent(block),
-        token,
-        isLeavingStart ? 0 : token.childNodes.length,
-    );
-    clearActiveMarkdownToken({
-        focusBlock: block,
-        focusOffset: blockOffset,
-        focusTokenBoundaryEdge: isLeavingStart ? "start" : "end",
-        advanceAcrossAdjacentText: true,
-        suppressTokenActivationAtFocus: true,
-    });
-    return true;
+function isMarkdownTokenSourceInsideIgnoredContent(source: HTMLElement): boolean {
+    const ignored = source.parentElement?.closest("[data-source-ignore='true']");
+    return Boolean(ignored && !ignored.contains(source));
 }
 
 export function moveCaretOutOfActiveMarkdownTokenSourceVertically(event: KeyboardEvent, block: HTMLElement): boolean {
@@ -644,58 +622,9 @@ export function moveCaretAfterActiveDisplayMathTokenSource(event: KeyboardEvent,
     clearActiveMarkdownToken({
         focusBlock: block,
         focusOffset: tokenEndOffset,
-        focusTokenBoundaryEdge: "end",
         suppressTokenActivationAtFocus: true,
     });
     return true;
-}
-
-export function normalizeActiveMarkdownTokenSource(block: HTMLElement): void {
-    const selection = document.getSelection();
-    const focusNode = selection?.focusNode;
-    const source = getFocusedMarkdownTokenSource();
-
-    if (!selection?.isCollapsed || !focusNode || !source) {
-        return;
-    }
-
-    const sourceText = getMarkdownText(source);
-    if (!isCompleteInlineTokenSource(sourceText)) {
-        return;
-    }
-
-    const sourceOffset = getCaretOffset(source, focusNode, selection.focusOffset);
-    const blockOffset = getCaretOffset(getBlockContent(block), focusNode, selection.focusOffset);
-    const markdown = getBlockText(block);
-
-    setBlockText(block, markdown);
-    restoreInlineSourceFocusAfterRender(block, blockOffset, sourceOffset);
-}
-
-export function moveCaretOutOfInactiveMarkdownTokenSourceBoundary(block: HTMLElement, blockOffset: number): boolean {
-    const selection = document.getSelection();
-    const focusNode = selection?.focusNode;
-    const source = getFocusedMarkdownTokenSource();
-    const token = source ? getMarkdownTokenForSource(source) : null;
-
-    if (!selection?.isCollapsed || !focusNode || !source || !token || token.dataset.active === "true") {
-        return false;
-    }
-
-    const sourceOffset = getCaretOffset(source, focusNode, selection.focusOffset);
-    const sourceLength = getMarkdownText(source).length;
-    const edge = sourceOffset === 0 ? "start" : sourceOffset === sourceLength ? "end" : null;
-
-    if (!edge) {
-        return false;
-    }
-
-    suppressedMarkdownTokenActivation = { block, offset: blockOffset };
-    suppressSelectionChangeForFrame();
-    return focusMarkdownTokenBoundaryAtOffset(block, blockOffset, {
-        edge,
-        advanceAcrossAdjacentText: false,
-    });
 }
 
 export function suppressAdjacentFormatTokenActivation(block: HTMLElement, offset: number): boolean {
@@ -741,7 +670,6 @@ function readFocusedMarkdownTokenSourceTarget(): MarkdownTokenSourceRange | null
 function replaceMarkdownTokenSourceRange(range: MarkdownTokenSourceRange, text: string): void {
     const currentText = range.source.textContent ?? "";
     const token = getMarkdownTokenForSource(range.source);
-    const block = findBlock(range.source);
 
     if (token) {
         setActiveMarkdownToken(token);
@@ -750,10 +678,6 @@ function replaceMarkdownTokenSourceRange(range: MarkdownTokenSourceRange, text: 
     range.source.textContent =
         currentText.slice(0, range.startOffset) + text + currentText.slice(range.endOffset);
     focusPlainTextElement(range.source, range.startOffset + text.length);
-
-    if (block) {
-        normalizeActiveMarkdownTokenSource(block);
-    }
 }
 
 function readSelectedMarkdownTokenSourceRange(): MarkdownTokenSourceRange | null {
@@ -810,7 +734,7 @@ function findContainingMarkdownTokenSource(node: Node | null): HTMLElement | nul
     }
 
     const element = node instanceof Element ? node : node.parentElement;
-    const source = element?.closest<HTMLElement>(".markdown-token-source") ?? null;
+    const source = element?.closest<HTMLElement>(`.${editingTokenClass}`) ?? null;
     return source && !isMarkdownTokenSourceInsideIgnoredContent(source) ? source : null;
 }
 
@@ -860,19 +784,22 @@ function activateFormatMarkdownTokenSourceAtOffset(
     token: HTMLElement,
     offset: number,
 ): boolean {
-    const source = getMarkdownTokenSource(token);
-    if (!source) {
+    if (!isEditableMarkdownToken(token)) {
         return false;
     }
 
     const tokenStart = getMarkdownBoundaryOffset(content, token, 0);
     const sourceOffset = offset - tokenStart;
-    const sourceLength = getMarkdownText(source).length;
+    const sourceLength = readMarkdownTokenRawText(token).length;
     if (sourceOffset <= 0 || sourceOffset >= sourceLength) {
         return false;
     }
 
-    setActiveMarkdownToken(token);
+    const source = setActiveMarkdownToken(token);
+    if (!source) {
+        return false;
+    }
+
     suppressSelectionChangeForFrame();
     focusMarkdownTokenSourceAtOffset(source, sourceOffset);
     return true;
@@ -939,27 +866,14 @@ function clearCollapsedPointerRevealSuppression(): void {
 }
 
 function focusMarkdownTokenSource(
-    token: HTMLElement,
+    source: HTMLElement,
     edge: "start" | "end" = "end",
     options: { advanceIntoSource?: boolean } = {},
 ): void {
-    const source = getMarkdownTokenSource(token);
-    const selection = document.getSelection();
-    const range = document.createRange();
-
-    if (!source || !selection) {
-        return;
-    }
-
-    getElement<HTMLElement>("editor").focus();
     const sourceLength = source.textContent?.length ?? 0;
-    const offset = readMarkdownTokenSourceFocusOffset(sourceLength, edge, options.advanceIntoSource ?? false);
-    const position = getTextPosition(source, offset);
+    const offset = readSourceFocusOffset(sourceLength, edge, options.advanceIntoSource ?? false);
 
-    range.setStart(position.node, position.offset);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
+    focusMarkdownTokenSourceAtOffset(source, offset);
 }
 
 function focusMarkdownTokenSourceAtOffset(source: HTMLElement, offset: number): void {
@@ -979,14 +893,13 @@ function focusMarkdownTokenSourceAtOffset(source: HTMLElement, offset: number): 
 }
 
 function focusMarkdownTokenSourceAtPoint(token: HTMLElement, clientX: number, clientY: number): boolean {
-    const source = getMarkdownTokenSource(token);
     const selection = document.getSelection();
 
-    if (!source || !selection) {
+    if (!selection) {
         return false;
     }
 
-    const rect = source.getBoundingClientRect();
+    const rect = token.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) {
         return false;
     }
@@ -996,7 +909,7 @@ function focusMarkdownTokenSourceAtPoint(token: HTMLElement, clientX: number, cl
         clamp(clientY, rect.top + 1, rect.bottom - 1),
     );
 
-    if (!position || (position.node !== source && !source.contains(position.node))) {
+    if (!position || (position.node !== token && !token.contains(position.node))) {
         return false;
     }
 
@@ -1007,6 +920,14 @@ function focusMarkdownTokenSourceAtPoint(token: HTMLElement, clientX: number, cl
     selection.removeAllRanges();
     selection.addRange(range);
     return true;
+}
+
+function readSourceFocusOffset(sourceLength: number, edge: "start" | "end", advanceIntoSource: boolean): number {
+    if (!advanceIntoSource) {
+        return edge === "start" ? 0 : sourceLength;
+    }
+
+    return edge === "start" ? Math.min(sourceLength, 1) : Math.max(0, sourceLength - 1);
 }
 
 function readRenderedTokenClickEdge(token: HTMLElement, clientX: number): "start" | "end" | null {
@@ -1035,89 +956,6 @@ function readRenderedTokenRect(token: HTMLElement): DOMRect | null {
     );
     const rect = (renderedChild ?? token).getBoundingClientRect();
     return rect.width > 0 || rect.height > 0 ? rect : null;
-}
-
-function focusMarkdownTokenBoundaryAtOffset(
-    block: HTMLElement,
-    offset: number,
-    options: { edge: "start" | "end"; advanceAcrossAdjacentText: boolean },
-): boolean {
-    const content = getBlockContent(block);
-    const tokens = Array.from(content.querySelectorAll<HTMLElement>(".markdown-token"));
-    const token = tokens.find((candidate) => {
-        const tokenOffset = getMarkdownBoundaryOffset(
-            content,
-            candidate,
-            options.edge === "start" ? 0 : candidate.childNodes.length,
-        );
-
-        return tokenOffset === offset;
-    });
-
-    if (!token?.parentNode) {
-        return false;
-    }
-
-    const editor = getElement<HTMLElement>("editor");
-    const selection = document.getSelection();
-    const range = document.createRange();
-    const childIndex = Array.from(token.parentNode.childNodes).findIndex((child) => child === token);
-
-    if (!selection || childIndex < 0) {
-        return false;
-    }
-
-    const boundary = getTokenBoundaryPositionSkippingSpacer(token, childIndex, options);
-
-    editor.focus();
-    range.setStart(boundary.node, boundary.offset);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    return true;
-}
-
-function hasActiveMarkdownTokenSourceEdits(token: HTMLElement): boolean {
-    return (
-        token.dataset.sourceBeforeActivation !== undefined &&
-        getMarkdownText(token) !== token.dataset.sourceBeforeActivation
-    );
-}
-
-function restoreInlineSourceFocusAfterRender(block: HTMLElement, blockOffset: number, sourceOffset: number): void {
-    const content = getBlockContent(block);
-    const focusOffset = Math.min(blockOffset, getBlockText(block).length);
-    const tokenPosition = findMarkdownTokenAtBlockOffset(content, focusOffset, isEditableMarkdownToken);
-    const token = tokenPosition?.token;
-    const source = token ? getMarkdownTokenSource(token) : null;
-
-    if (!token || !source) {
-        focusBlockAtOffset(block, focusOffset);
-        return;
-    }
-
-    setActiveMarkdownToken(token);
-    suppressSelectionChangeForFrame();
-    focusMarkdownTokenSourceAtOffset(source, Math.min(sourceOffset, source.textContent?.length ?? 0));
-}
-
-function getMarkdownTokenSource(token: HTMLElement): HTMLElement | null {
-    return (
-        Array.from(token.children).find(
-            (child): child is HTMLElement =>
-                child instanceof HTMLElement && child.classList.contains("markdown-token-source"),
-        ) ?? null
-    );
-}
-
-function isFormatMarkdownToken(token: HTMLElement): boolean {
-    return token.classList.contains("markdown-format-token");
-}
-
-function deactivateMarkdownToken(token: HTMLElement): void {
-    delete token.dataset.active;
-    delete token.dataset.sourceBeforeActivation;
-    activeMarkdownTokens.delete(token);
 }
 
 function getActiveMarkdownTokens(): HTMLElement[] {

@@ -895,7 +895,7 @@ function moveCaretOutOfBlockSourceHorizontally(event: KeyboardEvent, source: HTM
         return false;
     }
 
-    if (event.key === "ArrowRight" && position === "prefix" && isCaretAtPlainTextEdge(source, "end")) {
+    if (event.key === "ArrowRight" && position === "prefix" && isCaretAtPrefixBodyBoundary(source)) {
         focusBlockAtOffset(block, 0, { scroll: "none" });
         return true;
     }
@@ -906,6 +906,15 @@ function moveCaretOutOfBlockSourceHorizontally(event: KeyboardEvent, source: HTM
     }
 
     return false;
+}
+
+function isCaretAtPrefixBodyBoundary(source: HTMLElement): boolean {
+    return getFocusedSourceOffset(source) >= readPrefixBodyBoundaryOffset(source);
+}
+
+function readPrefixBodyBoundaryOffset(source: HTMLElement): number {
+    const text = source.textContent ?? "";
+    return text.search(/\s*$/);
 }
 
 function removeOrMergeBackwardFromSourceStart(source: HTMLElement): BlockBoundaryDeleteResult | null {

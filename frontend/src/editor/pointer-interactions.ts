@@ -204,7 +204,7 @@ function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
         return false;
     }
 
-    if (target.closest(".format-block-source[data-block-source-editable='true'], .markdown-token-source")) {
+    if (target.closest(".format-block-source[data-block-source-editable='true'], .markdown-token-editing")) {
         return true;
     }
 

@@ -100,15 +100,15 @@ export function readCurrentSourceSelectionTarget(): DocumentSourceSelectionTarge
     }
 
     const focusElement = focusNode instanceof Element ? focusNode : focusNode.parentElement;
-    const inlineSource = focusElement?.closest<HTMLElement>(".markdown-token-source") ?? null;
-    const token = inlineSource?.parentElement;
+    const inlineSource = focusElement?.closest<HTMLElement>(".markdown-token-editing") ?? null;
+    const token = inlineSource;
     const block = token ? findBlock(token) : null;
     if (
         inlineSource &&
         token instanceof HTMLElement &&
         token.classList.contains("markdown-token") &&
         block &&
-        !inlineSource.parentElement?.closest("[data-source-ignore='true']")
+        token.dataset.active === "true"
     ) {
         return {
             kind: "inline-source",

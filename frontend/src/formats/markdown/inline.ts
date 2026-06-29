@@ -678,37 +678,51 @@ function readAutolink(text: string, index: number): AutolinkToken | null {
 }
 
 function renderInlineCodeToken(token: InlineCodeToken): string {
-    const raw = escapeHtml(token.raw);
     const code = escapeHtml(token.code);
 
-    return `<span class="markdown-token markdown-code-token" data-markdown-token-kind="code"><code contenteditable="false" data-source-ignore="true">${code}</code><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        token.raw,
+        "markdown-token markdown-code-token",
+        "code",
+        `<code data-source-ignore="true">${code}</code>`,
+    );
 }
 
 function renderEscapedCharacter(token: EscapedCharacterToken): string {
-    const raw = escapeHtml(token.raw);
     const character = escapeHtml(token.character);
 
-    return `<span class="markdown-token markdown-escape-token" data-markdown-token-kind="escape"><span class="markdown-escape" contenteditable="false" data-source-ignore="true">${character}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        token.raw,
+        "markdown-token markdown-escape-token",
+        "escape",
+        `<span class="markdown-escape" data-source-ignore="true">${character}</span>`,
+    );
 }
 
 function renderHardBreakToken(token: HardBreakToken): string {
-    const raw = escapeHtml(token.raw);
-
-    return `<span class="markdown-token markdown-hard-break-token" data-markdown-token-kind="hard-break"><span class="markdown-hard-break" contenteditable="false" data-source-ignore="true"><br></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        token.raw,
+        "markdown-token markdown-hard-break-token",
+        "hard-break",
+        `<span class="markdown-hard-break" data-source-ignore="true"><br></span>`,
+    );
 }
 
 function renderMathToken(token: MathToken): string {
-    const raw = escapeHtml(token.raw);
     const math = renderLatexMath(token.source, token.displayMode);
     const className = token.displayMode ? "markdown-token markdown-math-token markdown-display-math-token" : "markdown-token markdown-math-token";
     const kind = token.displayMode ? "display-math" : "math";
 
-    return `<span class="${className}" data-markdown-token-kind="${kind}"><span class="markdown-math" contenteditable="false" data-source-ignore="true">${math}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        token.raw,
+        className,
+        kind,
+        `<span class="markdown-math" data-source-ignore="true">${math}</span>`,
+    );
 }
 
 
 function renderFormattingToken(token: FormattingToken, context: DocumentRenderContext, depth: number): string {
-    const raw = escapeHtml(token.raw);
     const label = renderInlineMarkdown(token.label, context, depth);
     const tag = token.marker === "~~" ? "del" : token.marker === "==" ? "mark" : token.marker === "~" ? "sub" : "sup";
     const className =
@@ -720,38 +734,65 @@ function renderFormattingToken(token: FormattingToken, context: DocumentRenderCo
                 ? "markdown-subscript"
                 : "markdown-superscript";
 
-    return `<span class="markdown-token markdown-format-token" data-markdown-token-kind="formatting"><${tag} class="${className}" contenteditable="false" data-source-ignore="true">${label}</${tag}><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        token.raw,
+        "markdown-token markdown-format-token",
+        "formatting",
+        `<${tag} class="${className}" data-source-ignore="true">${label}</${tag}>`,
+    );
 }
 
 function renderFootnoteReferenceToken(token: FootnoteReferenceToken): string {
-    const raw = escapeHtml(token.raw);
     const label = encodeURIComponent(normalizeReferenceLabel(token.label));
-    return `<span class="markdown-token markdown-footnote-reference-token" data-markdown-token-kind="footnote-reference"><sup class="markdown-footnote-reference" contenteditable="false" data-source-ignore="true" id="${escapeHtml(token.id)}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        token.raw,
+        "markdown-token markdown-footnote-reference-token",
+        "footnote-reference",
+        `<sup class="markdown-footnote-reference" data-source-ignore="true" id="${escapeHtml(token.id)}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup>`,
+    );
 }
 
 function renderEmphasisToken(token: EmphasisToken, context: DocumentRenderContext, depth: number): string {
-    const raw = escapeHtml(token.raw);
     const label = renderInlineMarkdown(token.label, context, depth);
 
     if (token.strong && token.emphasis) {
-        return `<span class="markdown-token markdown-format-token" data-markdown-token-kind="strong-emphasis"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true"><em class="markdown-emphasis">${label}</em></strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+        return renderAtomicInlineToken(
+            token.raw,
+            "markdown-token markdown-format-token",
+            "strong-emphasis",
+            `<strong class="markdown-strong" data-source-ignore="true"><em class="markdown-emphasis">${label}</em></strong>`,
+        );
     }
 
     if (token.strong) {
-        return `<span class="markdown-token markdown-format-token" data-markdown-token-kind="strong"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true">${label}</strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+        return renderAtomicInlineToken(
+            token.raw,
+            "markdown-token markdown-format-token",
+            "strong",
+            `<strong class="markdown-strong" data-source-ignore="true">${label}</strong>`,
+        );
     }
 
-    return `<span class="markdown-token markdown-format-token" data-markdown-token-kind="emphasis"><em class="markdown-emphasis" contenteditable="false" data-source-ignore="true">${label}</em><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        token.raw,
+        "markdown-token markdown-format-token",
+        "emphasis",
+        `<em class="markdown-emphasis" data-source-ignore="true">${label}</em>`,
+    );
 }
 
 function renderImageToken(token: InlineToken): string {
     const source = escapeHtml(token.destination);
     const alt = escapeHtml(unescapeMarkdownText(token.label));
-    const raw = escapeHtml(token.raw);
     const title = token.title ? ` data-image-title="${escapeHtml(token.title)}"` : "";
     const preserveKey = escapeHtml(createImagePreviewPreserveKey(token));
 
-    return `<span class="markdown-token markdown-image-token" data-markdown-token-kind="image"><span class="markdown-image-preview" contenteditable="false" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        token.raw,
+        "markdown-token markdown-image-token",
+        "image",
+        `<span class="markdown-image-preview" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span>`,
+    );
 }
 
 function createImagePreviewPreserveKey(token: InlineToken): string {
@@ -763,11 +804,10 @@ function renderLinkToken(token: InlineToken, context: DocumentRenderContext, dep
     const title = token.title ? ` title="${escapeHtml(token.title)}"` : "";
     const labelHtml = renderInlineMarkdown(token.label, context, depth);
     const label = href
-        ? `<a class="markdown-link" contenteditable="false" data-source-ignore="true" tabindex="-1" href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"${title} rel="noreferrer">${labelHtml}</a>`
-        : `<span class="markdown-link markdown-link-label" contenteditable="false" data-source-ignore="true"${title}>${labelHtml}</span>`;
-    const raw = escapeHtml(token.raw);
+        ? `<a class="markdown-link" data-source-ignore="true" tabindex="-1" href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"${title} rel="noreferrer">${labelHtml}</a>`
+        : `<span class="markdown-link markdown-link-label" data-source-ignore="true"${title}>${labelHtml}</span>`;
 
-    return `<span class="markdown-token markdown-link-token" data-markdown-token-kind="link">${label}<span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return renderAtomicInlineToken(token.raw, "markdown-token markdown-link-token", "link", label);
 }
 
 function renderAutolinkToken(token: AutolinkToken): string {
@@ -785,7 +825,23 @@ function renderRawLink(label: string, destination: string, raw: string, kind: "a
     }
 
     const escapedHref = escapeHtml(href);
-    return `<span class="markdown-token markdown-link-token markdown-url-token" data-markdown-token-kind="${kind}"><a class="markdown-link" contenteditable="false" data-source-ignore="true" tabindex="-1" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a><span class="markdown-token-source" spellcheck="false">${escapeHtml(raw)}</span></span>&#8203;`;
+    return renderAtomicInlineToken(
+        raw,
+        "markdown-token markdown-link-token markdown-url-token",
+        kind,
+        `<a class="markdown-link" data-source-ignore="true" tabindex="-1" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a>`,
+    );
+}
+
+function renderAtomicInlineToken(raw: string, className: string, kind: string, previewHtml: string): string {
+    return `<span class="${className}" data-markdown-token-kind="${kind}" data-source-raw="${escapeHtmlAttribute(raw)}" contenteditable="false">${previewHtml}</span>`;
+}
+
+function escapeHtmlAttribute(value: string): string {
+    return escapeHtml(value)
+        .replace(/\t/g, "&#9;")
+        .replace(/\n/g, "&#10;")
+        .replace(/\r/g, "&#13;");
 }
 
 function readBareUrl(text: string, index: number): string | null {

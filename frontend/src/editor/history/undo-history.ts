@@ -14,10 +14,10 @@ import {
     getBlockSourceElement,
     type BlockSourcePosition,
 } from "../blocks/rendering";
+import { focusMarkdownTokenSourceSelection } from "../../formats/markdown/editor/token-controller";
 import {
     focusBlockAtOffset,
     getCaretOffset,
-    focusPlainTextElement,
     readCurrentSourceSelectionTarget,
     getSelectedBlockRange,
     getTextPosition,
@@ -314,15 +314,11 @@ function restoreSourceSelectionSnapshot(blocks: HTMLElement[], snapshot: Extract
     }
 
     const token = getBlockContent(block).querySelectorAll<HTMLElement>(".markdown-token")[tokenIndex];
-    const source = token?.querySelector<HTMLElement>(".markdown-token-source");
-    if (!token || !source) {
+    if (!token) {
         return false;
     }
 
-    token.dataset.active = "true";
-    token.dataset.sourceBeforeActivation = source.textContent ?? "";
-    focusPlainTextElement(source, Math.min(snapshot.offset, source.textContent?.length ?? 0));
-    return true;
+    return focusMarkdownTokenSourceSelection(token, snapshot.offset);
 }
 
 function getInlineTokenIndex(block: HTMLElement, token: HTMLElement): number {

@@ -30,8 +30,6 @@ import {
 } from "./source-controller";
 import {
     getFocusedMarkdownTokenSource,
-    moveCaretOutOfInactiveMarkdownTokenSourceBoundary,
-    normalizeActiveMarkdownTokenSource,
     revealMarkdownTokenAtCaret,
     suppressAdjacentFormatTokenActivation,
 } from "./token-controller";
@@ -86,7 +84,6 @@ export function handleMarkdownInput(event: Event, context: DocumentEditorEventCo
     }
 
     if (getFocusedMarkdownTokenSource()) {
-        normalizeActiveMarkdownTokenSource(block);
         context.markEditorDirty();
         return true;
     }
@@ -185,9 +182,6 @@ function renderInlineBlockContent(block: HTMLElement, currentOffset: number): vo
     }
 
     focusBlockAtOffset(block, focusOffset);
-    if (moveCaretOutOfInactiveMarkdownTokenSourceBoundary(block, focusOffset)) {
-        return;
-    }
 
     if (!suppressAdjacentFormatTokenActivation(block, focusOffset)) {
         revealMarkdownTokenAtCaret();

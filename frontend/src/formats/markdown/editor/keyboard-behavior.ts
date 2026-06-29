@@ -55,7 +55,6 @@ import {
 } from "./source-controller";
 import {
     moveCaretAfterActiveDisplayMathTokenSource,
-    moveCaretOutOfActiveMarkdownTokenSource,
     moveCaretOutOfActiveMarkdownTokenSourceVertically,
 } from "./token-controller";
 
@@ -87,11 +86,6 @@ export function handleMarkdownKeydown(event: KeyboardEvent, context: DocumentEdi
         if (applyInlineFormatShortcut(block, inlineFormat)) {
             context.markEditorDirty();
         }
-        return true;
-    }
-
-    if (moveCaretOutOfActiveMarkdownTokenSource(event, block)) {
-        event.preventDefault();
         return true;
     }
 

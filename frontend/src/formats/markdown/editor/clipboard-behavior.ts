@@ -192,7 +192,7 @@ function insertTextIntoFocusedMarkdownSource(text: string): boolean {
 function focusMarkdownSourceDropTarget(event: DragEvent): boolean {
     const target = event.target;
     const source = target instanceof Element
-        ? target.closest<HTMLElement>(".format-block-source, .markdown-token-source")
+        ? target.closest<HTMLElement>(".format-block-source, .markdown-token-editing")
         : null;
     if (!source) {
         return false;

@@ -20,6 +20,7 @@ import {
     syncActiveBlockMarkdownSource,
 } from "./source-controller";
 import {
+    commitActiveMarkdownTokenSource,
     configureMarkdownTokenController,
     handleEditorClick as handleMarkdownEditorClick,
     handleEditorMouseDown as handleMarkdownEditorMouseDown,
@@ -56,7 +57,10 @@ export const markdownEditorBehavior: DocumentEditorBehavior = {
     cut: handleMarkdownCut,
     paste: handleMarkdownPaste,
     drop: handleMarkdownDrop,
-    beforeSerialize: commitActiveBlockMarkdownSource,
+    beforeSerialize: () => {
+        commitActiveBlockMarkdownSource();
+        commitActiveMarkdownTokenSource();
+    },
 };
 
 function installMarkdownEditorBehavior(hooks: DocumentEditorHooks): void {
