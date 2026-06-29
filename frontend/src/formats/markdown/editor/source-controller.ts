@@ -46,7 +46,6 @@ import {
     getCodeBlockRawMarkdown,
     isValidCodeBlockSource,
     readCodeBlockSourceParts,
-    serializeInvalidCodeBlockSource,
 } from "./source-code";
 import {
     createEmptyTableRow,
@@ -67,7 +66,6 @@ type MarkdownSourceDraft = {
     kind: "block-source" | "inline-source";
     rawBeforeActivation: string;
     rawDraft: string;
-    lastValidRaw: string;
 };
 
 let activeBlockMarkdownSource: MarkdownSourceDraft | null = null;
@@ -468,7 +466,7 @@ export function applyFocusedBlockMarkdownSourceInput(
         return true;
     }
 
-    activeDraft.lastValidRaw = rawMarkdown;
+    clearBlockMarkdownSourceDraftState(block);
     if (isListPrefixParagraphDraft(block, source, parsedBlock)) {
         source.dataset.blockSourceDraft = "true";
         focusPlainTextElement(source, Math.min(sourceOffset, source.textContent?.length ?? 0));
@@ -610,7 +608,6 @@ export function syncActiveBlockMarkdownSource(
                 kind: "block-source",
                 rawBeforeActivation: rawMarkdown,
                 rawDraft: rawMarkdown,
-                lastValidRaw: rawMarkdown,
             };
         }
         return;
@@ -634,13 +631,14 @@ export function commitActiveBlockMarkdownSource(
         rawMarkdown,
         readEditableMarkdownBlockSourceParseOptions(active.block),
     );
-    const validRawMarkdown = parsedRawMarkdown ? rawMarkdown : active.lastValidRaw;
     const shouldNormalizeTable = readBlockType(active.block.dataset.type) === "table";
-    if (parsedRawMarkdown && validRawMarkdown === active.rawBeforeActivation && !shouldNormalizeTable) {
+    if (parsedRawMarkdown && rawMarkdown === active.rawBeforeActivation && !shouldNormalizeTable) {
+        clearBlockMarkdownSourceDraftState(active.block);
         return;
     }
 
-    applyRawMarkdownToBlock(active.block, validRawMarkdown, focusBlock, { normalizeTable: shouldNormalizeTable });
+    clearBlockMarkdownSourceDraftState(active.block);
+    applyRawMarkdownToBlock(active.block, rawMarkdown, focusBlock, { normalizeTable: shouldNormalizeTable });
 }
 
 export function rerenderPlainTextBlockMarkdownSource(block: HTMLElement): boolean {
@@ -1193,7 +1191,6 @@ function restoreTableSourceFocusAfterInput(block: HTMLElement, focus: TableSourc
             ? activeBlockMarkdownSource.rawBeforeActivation
             : rawMarkdown,
         rawDraft: rawMarkdown,
-        lastValidRaw: rawMarkdown,
     };
     return true;
 }
@@ -1247,7 +1244,6 @@ function restoreFocusAfterBlockMarkdownSourceInput(
                 ? activeBlockMarkdownSource.rawBeforeActivation
                 : rawMarkdown,
             rawDraft: rawMarkdown,
-            lastValidRaw: rawMarkdown,
         };
         return;
     }
@@ -1289,15 +1285,17 @@ function parseEditedRawMarkdownBlock(
         if (codeSource && !isValidCodeBlockSource(codeSource)) {
             return {
                 type: "paragraph",
-                text: serializeInvalidCodeBlockSource(codeSource),
+                text: rawMarkdown,
             };
         }
     }
 
-    if (type === "table" && isEditableTableSource(rawMarkdown)) {
+    if (type === "table") {
         return {
             type: "table",
-            text: options.normalizeTable ? formatMarkdownTableSource(rawMarkdown) : rawMarkdown,
+            text: options.normalizeTable && isEditableTableSource(rawMarkdown)
+                ? formatMarkdownTableSource(rawMarkdown)
+                : rawMarkdown,
         };
     }
 
@@ -1414,7 +1412,6 @@ function readOrCreateBlockSourceDraft(block: HTMLElement): MarkdownSourceDraft {
         kind: "block-source",
         rawBeforeActivation: rawMarkdown,
         rawDraft: rawMarkdown,
-        lastValidRaw: rawMarkdown,
     };
     return activeBlockMarkdownSource;
 }
@@ -1424,6 +1421,12 @@ function restoreInvalidBlockMarkdownSourceInput(block: HTMLElement, source: HTML
     focusPlainTextElement(source, Math.min(sourceOffset, source.textContent?.length ?? 0));
     const draft = readOrCreateBlockSourceDraft(block);
     draft.rawDraft = getBlockRawMarkdown(block);
+}
+
+function clearBlockMarkdownSourceDraftState(block: HTMLElement): void {
+    for (const source of Array.from(getBlockContent(block).querySelectorAll<HTMLElement>(".format-block-source"))) {
+        delete source.dataset.blockSourceDraft;
+    }
 }
 
 export function tryParseSingleMarkdownBlockSource(

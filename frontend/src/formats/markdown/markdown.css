@@ -812,6 +812,11 @@
     display: inline;
 }
 
+.markdown-hard-break-token,
+.markdown-hard-break {
+    display: inline;
+}
+
 .markdown-link {
     color: #0a66c2;
     cursor: text;

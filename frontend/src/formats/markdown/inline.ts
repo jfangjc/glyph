@@ -31,6 +31,10 @@ type EscapedCharacterToken = {
     character: string;
 };
 
+type HardBreakToken = {
+    raw: string;
+};
+
 type EmphasisToken = {
     raw: string;
     marker: "*" | "**" | "***" | "_" | "__" | "___";
@@ -97,6 +101,7 @@ export function findFirstInlineToken(text: string): { start: number; token: Mark
     for (let index = 0; index < text.length; index += 1) {
         const token =
             readInlineCodeToken(text, index) ??
+            readHardBreakToken(text, index) ??
             readEscapedCharacter(text, index) ??
             readMathToken(text, index) ??
             readInlineToken(text, index, true) ??
@@ -130,8 +135,9 @@ function renderInlineTokenAt(
     }
 
     if (character === "\\") {
-        if (text[index + 1] === "\n") {
-            return { html: '<br data-source-raw="\\&#10;">', length: 2 };
+        const hardBreak = readHardBreakToken(text, index);
+        if (hardBreak) {
+            return { html: renderHardBreakToken(hardBreak), length: hardBreak.raw.length };
         }
 
         const escapedCharacter = readEscapedCharacter(text, index);
@@ -180,7 +186,8 @@ function renderInlineTokenAt(
     }
 
     if (character === "\n") {
-        return { html: '<br data-source-raw="&#10;">', length: 1 };
+        const hardBreak = readHardBreakToken(text, index);
+        return hardBreak ? { html: renderHardBreakToken(hardBreak), length: hardBreak.raw.length } : null;
     }
 
     if (isPotentialBareUrlStart(text, index)) {
@@ -363,6 +370,14 @@ function readEscapedCharacter(text: string, index: number): EscapedCharacterToke
         raw: text.slice(index, index + 2),
         character,
     };
+}
+
+function readHardBreakToken(text: string, index: number): HardBreakToken | null {
+    if (text[index] === "\\" && text[index + 1] === "\n" && !isEscapedAt(text, index)) {
+        return { raw: "\\\n" };
+    }
+
+    return text[index] === "\n" ? { raw: "\n" } : null;
 }
 
 function readInlineToken(text: string, index: number, image: boolean): InlineToken | null {
@@ -666,22 +681,29 @@ function renderInlineCodeToken(token: InlineCodeToken): string {
     const raw = escapeHtml(token.raw);
     const code = escapeHtml(token.code);
 
-    return `<span class="markdown-token markdown-code-token"><code contenteditable="false" data-source-ignore="true">${code}</code><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-code-token" data-markdown-token-kind="code"><code contenteditable="false" data-source-ignore="true">${code}</code><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderEscapedCharacter(token: EscapedCharacterToken): string {
     const raw = escapeHtml(token.raw);
     const character = escapeHtml(token.character);
 
-    return `<span class="markdown-token markdown-escape-token"><span class="markdown-escape" contenteditable="false" data-source-ignore="true">${character}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-escape-token" data-markdown-token-kind="escape"><span class="markdown-escape" contenteditable="false" data-source-ignore="true">${character}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+}
+
+function renderHardBreakToken(token: HardBreakToken): string {
+    const raw = escapeHtml(token.raw);
+
+    return `<span class="markdown-token markdown-hard-break-token" data-markdown-token-kind="hard-break"><span class="markdown-hard-break" contenteditable="false" data-source-ignore="true"><br></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderMathToken(token: MathToken): string {
     const raw = escapeHtml(token.raw);
     const math = renderLatexMath(token.source, token.displayMode);
     const className = token.displayMode ? "markdown-token markdown-math-token markdown-display-math-token" : "markdown-token markdown-math-token";
+    const kind = token.displayMode ? "display-math" : "math";
 
-    return `<span class="${className}"><span class="markdown-math" contenteditable="false" data-source-ignore="true">${math}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="${className}" data-markdown-token-kind="${kind}"><span class="markdown-math" contenteditable="false" data-source-ignore="true">${math}</span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 
@@ -698,13 +720,13 @@ function renderFormattingToken(token: FormattingToken, context: DocumentRenderCo
                 ? "markdown-subscript"
                 : "markdown-superscript";
 
-    return `<span class="markdown-token markdown-format-token"><${tag} class="${className}" contenteditable="false" data-source-ignore="true">${label}</${tag}><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-format-token" data-markdown-token-kind="formatting"><${tag} class="${className}" contenteditable="false" data-source-ignore="true">${label}</${tag}><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderFootnoteReferenceToken(token: FootnoteReferenceToken): string {
     const raw = escapeHtml(token.raw);
     const label = encodeURIComponent(normalizeReferenceLabel(token.label));
-    return `<span class="markdown-token markdown-footnote-reference-token"><sup class="markdown-footnote-reference" contenteditable="false" data-source-ignore="true" id="${escapeHtml(token.id)}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-footnote-reference-token" data-markdown-token-kind="footnote-reference"><sup class="markdown-footnote-reference" contenteditable="false" data-source-ignore="true" id="${escapeHtml(token.id)}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderEmphasisToken(token: EmphasisToken, context: DocumentRenderContext, depth: number): string {
@@ -712,14 +734,14 @@ function renderEmphasisToken(token: EmphasisToken, context: DocumentRenderContex
     const label = renderInlineMarkdown(token.label, context, depth);
 
     if (token.strong && token.emphasis) {
-        return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true"><em class="markdown-emphasis">${label}</em></strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+        return `<span class="markdown-token markdown-format-token" data-markdown-token-kind="strong-emphasis"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true"><em class="markdown-emphasis">${label}</em></strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
     }
 
     if (token.strong) {
-        return `<span class="markdown-token markdown-format-token"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true">${label}</strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+        return `<span class="markdown-token markdown-format-token" data-markdown-token-kind="strong"><strong class="markdown-strong" contenteditable="false" data-source-ignore="true">${label}</strong><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
     }
 
-    return `<span class="markdown-token markdown-format-token"><em class="markdown-emphasis" contenteditable="false" data-source-ignore="true">${label}</em><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-format-token" data-markdown-token-kind="emphasis"><em class="markdown-emphasis" contenteditable="false" data-source-ignore="true">${label}</em><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderImageToken(token: InlineToken): string {
@@ -729,7 +751,7 @@ function renderImageToken(token: InlineToken): string {
     const title = token.title ? ` data-image-title="${escapeHtml(token.title)}"` : "";
     const preserveKey = escapeHtml(createImagePreviewPreserveKey(token));
 
-    return `<span class="markdown-token markdown-image-token"><span class="markdown-image-preview" contenteditable="false" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-image-token" data-markdown-token-kind="image"><span class="markdown-image-preview" contenteditable="false" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span><span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function createImagePreviewPreserveKey(token: InlineToken): string {
@@ -745,25 +767,25 @@ function renderLinkToken(token: InlineToken, context: DocumentRenderContext, dep
         : `<span class="markdown-link markdown-link-label" contenteditable="false" data-source-ignore="true"${title}>${labelHtml}</span>`;
     const raw = escapeHtml(token.raw);
 
-    return `<span class="markdown-token markdown-link-token">${label}<span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-link-token" data-markdown-token-kind="link">${label}<span class="markdown-token-source" spellcheck="false">${raw}</span></span>&#8203;`;
 }
 
 function renderAutolinkToken(token: AutolinkToken): string {
-    return renderRawLink(token.label, token.destination, token.raw);
+    return renderRawLink(token.label, token.destination, token.raw, "autolink");
 }
 
 function renderBareUrl(url: string): string {
-    return renderRawLink(url, url, url);
+    return renderRawLink(url, url, url, "url");
 }
 
-function renderRawLink(label: string, destination: string, raw: string): string {
+function renderRawLink(label: string, destination: string, raw: string, kind: "autolink" | "url"): string {
     const href = normalizeLinkHref(destination);
     if (!href) {
         return escapeHtml(raw);
     }
 
     const escapedHref = escapeHtml(href);
-    return `<span class="markdown-token markdown-link-token markdown-url-token"><a class="markdown-link" contenteditable="false" data-source-ignore="true" tabindex="-1" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a><span class="markdown-token-source" spellcheck="false">${escapeHtml(raw)}</span></span>&#8203;`;
+    return `<span class="markdown-token markdown-link-token markdown-url-token" data-markdown-token-kind="${kind}"><a class="markdown-link" contenteditable="false" data-source-ignore="true" tabindex="-1" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a><span class="markdown-token-source" spellcheck="false">${escapeHtml(raw)}</span></span>&#8203;`;
 }
 
 function readBareUrl(text: string, index: number): string | null {

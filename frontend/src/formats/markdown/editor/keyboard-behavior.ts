@@ -281,7 +281,6 @@ function moveCaretIntoPrefixSourceFromBodyStart(event: KeyboardEvent, block: HTM
         event.ctrlKey ||
         event.metaKey ||
         event.shiftKey ||
-        block.dataset.blockSourceActive !== "true" ||
         getCurrentBlockOffset(block) !== 0
     ) {
         return false;
@@ -294,8 +293,13 @@ function moveCaretIntoPrefixSourceFromBodyStart(event: KeyboardEvent, block: HTM
         return false;
     }
 
-    focusPlainTextElement(source, source.textContent?.length ?? 0);
+    block.dataset.blockSourceActive = "true";
+    focusPlainTextElement(source, readPrefixSourceEntryOffset(source));
     return true;
+}
+
+function readPrefixSourceEntryOffset(source: HTMLElement): number {
+    return Math.max(0, (source.textContent?.length ?? 0) - 1);
 }
 
 function deletePrefixSourceBackwardFromBodyStart(event: KeyboardEvent, block: HTMLElement): boolean {

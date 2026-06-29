@@ -24,11 +24,17 @@ import {
     insertTextIntoFocusedBlockMarkdownSource,
     readSelectedBlockMarkdownSourceText,
 } from "./source-controller";
+import {
+    deleteSelectedMarkdownTokenSourceText,
+    getFocusedMarkdownTokenSource,
+    insertTextIntoFocusedMarkdownTokenSource,
+    readSelectedMarkdownTokenSourceText,
+} from "./token-controller";
 
 const supportedPastedImageMimeTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 export function handleMarkdownCopy(event: ClipboardEvent, _context: DocumentEditorEventContext): boolean {
-    const sourceText = readSelectedBlockMarkdownSourceText();
+    const sourceText = readSelectedMarkdownSourceText();
     if (sourceText === null || !event.clipboardData) {
         return false;
     }
@@ -39,14 +45,14 @@ export function handleMarkdownCopy(event: ClipboardEvent, _context: DocumentEdit
 }
 
 export function handleMarkdownCut(event: ClipboardEvent, context: DocumentEditorEventContext): boolean {
-    const sourceText = readSelectedBlockMarkdownSourceText();
+    const sourceText = readSelectedMarkdownSourceText();
     if (sourceText === null || !event.clipboardData) {
         return false;
     }
 
     event.preventDefault();
     writeMarkdownClipboardText(event.clipboardData, sourceText);
-    if (deleteSelectedBlockMarkdownSourceText()) {
+    if (deleteSelectedMarkdownSourceText()) {
         context.markEditorDirty();
     }
     return true;
@@ -54,10 +60,10 @@ export function handleMarkdownCut(event: ClipboardEvent, context: DocumentEditor
 
 export function handleMarkdownPaste(event: ClipboardEvent, context: DocumentPasteContext): boolean | Promise<boolean> {
     const sourceText = readDataTransferText(event.clipboardData);
-    if (sourceText && getFocusedBlockMarkdownSource()) {
+    if (sourceText && getFocusedMarkdownSource()) {
         event.preventDefault();
         context.runDiscreteEdit(() => {
-            if (insertTextIntoFocusedBlockMarkdownSource(sourceText.replace(/\r\n?/g, "\n"))) {
+            if (insertTextIntoFocusedMarkdownSource(sourceText.replace(/\r\n?/g, "\n"))) {
                 context.markEditorDirty();
             }
         });
@@ -77,10 +83,10 @@ export function handleMarkdownPaste(event: ClipboardEvent, context: DocumentPast
 
 export function handleMarkdownDrop(event: DragEvent, context: DocumentPasteContext): boolean | Promise<boolean> {
     const sourceText = readDataTransferText(event.dataTransfer);
-    if (sourceText && focusBlockMarkdownSourceDropTarget(event)) {
+    if (sourceText && focusMarkdownSourceDropTarget(event)) {
         event.preventDefault();
         context.runDiscreteEdit(() => {
-            if (insertTextIntoFocusedBlockMarkdownSource(sourceText.replace(/\r\n?/g, "\n"))) {
+            if (insertTextIntoFocusedMarkdownSource(sourceText.replace(/\r\n?/g, "\n"))) {
                 context.markEditorDirty();
             }
         });
@@ -167,9 +173,27 @@ function writeMarkdownClipboardText(clipboardData: DataTransfer, text: string): 
     clipboardData.setData("text/markdown", text);
 }
 
-function focusBlockMarkdownSourceDropTarget(event: DragEvent): boolean {
+function readSelectedMarkdownSourceText(): string | null {
+    return readSelectedBlockMarkdownSourceText() ?? readSelectedMarkdownTokenSourceText();
+}
+
+function deleteSelectedMarkdownSourceText(): boolean {
+    return deleteSelectedBlockMarkdownSourceText() || deleteSelectedMarkdownTokenSourceText();
+}
+
+function getFocusedMarkdownSource(): HTMLElement | null {
+    return getFocusedBlockMarkdownSource() ?? getFocusedMarkdownTokenSource();
+}
+
+function insertTextIntoFocusedMarkdownSource(text: string): boolean {
+    return insertTextIntoFocusedBlockMarkdownSource(text) || insertTextIntoFocusedMarkdownTokenSource(text);
+}
+
+function focusMarkdownSourceDropTarget(event: DragEvent): boolean {
     const target = event.target;
-    const source = target instanceof Element ? target.closest<HTMLElement>(".format-block-source") : null;
+    const source = target instanceof Element
+        ? target.closest<HTMLElement>(".format-block-source, .markdown-token-source")
+        : null;
     if (!source) {
         return false;
     }
