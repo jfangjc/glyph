@@ -50,12 +50,3 @@ export function isValidCodeBlockSource(source: { prefix: string; suffix: string 
         closing.split("").every((character) => character === markerCharacter)
     );
 }
-
-export function serializeInvalidCodeBlockSource(source: CodeBlockSourceParts): string {
-    const lines = [source.prefix, source.text];
-    if (source.suffix !== "") {
-        lines.push(source.suffix);
-    }
-
-    return lines.join("\n");
-}

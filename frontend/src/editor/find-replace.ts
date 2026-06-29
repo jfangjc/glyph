@@ -96,7 +96,7 @@ export function installFindReplaceController({
     elements.caseButton.addEventListener("click", () => toggleCaseSensitive());
     elements.wholeWordButton.addEventListener("click", () => toggleWholeWord());
     elements.replaceToggleButton.addEventListener("click", () => {
-        setReplaceExpanded(replaceRow.hidden);
+        setReplaceExpanded(replaceRow.hidden === true);
         if (!replaceRow.hidden) {
             elements.replaceInput.focus();
             elements.replaceInput.select();

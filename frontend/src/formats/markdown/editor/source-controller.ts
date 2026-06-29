@@ -63,9 +63,7 @@ type MarkdownSourceHooks = {
 let hooks: MarkdownSourceHooks = {};
 type MarkdownSourceDraft = {
     block: HTMLElement;
-    kind: "block-source" | "inline-source";
     rawBeforeActivation: string;
-    rawDraft: string;
 };
 
 let activeBlockMarkdownSource: MarkdownSourceDraft | null = null;
@@ -458,9 +456,8 @@ export function applyFocusedBlockMarkdownSourceInput(
         rawMarkdown,
         readEditableMarkdownBlockSourceParseOptions(block, source),
     );
-    const activeDraft = readOrCreateBlockSourceDraft(block);
+    readOrCreateBlockSourceDraft(block);
 
-    activeDraft.rawDraft = rawMarkdown;
     if (!parsedBlock) {
         restoreInvalidBlockMarkdownSourceInput(block, source, sourceOffset);
         return true;
@@ -605,9 +602,7 @@ export function syncActiveBlockMarkdownSource(
             const rawMarkdown = getBlockRawMarkdown(sourceBlock);
             activeBlockMarkdownSource = {
                 block: sourceBlock,
-                kind: "block-source",
                 rawBeforeActivation: rawMarkdown,
-                rawDraft: rawMarkdown,
             };
         }
         return;
@@ -1186,11 +1181,9 @@ function restoreTableSourceFocusAfterInput(block: HTMLElement, focus: TableSourc
     const rawMarkdown = getBlockRawMarkdown(block);
     activeBlockMarkdownSource = {
         block,
-        kind: "block-source",
         rawBeforeActivation: activeBlockMarkdownSource?.block === block
             ? activeBlockMarkdownSource.rawBeforeActivation
             : rawMarkdown,
-        rawDraft: rawMarkdown,
     };
     return true;
 }
@@ -1239,11 +1232,9 @@ function restoreFocusAfterBlockMarkdownSourceInput(
         const rawMarkdown = getBlockRawMarkdown(block);
         activeBlockMarkdownSource = {
             block,
-            kind: "block-source",
             rawBeforeActivation: activeBlockMarkdownSource?.block === block
                 ? activeBlockMarkdownSource.rawBeforeActivation
                 : rawMarkdown,
-            rawDraft: rawMarkdown,
         };
         return;
     }
@@ -1409,9 +1400,7 @@ function readOrCreateBlockSourceDraft(block: HTMLElement): MarkdownSourceDraft {
     const rawMarkdown = getBlockRawMarkdown(block);
     activeBlockMarkdownSource = {
         block,
-        kind: "block-source",
         rawBeforeActivation: rawMarkdown,
-        rawDraft: rawMarkdown,
     };
     return activeBlockMarkdownSource;
 }
@@ -1419,8 +1408,7 @@ function readOrCreateBlockSourceDraft(block: HTMLElement): MarkdownSourceDraft {
 function restoreInvalidBlockMarkdownSourceInput(block: HTMLElement, source: HTMLElement, sourceOffset: number): void {
     source.dataset.blockSourceDraft = "true";
     focusPlainTextElement(source, Math.min(sourceOffset, source.textContent?.length ?? 0));
-    const draft = readOrCreateBlockSourceDraft(block);
-    draft.rawDraft = getBlockRawMarkdown(block);
+    readOrCreateBlockSourceDraft(block);
 }
 
 function clearBlockMarkdownSourceDraftState(block: HTMLElement): void {

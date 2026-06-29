@@ -5,6 +5,7 @@ import {
     canUseDesktopFileSystem,
     createNewMarkdownDocument,
     installOpenDocumentRequests,
+    installWindowCloseRequests,
     openDocument,
     openDocumentPath,
     openPendingLaunchDocuments,
@@ -192,6 +193,7 @@ export function installEditorController(): void {
     });
     bindDocumentActions({ loadDocument, serializeDocument });
     installOpenDocumentRequests();
+    installWindowCloseRequests(getSuggestedFileName);
     void restoreLastOpenDirectory();
     void restoreStartupDocument();
     startDocumentAutosave();

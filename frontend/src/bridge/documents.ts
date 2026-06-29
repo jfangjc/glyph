@@ -2,10 +2,15 @@ import { Call, Dialogs } from "@wailsio/runtime";
 import { getDocumentFileFilters } from "../formats/registry";
 import type { DirectoryTree, DocumentFile, ImageFile, PastedImageFile, PdfPreviewFile } from "./types";
 
+export type UnsavedDocumentDecision = "save" | "discard" | "cancel";
+
 const textFileFilters: Dialogs.FileFilter[] = getDocumentFileFilters().map((filter) => ({
     DisplayName: filter.displayName,
     Pattern: filter.patterns.join(";"),
 }));
+
+const saveChangesButton = "Yes";
+const discardChangesButton = "No";
 
 export async function chooseDocumentToOpen(): Promise<string | null> {
     const selection = await Dialogs.OpenFile({
@@ -53,6 +58,28 @@ export async function chooseDocumentToSave(filename: string): Promise<string | n
     });
 
     return selection || null;
+}
+
+export async function chooseUnsavedDocumentDecision(): Promise<UnsavedDocumentDecision> {
+    const selection = await Dialogs.Question({
+        Title: "Save changes?",
+        Message: "Save changes before continuing?",
+        Buttons: [
+            { Label: saveChangesButton, IsDefault: true },
+            { Label: discardChangesButton, IsCancel: true },
+        ],
+    });
+    const normalizedSelection = selection.trim().toLowerCase();
+
+    if (normalizedSelection === saveChangesButton.toLowerCase()) {
+        return "save";
+    }
+
+    if (normalizedSelection === discardChangesButton.toLowerCase()) {
+        return "discard";
+    }
+
+    return "cancel";
 }
 
 export function readDocument(path: string): Promise<DocumentFile> {

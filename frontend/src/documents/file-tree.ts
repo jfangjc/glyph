@@ -189,7 +189,7 @@ function handleFileTreeKeydown(event: KeyboardEvent, treeRoot: HTMLElement, clos
         return;
     }
 
-    if (event.key.toLowerCase() === "e" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
+    if (event.key.toLowerCase() === "o" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
         event.preventDefault();
         event.stopPropagation();
         closeFrame();

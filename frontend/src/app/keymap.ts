@@ -58,7 +58,7 @@ export const shortcutKeymap = [
         command: "file:open",
         scopes: ["global", "menu"],
         availability: "native-file-system",
-        bindings: [{ key: "o", primary: true }],
+        bindings: [],
     },
     {
         command: "file:open-directory",
@@ -124,7 +124,7 @@ export const shortcutKeymap = [
     {
         command: "view:toggle-file-tree",
         scopes: ["global", "menu"],
-        bindings: [{ key: "e", primary: true }],
+        bindings: [{ key: "o", primary: true }],
     },
     {
         command: "view:zoom-in",

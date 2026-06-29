@@ -1,6 +1,8 @@
+import { Events } from "@wailsio/runtime";
 import {
     chooseDocumentToOpen,
     chooseDocumentToSave,
+    chooseUnsavedDocumentDecision,
     createUntitledMarkdownDocument,
     readDocument,
     renameDocument,
@@ -36,9 +38,12 @@ type SaveDocumentOptions = {
 };
 
 const autoSaveIntervalMs = 30_000;
+const windowCloseRequestedEvent = "glyph:window-close-requested";
+const windowCloseConfirmedEvent = "glyph:window-close-confirmed";
 
 let host: DocumentActionHost | null = null;
 let pendingOpenDocumentDrain: Promise<boolean> | null = null;
+let pendingWindowCloseConfirmation = false;
 
 export function bindDocumentActions(nextHost: DocumentActionHost): void {
     host = nextHost;
@@ -48,6 +53,12 @@ export function bindDocumentActions(nextHost: DocumentActionHost): void {
 
 export function installOpenDocumentRequests(): void {
     onOpenDocumentRequested(() => void openPendingLaunchDocuments());
+}
+
+export function installWindowCloseRequests(readSuggestedFileName: () => string): void {
+    Events.On(windowCloseRequestedEvent, () => {
+        void confirmWindowClose(readSuggestedFileName);
+    });
 }
 
 export async function openPendingLaunchDocuments(): Promise<boolean> {
@@ -125,12 +136,7 @@ export async function openDocument(): Promise<void> {
     notifyDocumentStateChanged();
 
     try {
-        if (
-            documentState.hasUnsavedChanges &&
-            !(await saveCurrentDocument({
-                promptForPath: !documentState.activeFilePath,
-            }))
-        ) {
+        if (!(await confirmUnsavedDocumentAction())) {
             return;
         }
 
@@ -158,12 +164,7 @@ export async function openDocumentPath(path: string): Promise<void> {
     notifyDocumentStateChanged();
 
     try {
-        if (
-            documentState.hasUnsavedChanges &&
-            !(await saveCurrentDocument({
-                promptForPath: !documentState.activeFilePath,
-            }))
-        ) {
+        if (!(await confirmUnsavedDocumentAction())) {
             return;
         }
 
@@ -188,8 +189,7 @@ export async function createNewMarkdownDocument(suggestedFileName?: string): Pro
     try {
         if (
             (!documentState.activeFilePath || documentState.hasUnsavedChanges) &&
-            !(await saveCurrentDocument({
-                promptForPath: !documentState.activeFilePath,
+            !(await confirmUnsavedDocumentAction({
                 suggestedFileName,
             }))
         ) {
@@ -285,6 +285,53 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
     return saved;
 }
 
+async function confirmUnsavedDocumentAction(options: SaveDocumentOptions = {}): Promise<boolean> {
+    if (!documentState.hasUnsavedChanges) {
+        return true;
+    }
+
+    if (documentState.activeFilePath) {
+        return saveCurrentDocument({
+            ...options,
+            promptForPath: false,
+        });
+    }
+
+    const decision = await chooseUnsavedDocumentDecision();
+    if (decision === "discard") {
+        return true;
+    }
+
+    if (decision === "cancel") {
+        return false;
+    }
+
+    return saveCurrentDocument({
+        ...options,
+        promptForPath: true,
+    });
+}
+
+async function confirmWindowClose(readSuggestedFileName: () => string): Promise<void> {
+    if (pendingWindowCloseConfirmation) {
+        return;
+    }
+
+    pendingWindowCloseConfirmation = true;
+    try {
+        const shouldClose = await confirmUnsavedDocumentAction({
+            suggestedFileName: readSuggestedFileName(),
+        });
+        if (!shouldClose) {
+            return;
+        }
+
+        await Events.Emit(windowCloseConfirmedEvent, null);
+    } finally {
+        pendingWindowCloseConfirmation = false;
+    }
+}
+
 async function resolveSavePath(options: SaveDocumentOptions): Promise<string | null> {
     if (!options.promptForPath && documentState.activeFilePath) {
         return resolveEditedActiveFilePath(
@@ -294,13 +341,17 @@ async function resolveSavePath(options: SaveDocumentOptions): Promise<string | n
         );
     }
 
+    const defaultExtension = getDocumentFormatById(documentState.activeFormatId).defaultExtension;
+    const defaultFileName = getDocumentFormatById(documentState.activeFormatId).defaultFileName;
+    const titleFileName = getElement<HTMLInputElement>("document-title").value.trim();
+    const suggestedFileName =
+        (options.suggestedFileName ??
+            (documentState.activeFilePath ? fileNameFromPath(documentState.activeFilePath) : null) ??
+            titleFileName) ||
+        defaultFileName;
+
     const selectedPath = await chooseDocumentToSave(
-        normalizeSuggestedFileName(
-            options.suggestedFileName ??
-                (documentState.activeFilePath ? fileNameFromPath(documentState.activeFilePath) : null) ??
-                getDocumentFormatById(documentState.activeFormatId).defaultFileName,
-            getDocumentFormatById(documentState.activeFormatId).defaultExtension,
-        ),
+        normalizeSuggestedFileName(suggestedFileName, defaultExtension),
     );
 
     if (!selectedPath) {

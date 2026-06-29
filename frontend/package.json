@@ -15,7 +15,7 @@
         "katex": "^0.16.47"
     },
     "devDependencies": {
-        "typescript": "^4.9.3",
+        "typescript": "^7.0.1-rc",
         "vite": "^6.4.2"
     }
 }

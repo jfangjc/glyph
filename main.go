@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"log"
+	"sync/atomic"
 
 	"glyph/internal/documents"
 	"glyph/internal/launch"
@@ -20,10 +21,17 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+const (
+	windowCloseRequestedEvent = "glyph:window-close-requested"
+	windowCloseConfirmedEvent = "glyph:window-close-confirmed"
+)
+
 func main() {
 	launchService := launch.NewService()
 	windowStateStore := windowstate.New("Glyph")
 	savedWindowState := windowStateStore.Load()
+	var allowWindowClose atomic.Bool
+	var windowCloseGuardReady atomic.Bool
 
 	app := application.New(application.Options{
 		Name:        "Glyph",
@@ -70,6 +78,24 @@ func main() {
 	windowstate.ApplyToOptions(&windowOptions, savedWindowState)
 
 	mainWindow := app.Window.NewWithOptions(windowOptions)
+	mainWindow.OnWindowEvent(events.Common.WindowRuntimeReady, func(_ *application.WindowEvent) {
+		windowCloseGuardReady.Store(true)
+	})
+	mainWindow.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		if !windowCloseGuardReady.Load() || allowWindowClose.Load() {
+			return
+		}
+
+		event.Cancel()
+		mainWindow.EmitEvent(windowCloseRequestedEvent)
+	})
+	app.Event.On(windowCloseConfirmedEvent, func(_ *application.CustomEvent) {
+		if allowWindowClose.Swap(true) {
+			return
+		}
+
+		mainWindow.Close()
+	})
 	windowStateStore.Track(mainWindow, savedWindowState.Maximized)
 
 	if err := app.Run(); err != nil {
