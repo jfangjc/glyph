@@ -20,6 +20,7 @@ import {
 } from "../documents/document-state";
 import {
     getActiveDocumentFormat,
+    installSourceStateDocumentIntegration,
     loadDocument,
     markEditorDirty,
     serializeDocument,
@@ -73,6 +74,7 @@ import { configureCaret } from "./selection/caret";
 import {
     installFindReplaceController,
 } from "./find-replace";
+import { installNativeSourceNavigationTracker } from "./core/projection";
 
 export function installEditorController(): void {
     const dom = readEditorDom();
@@ -86,6 +88,7 @@ export function installEditorController(): void {
         editor: dom.editor,
         shell: dom.shell,
         onDirty: markEditorDirty,
+        isSourceFirstMarkdown: () => documentState.activeFormatId === "markdown",
     });
     const inputController = createEditorInputController({
         hooks: editorHooks,
@@ -184,9 +187,11 @@ export function installEditorController(): void {
     configurePointerInteractions({
         onBlockActivated: syncActiveBlockIndicator,
     });
+    installNativeSourceNavigationTracker(dom.editor);
     configureEditorUiState({
         hasBlockSource: (type) => Boolean(getActiveDocumentFormat().hasBlockSource?.(type)),
     });
+    installSourceStateDocumentIntegration();
     installDocumentFormatEditorBehaviors(editorHooks);
     configureBlockOperations({
         parseFragment: (content) => getActiveDocumentFormat().parseFragment(content),

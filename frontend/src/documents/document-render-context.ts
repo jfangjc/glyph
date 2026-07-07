@@ -10,6 +10,8 @@ import {
     setBlockText,
 } from "../editor/blocks/view";
 import { readBlockType, type ParsedBlock } from "../editor/blocks/model";
+import { applySourceBlockProjectionMetadata } from "../editor/core/projection";
+import type { EditorState, SourceBlock } from "../editor/core/types";
 import { focusBlockAtOffset, getCurrentBlockOffset } from "../editor/selection/caret";
 import { readEditorDom } from "../editor/editor-dom";
 import type {
@@ -110,6 +112,22 @@ export function replaceEditorBlocks(blocks: ParsedBlock[]): void {
     focusBlockAtOffset(nextBlocks[0], 0);
 }
 
+export function replaceEditorBlocksFromSourceState(state: EditorState): void {
+    const { editor } = readEditorDom();
+    const nextBlocks = state.blocks.blocks.map((sourceBlock) => {
+        const block = readParsedBlockFromSourceState(state, sourceBlock);
+        const element = createBlock(block.type, block.text, block);
+        applySourceBlockProjectionMetadata(element, sourceBlock);
+        return element;
+    });
+
+    editor.replaceChildren(...nextBlocks);
+}
+
+export function readParsedBlocksFromSourceState(state: EditorState): ParsedBlock[] {
+    return state.blocks.blocks.map((block) => readParsedBlockFromSourceState(state, block));
+}
+
 function createBlockViewContext(format: DocumentFormat, activeFilePath: string | null): void {
     configureBlockView({
         context: documentRenderContext,
@@ -130,6 +148,24 @@ function readFormatRenderContext(
     fallbackReferences: DocumentReferenceMap,
 ): DocumentRenderContext {
     return format.readRenderContext?.(blocks) ?? { references: fallbackReferences };
+}
+
+function readParsedBlockFromSourceState(state: EditorState, block: SourceBlock): ParsedBlock {
+    return {
+        type: block.type,
+        text: state.doc.slice(block.contentFrom, block.contentTo),
+        indent: block.indent,
+        checked: block.checked,
+        codeFence: block.codeFence,
+        codeInfo: block.codeInfo,
+        listMarker: block.listMarker,
+        listNumber: block.listNumber,
+        quoteLevel: block.quoteLevel,
+        ruleMarker: block.ruleMarker,
+        mathSource: block.mathSource,
+        headingId: block.headingId,
+        headingIdExplicit: block.headingIdExplicit,
+    };
 }
 
 function rerenderInlineContentBlocks(): void {

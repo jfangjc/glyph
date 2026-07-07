@@ -1,0 +1,101 @@
+import type { Change, SelectionRange, Transaction } from "./types";
+
+export function applyTransactionToDoc(
+    doc: string,
+    selection: SelectionRange,
+    transaction: Transaction,
+): { doc: string; selection: SelectionRange; changes: Change[] } {
+    const changes = normalizeChanges(transaction.changes, doc.length);
+    const nextDoc = applyChanges(doc, changes);
+    const nextSelection = normalizeSelection(
+        transaction.selection ?? mapSelection(selection, changes),
+        nextDoc.length,
+    );
+
+    return {
+        doc: nextDoc,
+        selection: nextSelection,
+        changes,
+    };
+}
+
+export function normalizeSelection(selection: SelectionRange, docLength: number): SelectionRange {
+    return {
+        anchor: clampOffset(selection.anchor, docLength),
+        head: clampOffset(selection.head, docLength),
+    };
+}
+
+export function mapSelection(selection: SelectionRange, changes: Change[]): SelectionRange {
+    return {
+        anchor: mapOffset(selection.anchor, changes),
+        head: mapOffset(selection.head, changes),
+    };
+}
+
+export function mapOffset(offset: number, changes: Change[]): number {
+    let delta = 0;
+
+    for (const change of changes) {
+        if (offset < change.from) {
+            break;
+        }
+
+        if (offset <= change.to) {
+            return change.from + delta + change.insert.length;
+        }
+
+        delta += change.insert.length - (change.to - change.from);
+    }
+
+    return offset + delta;
+}
+
+export function normalizeChanges(changes: Change[], docLength: number): Change[] {
+    const normalized = changes
+        .map((change) => ({
+            from: clampOffset(change.from, docLength),
+            to: clampOffset(change.to, docLength),
+            insert: change.insert,
+        }))
+        .map((change) => ({
+            ...change,
+            from: Math.min(change.from, change.to),
+            to: Math.max(change.from, change.to),
+        }))
+        .sort((left, right) => left.from - right.from || left.to - right.to);
+
+    for (let index = 1; index < normalized.length; index += 1) {
+        if (normalized[index].from < normalized[index - 1].to) {
+            throw new Error("Transaction changes must not overlap");
+        }
+    }
+
+    return normalized;
+}
+
+function applyChanges(doc: string, changes: Change[]): string {
+    if (changes.length === 0) {
+        return doc;
+    }
+
+    let cursor = 0;
+    let nextDoc = "";
+
+    for (const change of changes) {
+        nextDoc += doc.slice(cursor, change.from);
+        nextDoc += change.insert;
+        cursor = change.to;
+    }
+
+    nextDoc += doc.slice(cursor);
+    return nextDoc;
+}
+
+function clampOffset(offset: number, docLength: number): number {
+    if (!Number.isFinite(offset)) {
+        return 0;
+    }
+
+    return Math.max(0, Math.min(Math.trunc(offset), docLength));
+}

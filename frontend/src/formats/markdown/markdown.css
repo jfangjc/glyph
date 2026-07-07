@@ -749,13 +749,13 @@
     direction: ltr;
     display: inline-block;
     inset-block-start: 0;
-    inset-inline-end: calc(100% + var(--list-source-space-width));
+    inset-inline-end: calc(100% + var(--list-marker-gap) - var(--list-source-space-width));
     overflow: hidden;
     position: absolute;
     text-align: end;
     unicode-bidi: isolate;
     white-space: pre;
-    width: calc(var(--ordered-list-marker-width) + var(--list-source-space-width));
+    width: calc(var(--ordered-list-marker-width) + var(--list-marker-gap) - var(--list-source-space-width));
 }
 
 .block[data-block-source-active="true"][data-type="ordered-list"] .format-block-source-prefix:focus {

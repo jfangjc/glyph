@@ -547,7 +547,7 @@ function isEditableMarkdownToken(token: HTMLElement): boolean {
 }
 
 function isAutoActivatableMarkdownToken(token: HTMLElement): boolean {
-    return isEditableMarkdownToken(token) && !isFormatMarkdownToken(token);
+    return isEditableMarkdownToken(token);
 }
 
 function getMarkdownTokenForSource(source: HTMLElement): HTMLElement | null {

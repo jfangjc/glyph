@@ -7,6 +7,31 @@ import { readMarkdownTable } from "./table";
 import { countIndentColumns, isEscapedAt } from "./utils";
 import { isDefinitionMarkerLine, readDefinitionList } from "./definition-list";
 
+export type ParsedMarkdownBlockWithRange = ParsedBlock & {
+    sourceFrom: number;
+    sourceTo: number;
+    contentFrom: number;
+    contentTo: number;
+    lineFrom: number;
+    lineTo: number;
+};
+
+type MarkdownLineRecord = {
+    text: string;
+    from: number;
+    to: number;
+    breakTo: number;
+};
+
+type MarkdownBlockRange = {
+    sourceFrom: number;
+    sourceTo: number;
+    contentFrom: number;
+    contentTo: number;
+    lineFrom: number;
+    lineTo: number;
+};
+
 export function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDocument {
     const lines = readMarkdownLines(documentFile.content, true);
     const parsed = parseMarkdownLines(lines, 0);
@@ -17,6 +42,25 @@ export function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDoc
         blocks: parsed.blocks.length > 0 ? parsed.blocks : [{ type: "paragraph", text: "" }],
         references: parsed.references,
     };
+}
+
+export function parseMarkdownBlocksWithRanges(content: string): ParsedMarkdownBlockWithRange[] {
+    const lines = readMarkdownLineRecords(content, true);
+    const lineTexts = lines.map((line) => line.text);
+    const parsed = parseMarkdownLines(lineTexts, 0);
+    const ranges = readMarkdownBlockRanges(lines);
+    const fallbackRanges = ranges.length === parsed.blocks.length ? ranges : readFallbackMarkdownBlockRanges(lines);
+
+    return parsed.blocks.map((block, index) => {
+        const sourceRange = fallbackRanges[index] ?? createEmptyMarkdownBlockRange(content.length);
+        const contentRange = readMarkdownBlockContentRange(block, sourceRange, lines);
+
+        return {
+            ...block,
+            ...sourceRange,
+            ...contentRange,
+        };
+    });
 }
 
 export function parseMarkdownFragment(content: string): { blocks: ParsedBlock[]; references: DocumentReferenceMap } {
@@ -103,6 +147,289 @@ function readMarkdownLines(content: string, trimTrailingEmptyLine: boolean): str
     }
 
     return lines;
+}
+
+function readMarkdownLineRecords(content: string, trimTrailingEmptyLine: boolean): MarkdownLineRecord[] {
+    const records: MarkdownLineRecord[] = [];
+    let from = content.startsWith("\uFEFF") ? 1 : 0;
+    let cursor = from;
+
+    while (cursor <= content.length) {
+        const lineStart = cursor;
+        while (cursor < content.length && content[cursor] !== "\n" && content[cursor] !== "\r") {
+            cursor += 1;
+        }
+
+        const lineEnd = cursor;
+        let breakTo = cursor;
+        if (cursor < content.length) {
+            if (content[cursor] === "\r" && content[cursor + 1] === "\n") {
+                breakTo = cursor + 2;
+            } else {
+                breakTo = cursor + 1;
+            }
+        }
+
+        records.push({
+            text: content.slice(lineStart, lineEnd),
+            from: lineStart,
+            to: lineEnd,
+            breakTo,
+        });
+
+        if (breakTo === cursor) {
+            break;
+        }
+
+        cursor = breakTo;
+    }
+
+    if (records.length === 0) {
+        records.push({ text: "", from, to: from, breakTo: from });
+    }
+
+    if (trimTrailingEmptyLine && records.length > 1 && records[records.length - 1].text === "") {
+        records.pop();
+    }
+
+    return records;
+}
+
+function readMarkdownBlockRanges(lines: MarkdownLineRecord[]): MarkdownBlockRange[] {
+    const lineTexts = lines.map((line) => line.text);
+    const ranges: MarkdownBlockRange[] = [];
+    const parsedBlocksBeforeCurrent: ParsedBlock[] = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index].text;
+        const fence = readCodeFence(line);
+
+        if (fence) {
+            let cursor = index + 1;
+            while (cursor < lines.length && !isClosingCodeFence(lines[cursor].text, fence.marker)) {
+                cursor += 1;
+            }
+
+            const endIndex = cursor < lines.length ? cursor : Math.max(index, cursor - 1);
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push({ type: "code", text: "" });
+            index = endIndex;
+            continue;
+        }
+
+        if (isIndentedCodeLine(line, getPreviousNonBlankBlock(parsedBlocksBeforeCurrent))) {
+            let cursor = index + 1;
+            while (cursor < lines.length && (lines[cursor].text === "" || isIndentedCodeContinuationLine(lines[cursor].text))) {
+                cursor += 1;
+            }
+
+            const endIndex = Math.max(index, cursor - 1);
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push({ type: "code", text: "" });
+            index = endIndex;
+            continue;
+        }
+
+        const footnoteDefinition = readFootnoteDefinition(lineTexts, index);
+        if (footnoteDefinition) {
+            const endIndex = index + footnoteDefinition.consumedLines - 1;
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push(footnoteDefinition.block);
+            index = endIndex;
+            continue;
+        }
+
+        const referenceDefinition = readReferenceDefinition(lineTexts, index);
+        if (referenceDefinition) {
+            const endIndex = index + referenceDefinition.consumedLines - 1;
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push({ type: "reference", text: referenceDefinition.text });
+            index = endIndex;
+            continue;
+        }
+
+        const mathBlock = readMathBlock(lineTexts, index);
+        if (mathBlock) {
+            const endIndex = index + mathBlock.consumedLines - 1;
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push(mathBlock.block);
+            index = endIndex;
+            continue;
+        }
+
+        const htmlBlock = readMarkdownHtmlBlock(lineTexts, index);
+        if (htmlBlock) {
+            const endIndex = index + htmlBlock.consumedLines - 1;
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push(htmlBlock.block);
+            index = endIndex;
+            continue;
+        }
+
+        const setextHeading = readSetextHeading(lineTexts, index);
+        if (setextHeading) {
+            ranges.push(createMarkdownBlockRange(lines, index, index + 1));
+            parsedBlocksBeforeCurrent.push(setextHeading.block);
+            index += 1;
+            continue;
+        }
+
+        const table = readMarkdownTable(lineTexts, index);
+        if (table) {
+            const endIndex = index + table.consumedLines - 1;
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push(table.block);
+            index = endIndex;
+            continue;
+        }
+
+        const definitionList = readDefinitionList(lineTexts, index, isPlainParagraphLine);
+        if (definitionList) {
+            const endIndex = index + definitionList.consumedLines - 1;
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push(definitionList.block);
+            index = endIndex;
+            continue;
+        }
+
+        const hardBreakParagraph = readHardBreakParagraph(lineTexts, index);
+        if (hardBreakParagraph) {
+            const endIndex = index + hardBreakParagraph.consumedLines - 1;
+            ranges.push(createMarkdownBlockRange(lines, index, endIndex));
+            parsedBlocksBeforeCurrent.push(hardBreakParagraph.block);
+            index = endIndex;
+            continue;
+        }
+
+        const horizontalRule = readHorizontalRuleMarker(line);
+        if (horizontalRule) {
+            ranges.push(createMarkdownBlockRange(lines, index, index));
+            parsedBlocksBeforeCurrent.push({ type: "rule", text: "", ruleMarker: horizontalRule });
+            continue;
+        }
+
+        const block = parseMarkdownLine(line);
+        ranges.push(createMarkdownBlockRange(lines, index, index));
+        parsedBlocksBeforeCurrent.push(block);
+    }
+
+    return ranges.length > 0 ? ranges : [createEmptyMarkdownBlockRange(0)];
+}
+
+function readFallbackMarkdownBlockRanges(lines: MarkdownLineRecord[]): MarkdownBlockRange[] {
+    if (lines.length === 0) {
+        return [createEmptyMarkdownBlockRange(0)];
+    }
+
+    return lines.map((_, index) => createMarkdownBlockRange(lines, index, index));
+}
+
+function createMarkdownBlockRange(lines: MarkdownLineRecord[], startLine: number, endLine: number): MarkdownBlockRange {
+    const start = lines[startLine] ?? lines[0];
+    const end = lines[endLine] ?? start;
+
+    return {
+        sourceFrom: start.from,
+        sourceTo: end.to,
+        contentFrom: start.from,
+        contentTo: end.to,
+        lineFrom: startLine,
+        lineTo: endLine,
+    };
+}
+
+function createEmptyMarkdownBlockRange(offset: number): MarkdownBlockRange {
+    return {
+        sourceFrom: offset,
+        sourceTo: offset,
+        contentFrom: offset,
+        contentTo: offset,
+        lineFrom: 0,
+        lineTo: 0,
+    };
+}
+
+function readMarkdownBlockContentRange(
+    block: ParsedBlock,
+    range: MarkdownBlockRange,
+    lines: MarkdownLineRecord[],
+): Pick<MarkdownBlockRange, "contentFrom" | "contentTo"> {
+    const firstLine = lines[range.lineFrom];
+    const lastLine = lines[range.lineTo];
+    if (!firstLine || !lastLine) {
+        return { contentFrom: range.contentFrom, contentTo: range.contentTo };
+    }
+
+    if (block.type === "code" && block.codeFence) {
+        const opening = firstLine;
+        const closing = lines[range.lineTo];
+        const hasClosingFence = range.lineTo > range.lineFrom && isClosingCodeFence(closing.text, block.codeFence);
+        const contentFrom = range.lineFrom < range.lineTo ? opening.breakTo : opening.to;
+        const previousContentLine = hasClosingFence ? lines[range.lineTo - 1] : lastLine;
+        return {
+            contentFrom,
+            contentTo: Math.max(contentFrom, previousContentLine?.to ?? contentFrom),
+        };
+    }
+
+    if (block.type === "math") {
+        const singleLine = firstLine.text.match(/^ {0,3}\$\$(.*?)\$\$\s*$/);
+        if (singleLine) {
+            const startInLine = firstLine.text.indexOf("$$") + 2;
+            const endInLine = firstLine.text.lastIndexOf("$$");
+            return {
+                contentFrom: firstLine.from + startInLine,
+                contentTo: firstLine.from + Math.max(startInLine, endInLine),
+            };
+        }
+
+        if (firstLine.text.match(/^ {0,3}\$\$\s*$/)) {
+            const contentFrom = range.lineFrom < range.lineTo ? firstLine.breakTo : firstLine.to;
+            const hasClosingFence = range.lineTo > range.lineFrom && lastLine.text.match(/^ {0,3}\$\$\s*$/);
+            const previousContentLine = hasClosingFence ? lines[range.lineTo - 1] : lastLine;
+            return {
+                contentFrom,
+                contentTo: Math.max(contentFrom, previousContentLine?.to ?? contentFrom),
+            };
+        }
+    }
+
+    if (block.type === "rule") {
+        return { contentFrom: range.sourceFrom, contentTo: range.sourceFrom };
+    }
+
+    if (block.type === "heading-1" || block.type === "heading-2" || block.type === "heading-3" ||
+        block.type === "heading-4" || block.type === "heading-5" || block.type === "heading-6") {
+        return readSingleLineContentRange(firstLine, block.text);
+    }
+
+    if (block.type === "list" || block.type === "ordered-list" || block.type === "todo" || block.type === "quote") {
+        return readSingleLineContentRange(firstLine, block.text);
+    }
+
+    return {
+        contentFrom: range.contentFrom,
+        contentTo: range.contentTo,
+    };
+}
+
+function readSingleLineContentRange(
+    line: MarkdownLineRecord,
+    parsedText: string,
+): Pick<MarkdownBlockRange, "contentFrom" | "contentTo"> {
+    if (parsedText === "") {
+        return { contentFrom: line.to, contentTo: line.to };
+    }
+
+    const startInLine = line.text.indexOf(parsedText);
+    if (startInLine < 0) {
+        return { contentFrom: line.from, contentTo: line.to };
+    }
+
+    return {
+        contentFrom: line.from + startInLine,
+        contentTo: line.from + startInLine + parsedText.length,
+    };
 }
 
 function parseMarkdownLines(lines: string[], startLine: number): { blocks: ParsedBlock[]; references: DocumentReferenceMap } {

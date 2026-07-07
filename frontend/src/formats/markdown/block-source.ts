@@ -54,8 +54,8 @@ export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, tex
         const fence = createCodeFence(text, readBlockCodeFence(block));
         const codeInfo = block.dataset.codeInfo ? ` ${block.dataset.codeInfo}` : "";
         return {
-            prefix: `${fence}${codeInfo}`,
-            suffix: fence,
+            prefix: `${fence}${codeInfo}\n`,
+            suffix: `\n${fence}`,
         };
     }
 

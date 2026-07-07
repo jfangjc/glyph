@@ -2,6 +2,7 @@ import { Window } from "@wailsio/runtime";
 import { applyZoomShortcut } from "../../app/zoom";
 import { canUseWindowPrintRuntime } from "../../platform/runtime";
 import type { AppMenuCommandDetail } from "../../platform/window-controls/window-controls";
+import { redoSourceHistory, undoSourceHistory } from "../core/store";
 import type { FindReplaceController } from "../find-replace";
 import { redoHistoryChange, undoHistoryChange } from "./undo-controller";
 
@@ -50,10 +51,18 @@ export function createAppMenuController(options: AppMenuControllerOptions): AppM
                 void exportCurrentDocumentToPdf();
                 return;
             case "edit:undo":
-                undoHistoryChange();
+                if (options.isMarkdownDocument()) {
+                    undoSourceHistory();
+                } else {
+                    undoHistoryChange();
+                }
                 return;
             case "edit:redo":
-                redoHistoryChange();
+                if (options.isMarkdownDocument()) {
+                    redoSourceHistory();
+                } else {
+                    redoHistoryChange();
+                }
                 return;
             case "edit:cut":
                 runEditableCommand("cut");

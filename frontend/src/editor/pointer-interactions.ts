@@ -4,6 +4,7 @@ import {
     getBlockContent,
     getBlockText,
     getEditorBlocks,
+    getSiblingBlock,
 } from "./blocks/view";
 import { readBlockType } from "./blocks/model";
 import {
@@ -218,6 +219,11 @@ function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
 function findPointerTargetBlock(target: Element, clientX: number, clientY: number): PointerBlockTarget | null {
     const directBlock = findBlock(target);
     if (directBlock) {
+        const markerColumnTarget = findAdjacentBlockFromActiveListMarkerColumn(directBlock, clientX, clientY);
+        if (markerColumnTarget) {
+            return markerColumnTarget;
+        }
+
         const sourcePosition = readPointerBlockSourcePosition(directBlock, clientX, clientY);
         return {
             block: directBlock,
@@ -365,6 +371,57 @@ function readPointerPlainTextOffset(source: HTMLElement, clientX: number, client
     return clientX <= rect.left + rect.width / 2 ? 0 : (source.textContent?.length ?? 0);
 }
 
+function findAdjacentBlockFromActiveListMarkerColumn(
+    block: HTMLElement,
+    clientX: number,
+    clientY: number,
+): PointerBlockTarget | null {
+    if (block.dataset.blockSourceActive !== "true") {
+        return null;
+    }
+
+    const type = readBlockType(block.dataset.type);
+    if (type !== "list" && type !== "ordered-list" && type !== "todo") {
+        return null;
+    }
+
+    const content = getBlockContent(block);
+    const prefix = getBlockSourceElement(content, "prefix");
+    if (!prefix) {
+        return null;
+    }
+
+    const prefixRect = prefix.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    if (prefixRect.width <= 0 || prefixRect.height <= 0) {
+        return null;
+    }
+
+    const isInMarkerColumn = clientX >= Math.min(prefixRect.left, contentRect.left) && clientX <= prefixRect.right + 4;
+    if (!isInMarkerColumn) {
+        return null;
+    }
+
+    const verticalSlop = 0.5;
+    const blockRect = block.getBoundingClientRect();
+
+    if (clientY < prefixRect.top - verticalSlop && clientY < blockRect.top + readListMarkerColumnEdgeBand(blockRect, prefixRect)) {
+        const previous = getSiblingBlock(block, "previous");
+        return previous ? { block: previous, offset: 0 } : null;
+    }
+
+    if (clientY > prefixRect.bottom + verticalSlop && clientY > blockRect.bottom - readListMarkerColumnEdgeBand(blockRect, prefixRect)) {
+        const next = getSiblingBlock(block, "next");
+        return next ? { block: next, offset: 0 } : null;
+    }
+
+    return null;
+}
+
+function readListMarkerColumnEdgeBand(blockRect: DOMRect, prefixRect: DOMRect): number {
+    return Math.max(2, Math.min(8, (blockRect.height - prefixRect.height) + 1));
+}
+
 function isPointInsideSourceBand(block: HTMLElement, source: HTMLElement, clientX: number, clientY: number): boolean {
     const rect = source.getBoundingClientRect();
     if (source.classList.contains("format-block-source-prefix") && isPointInPrefixLineStartBand(block, rect, clientX, clientY)) {
@@ -395,12 +452,17 @@ function isPointInPrefixLineStartBand(
     }
 
     const contentRect = getBlockContent(block).getBoundingClientRect();
+    const leftBoundary = Math.min(sourceRect.left, contentRect.left);
     const rightBoundary = sourceRect.right + 4;
+    const verticalSlop = 0.5;
+    const topBoundary = Math.max(Math.min(contentRect.top, sourceRect.top), sourceRect.top - verticalSlop);
+    const bottomBoundary = Math.min(Math.max(contentRect.bottom, sourceRect.bottom), sourceRect.bottom + verticalSlop);
 
     return (
+        clientX >= leftBoundary &&
         clientX <= rightBoundary &&
-        clientY >= Math.min(contentRect.top, sourceRect.top) - 3 &&
-        clientY <= Math.max(contentRect.bottom, sourceRect.bottom) + 3
+        clientY >= topBoundary &&
+        clientY <= bottomBoundary
     );
 }
 

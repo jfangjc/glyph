@@ -1,4 +1,14 @@
 import { getElement } from "../utils/dom";
+import { findSourceBlockAtOffset } from "./core/block-index";
+import {
+    dispatch,
+    getEditorState,
+} from "./core/store";
+import {
+    sourceOffsetToDomPoint,
+    syncDomSelectionFromState,
+    syncStateSelectionFromDom,
+} from "./core/projection";
 import {
     findBlock,
     getBlockContent,
@@ -31,10 +41,13 @@ type FindOptions = {
 };
 
 type FindMatch = {
-    block: HTMLElement;
+    block: HTMLElement | null;
+    blockId?: string;
     blockIndex: number;
     startOffset: number;
     endOffset: number;
+    from: number;
+    to: number;
 };
 
 type FindReplaceElements = {
@@ -68,6 +81,7 @@ type InstallFindReplaceOptions = {
     editor: HTMLElement;
     shell: HTMLElement;
     onDirty: () => void;
+    isSourceFirstMarkdown: () => boolean;
 };
 
 const wholeWordCharacterPattern = /[\p{L}\p{N}_]/u;
@@ -76,6 +90,7 @@ export function installFindReplaceController({
     editor,
     shell,
     onDirty,
+    isSourceFirstMarkdown,
 }: InstallFindReplaceOptions): FindReplaceController {
     const elements = readFindReplaceElements();
     const replaceRow = getElement<HTMLElement>("replace-row");
@@ -156,8 +171,8 @@ export function installFindReplaceController({
     }
 
     function openPanel(expandReplace: boolean): void {
-        lastSearchAnchor = readEditorSelectionPoint() ?? readActiveMatchPoint() ?? lastSearchAnchor;
-        seedFindInputFromSelection();
+        lastSearchAnchor = readCurrentEditorSelectionPoint() ?? readActiveMatchPoint() ?? lastSearchAnchor;
+        seedFindInput();
         elements.panel.hidden = false;
         setReplaceExpanded(expandReplace);
         scanMatches(lastSearchAnchor, true);
@@ -220,7 +235,7 @@ export function installFindReplaceController({
     }
 
     function scanFromCurrentAnchor(): void {
-        scanMatches(readEditorSelectionPoint() ?? readActiveMatchPoint() ?? lastSearchAnchor, false);
+        scanMatches(readCurrentEditorSelectionPoint() ?? readActiveMatchPoint() ?? lastSearchAnchor, false);
     }
 
     function scanMatches(targetPoint: SearchPoint | null, keepActiveWhenPossible: boolean): void {
@@ -228,7 +243,7 @@ export function installFindReplaceController({
         const previousMatch = getActiveMatch();
 
         lastQuery = query;
-        matches = query ? collectMatches(query, options) : [];
+        matches = query ? (isSourceFirstMarkdown() ? collectSourceMatches(query, options) : collectMatches(query, options)) : [];
 
         if (matches.length === 0) {
             activeMatchIndex = -1;
@@ -285,7 +300,16 @@ export function installFindReplaceController({
             return;
         }
 
+        if (isSourceFirstMarkdown()) {
+            replaceCurrentSourceMatch(match);
+            return;
+        }
+
         const replacement = elements.replaceInput.value;
+        if (!match.block) {
+            return;
+        }
+
         const text = getBlockText(match.block);
         const nextText = text.slice(0, match.startOffset) + replacement + text.slice(match.endOffset);
         const nextPoint = {
@@ -315,11 +339,16 @@ export function installFindReplaceController({
             return;
         }
 
-        matches = collectMatches(lastQuery, options);
+        matches = isSourceFirstMarkdown() ? collectSourceMatches(lastQuery, options) : collectMatches(lastQuery, options);
         if (matches.length === 0) {
             activeMatchIndex = -1;
             syncControls();
             scheduleHighlightRedraw();
+            return;
+        }
+
+        if (isSourceFirstMarkdown()) {
+            replaceAllSourceMatches();
             return;
         }
 
@@ -350,6 +379,57 @@ export function installFindReplaceController({
         elements.replaceInput.select();
     }
 
+    function replaceCurrentSourceMatch(match: FindMatch): void {
+        const replacement = elements.replaceInput.value;
+        const nextPoint = {
+            blockIndex: match.blockIndex,
+            offset: match.from + replacement.length,
+        };
+
+        if (getEditorState().doc.slice(match.from, match.to) !== replacement) {
+            dispatch({
+                changes: [{ from: match.from, to: match.to, insert: replacement }],
+                selection: { anchor: nextPoint.offset, head: nextPoint.offset },
+                annotations: { userEvent: "format" },
+            });
+            onDirty();
+        } else {
+            dispatch({
+                changes: [],
+                selection: { anchor: nextPoint.offset, head: nextPoint.offset },
+                annotations: { userEvent: "programmatic", addToHistory: false },
+            });
+            syncDomSelectionFromState();
+        }
+
+        scanMatches(nextPoint, false);
+        const nextMatch = getActiveMatch();
+        if (nextMatch) {
+            selectMatch(nextMatch, { scroll: true });
+        }
+    }
+
+    function replaceAllSourceMatches(): void {
+        const replacement = elements.replaceInput.value;
+        const sourceMatches = collectSourceMatches(lastQuery, options);
+        if (sourceMatches.length === 0) {
+            activeMatchIndex = -1;
+            syncControls();
+            scheduleHighlightRedraw();
+            return;
+        }
+
+        dispatch({
+            changes: sourceMatches.map((match) => ({ from: match.from, to: match.to, insert: replacement })),
+            selection: { anchor: sourceMatches[0].from + replacement.length, head: sourceMatches[0].from + replacement.length },
+            annotations: { userEvent: "format" },
+        });
+        onDirty();
+        scanMatches(null, false);
+        elements.replaceInput.focus();
+        elements.replaceInput.select();
+    }
+
     function readValidActiveMatch(): FindMatch | null {
         let match = getActiveMatch();
         if (match && isMatchStillValid(match, lastQuery, options)) {
@@ -373,7 +453,8 @@ export function installFindReplaceController({
         selection.addRange(range);
 
         if (selectOptions.scroll) {
-            match.block.scrollIntoView({ block: "center", inline: "nearest" });
+            const block = match.block ?? (match.blockId ? document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(match.blockId)}"]`) : null);
+            block?.scrollIntoView({ block: "center", inline: "nearest" });
         }
 
         scheduleHighlightRedraw();
@@ -450,6 +531,10 @@ export function installFindReplaceController({
     }
 
     function findSameMatchIndex(match: FindMatch): number {
+        if (isSourceFirstMarkdown()) {
+            return matches.findIndex((candidate) => candidate.from === match.from && candidate.to === match.to);
+        }
+
         return matches.findIndex(
             (candidate) =>
                 candidate.block === match.block &&
@@ -465,6 +550,11 @@ export function installFindReplaceController({
 
         if (!point) {
             return 0;
+        }
+
+        if (isSourceFirstMarkdown()) {
+            const sourceIndex = matches.findIndex((match) => match.from >= point.offset);
+            return sourceIndex >= 0 ? sourceIndex : 0;
         }
 
         const index = matches.findIndex(
@@ -496,6 +586,13 @@ export function installFindReplaceController({
 
         const activeMatch = getActiveMatch();
         const selectedRange = getSelectedBlockRange();
+        if (isSourceFirstMarkdown()) {
+            const state = getEditorState();
+            const start = Math.min(state.selection.anchor, state.selection.head);
+            const end = Math.max(state.selection.anchor, state.selection.head);
+            return Boolean(activeMatch && start === activeMatch.from && end === activeMatch.to);
+        }
+
         return Boolean(
             activeMatch &&
                 selectedRange &&
@@ -504,6 +601,39 @@ export function installFindReplaceController({
                 selectedRange.startOffset === activeMatch.startOffset &&
                 selectedRange.endOffset === activeMatch.endOffset,
         );
+    }
+
+    function readCurrentEditorSelectionPoint(): SearchPoint | null {
+        if (!isSourceFirstMarkdown()) {
+            return readEditorSelectionPoint();
+        }
+
+        syncStateSelectionFromDom();
+        const state = getEditorState();
+        const block = findSourceBlockAtOffset(state.blocks, state.selection.head);
+
+        return {
+            blockIndex: block ? state.blocks.blocks.indexOf(block) : 0,
+            offset: state.selection.head,
+        };
+    }
+
+    function seedFindInput(): void {
+        if (!isSourceFirstMarkdown()) {
+            seedFindInputFromSelection();
+            return;
+        }
+
+        syncStateSelectionFromDom();
+        const state = getEditorState();
+        const start = Math.min(state.selection.anchor, state.selection.head);
+        const end = Math.max(state.selection.anchor, state.selection.head);
+        const selectedText = state.doc.slice(start, end);
+        if (!selectedText || selectedText.includes("\n")) {
+            return;
+        }
+
+        elements.findInput.value = selectedText;
     }
 }
 
@@ -525,11 +655,46 @@ function collectMatches(query: string, options: FindOptions): FindMatch[] {
         while (start >= 0) {
             const end = start + query.length;
             if (!options.wholeWord || isWholeWordMatch(text, start, end)) {
-                nextMatches.push({ block, blockIndex, startOffset: start, endOffset: end });
+                nextMatches.push({
+                    block,
+                    blockIndex,
+                    startOffset: start,
+                    endOffset: end,
+                    from: start,
+                    to: end,
+                });
             }
 
             start = haystack.indexOf(needle, Math.max(start + query.length, start + 1));
         }
+    }
+
+    return nextMatches;
+}
+
+function collectSourceMatches(query: string, options: FindOptions): FindMatch[] {
+    const state = getEditorState();
+    const needle = options.caseSensitive ? query : query.toLowerCase();
+    const haystack = options.caseSensitive ? state.doc : state.doc.toLowerCase();
+    const nextMatches: FindMatch[] = [];
+    let start = haystack.indexOf(needle);
+
+    while (start >= 0) {
+        const end = start + query.length;
+        if (!options.wholeWord || isWholeWordMatch(state.doc, start, end)) {
+            const block = findSourceBlockAtOffset(state.blocks, start);
+            nextMatches.push({
+                block: null,
+                blockId: block?.id,
+                blockIndex: block ? state.blocks.blocks.indexOf(block) : 0,
+                startOffset: block ? start - block.contentFrom : start,
+                endOffset: block ? end - block.contentFrom : end,
+                from: start,
+                to: end,
+            });
+        }
+
+        start = haystack.indexOf(needle, Math.max(start + query.length, start + 1));
     }
 
     return nextMatches;
@@ -597,6 +762,21 @@ function restoreTextInputFocus(input: HTMLInputElement, selection: TextInputSele
 }
 
 function createRangeForMatch(match: FindMatch): Range | null {
+    if (match.block === null) {
+        const start = sourceOffsetToDomPoint(match.from);
+        const end = sourceOffsetToDomPoint(match.to);
+        const range = document.createRange();
+
+        try {
+            range.setStart(start.node, start.offset);
+            range.setEnd(end.node, end.offset);
+        } catch {
+            return null;
+        }
+
+        return range;
+    }
+
     if (!match.block.isConnected) {
         return null;
     }
@@ -617,6 +797,20 @@ function createRangeForMatch(match: FindMatch): Range | null {
 }
 
 function isMatchStillValid(match: FindMatch, query: string, options: FindOptions): boolean {
+    if (match.block === null) {
+        const text = getEditorState().doc;
+        if (!query || match.to > text.length) {
+            return false;
+        }
+
+        const actual = text.slice(match.from, match.to);
+        const matchesQuery = options.caseSensitive
+            ? actual === query
+            : actual.toLowerCase() === query.toLowerCase();
+
+        return matchesQuery && (!options.wholeWord || isWholeWordMatch(text, match.from, match.to));
+    }
+
     if (!query || !match.block.isConnected) {
         return false;
     }
@@ -637,6 +831,10 @@ function isMatchStillValid(match: FindMatch, query: string, options: FindOptions
 function groupMatchesByBlock(matches: FindMatch[]): Map<HTMLElement, FindMatch[]> {
     const grouped = new Map<HTMLElement, FindMatch[]>();
     for (const match of matches) {
+        if (!match.block) {
+            continue;
+        }
+
         const blockMatches = grouped.get(match.block) ?? [];
         blockMatches.push(match);
         grouped.set(match.block, blockMatches);
@@ -650,6 +848,13 @@ function focusBlockAtReplacementEnd(block: HTMLElement, offset: number): void {
 }
 
 function matchStartPoint(match: FindMatch): SearchPoint {
+    if (match.block === null) {
+        return {
+            blockIndex: match.blockIndex,
+            offset: match.from,
+        };
+    }
+
     return {
         blockIndex: match.blockIndex,
         offset: match.startOffset,

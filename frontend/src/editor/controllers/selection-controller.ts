@@ -9,6 +9,8 @@ import {
     getBlockContent,
     getBlockIndex,
 } from "../blocks/view";
+import { readBlockType, type BlockType } from "../blocks/model";
+import { syncStateSelectionFromDom } from "../core/projection";
 import {
     syncDocumentOutlineToSelection,
 } from "../document-outline";
@@ -45,6 +47,15 @@ export function createSelectionController(options: SelectionControllerOptions): 
             return;
         }
 
+        if (
+            options.getActiveDocumentFormat().id === "markdown" &&
+            !options.isComposingText() &&
+            syncStateSelectionFromDom()
+        ) {
+            lastSelectionSignature = "";
+            return;
+        }
+
         if (selectionState.signature === lastSelectionSignature) {
             return;
         }
@@ -72,11 +83,11 @@ export function createSelectionController(options: SelectionControllerOptions): 
 
     function syncBlockSourceReveal(selectionState: DocumentEditorSelectionState): void {
         if (selectionState.isCollapsed) {
-            options.hooks.syncBlockSourceReveal(selectionState.focusBlock);
+            options.hooks.syncBlockSourceReveal(readCollapsedBlockSourceRevealTarget(selectionState));
             return;
         }
 
-        options.hooks.syncBlockSourceRevealBlocks(selectionState.selectedBlocks);
+        options.hooks.syncBlockSourceRevealBlocks(selectionState.selectedBlocks.filter(shouldRevealBlockSourceForRange));
     }
 }
 
@@ -170,6 +181,43 @@ function normalizeSourceSelection(selectionState: DocumentEditorSelectionState):
 
     focusSourceSelectionTarget(sourceTarget);
     return true;
+}
+
+function readCollapsedBlockSourceRevealTarget(selectionState: DocumentEditorSelectionState): HTMLElement | null {
+    const block = selectionState.focusBlock;
+    if (!block) {
+        return null;
+    }
+
+    const type = readBlockType(block.dataset.type);
+    if (!isListSourcePrefixOnlyType(type)) {
+        return block;
+    }
+
+    return isFocusedOnBlockPrefixSource(selectionState, block) ? block : null;
+}
+
+function shouldRevealBlockSourceForRange(block: HTMLElement): boolean {
+    return !isListSourcePrefixOnlyType(readBlockType(block.dataset.type));
+}
+
+function isFocusedOnBlockPrefixSource(
+    selectionState: DocumentEditorSelectionState,
+    block: HTMLElement,
+): boolean {
+    const sourceTarget = selectionState.sourceTarget;
+    const focusNode = selectionState.focusNode;
+    return Boolean(
+        sourceTarget?.kind === "block-source" &&
+        sourceTarget.block === block &&
+        sourceTarget.sourcePosition === "prefix" &&
+        focusNode &&
+        (focusNode === sourceTarget.source || sourceTarget.source.contains(focusNode)),
+    );
+}
+
+function isListSourcePrefixOnlyType(type: BlockType): boolean {
+    return type === "list" || type === "ordered-list" || type === "todo";
 }
 
 function readSelectionBoundaryOffset(block: HTMLElement | null, node: Node | null, offset: number): number {
