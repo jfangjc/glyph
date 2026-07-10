@@ -100,6 +100,14 @@ export function formatMarkdownTableSource(text: string): string {
 }
 
 export function readMarkdownTableCellStart(text: string, lineIndex: number, cellIndex: number): number | null {
+    return readMarkdownTableCellRange(text, lineIndex, cellIndex)?.start ?? null;
+}
+
+export function readMarkdownTableCellRange(
+    text: string,
+    lineIndex: number,
+    cellIndex: number,
+): { start: number; end: number } | null {
     const lines = text.split("\n");
     if (lineIndex < 0 || lineIndex >= lines.length) {
         return null;
@@ -107,7 +115,7 @@ export function readMarkdownTableCellStart(text: string, lineIndex: number, cell
 
     const lineStart = lines.slice(0, lineIndex).join("\n").length + (lineIndex > 0 ? 1 : 0);
     const cells = readMarkdownTableRowCellRanges(lines[lineIndex], lineStart);
-    return cells[cellIndex]?.start ?? null;
+    return cells[cellIndex] ?? null;
 }
 
 export function renderMarkdownBlock(
@@ -134,12 +142,20 @@ export function renderMarkdownBlock(
     }
 
     const header = table.header
-        .map((cell, index) => renderTableCell("th", cell, table.alignments[index], context, renderInline))
+        .map((cell, index) => renderTableCell("th", cell, table.alignments[index], 0, index, context, renderInline))
         .join("");
     const rows = table.rows
-        .map((row) => {
+        .map((row, rowIndex) => {
             const cells = table.alignments
-                .map((alignment, index) => renderTableCell("td", row[index] ?? "", alignment, context, renderInline))
+                .map((alignment, index) => renderTableCell(
+                    "td",
+                    row[index] ?? "",
+                    alignment,
+                    rowIndex + 2,
+                    index,
+                    context,
+                    renderInline,
+                ))
                 .join("");
             return `<tr>${cells}</tr>`;
         })
@@ -178,11 +194,13 @@ function renderTableCell(
     tag: "th" | "td",
     text: string,
     alignment: TableAlignment,
+    rowIndex: number,
+    columnIndex: number,
     context: DocumentRenderContext,
     renderInline: (text: string, context: DocumentRenderContext) => string,
 ): string {
     const align = alignment ? ` style="text-align: ${alignment}"` : "";
-    return `<${tag}${align}>${renderInline(text.trim(), context)}</${tag}>`;
+    return `<${tag}${align} data-table-source-row="${rowIndex}" data-table-source-column="${columnIndex}">${renderInline(text.trim(), context)}</${tag}>`;
 }
 
 function parseTableDelimiterRow(

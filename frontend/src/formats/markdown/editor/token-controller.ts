@@ -221,8 +221,11 @@ export function handleSelectionChange(selectionState: DocumentEditorSelectionSta
 export function clearPendingMarkdownTokenNavigation(): void {
 }
 
-export function commitActiveMarkdownTokenSource(): void {
-    clearActiveMarkdownToken({ suppressTokenActivationAtFocus: true });
+export function commitActiveMarkdownTokenSource(options: { refocus?: boolean } = {}): void {
+    clearActiveMarkdownToken({
+        suppressTokenActivationAtFocus: true,
+        refocus: options.refocus,
+    });
 }
 
 export function getFocusedMarkdownTokenSource(): HTMLElement | null {
@@ -494,6 +497,7 @@ function clearActiveMarkdownToken(
         focusBlock?: HTMLElement;
         focusOffset?: number;
         suppressTokenActivationAtFocus?: boolean;
+        refocus?: boolean;
     } = {},
 ): boolean {
     const activeTokens = getActiveMarkdownTokens();
@@ -528,7 +532,7 @@ function clearActiveMarkdownToken(
 
     activeMarkdownTokens.clear();
 
-    if (selectionBlock?.isConnected && selectionOffset !== null) {
+    if (options.refocus !== false && selectionBlock?.isConnected && selectionOffset !== null) {
         const focusOffset = Math.min(selectionOffset, getBlockText(selectionBlock).length);
 
         if (options.suppressTokenActivationAtFocus) {
@@ -656,8 +660,12 @@ function readFocusedMarkdownTokenSourceTarget(): MarkdownTokenSourceRange | null
         return selectedRange;
     }
 
-    const source = getFocusedMarkdownTokenSource();
     const selection = document.getSelection();
+    if (selection && !selection.isCollapsed) {
+        return null;
+    }
+
+    const source = getFocusedMarkdownTokenSource();
     const focusNode = selection?.focusNode;
     if (!source || !selection?.isCollapsed || !focusNode || (focusNode !== source && !source.contains(focusNode))) {
         return null;

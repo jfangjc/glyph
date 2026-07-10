@@ -1,5 +1,5 @@
 import { buildBlockIndex } from "./block-index";
-import { applyTransactionToDoc, normalizeSelection } from "./transaction";
+import { applyTransactionToDoc, mapSelection, normalizeSelection } from "./transaction";
 import type {
     EditorSnapshot,
     EditorState,
@@ -13,7 +13,18 @@ type HistoryEntry = {
     after: EditorSnapshot;
 };
 
+export type MappedSelectionBookmark = {
+    read: () => SelectionRange | null;
+    dispose: () => void;
+};
+
+type MutableSelectionBookmark = {
+    selection: SelectionRange;
+    disposed: boolean;
+};
+
 const maxHistoryEntries = 100;
+const typingBatchDelayMs = 1200;
 
 let editorState = freezeEditorState({
     doc: "",
@@ -24,6 +35,10 @@ let editorState = freezeEditorState({
 let listeners: EditorStateListener[] = [];
 let undoStack: HistoryEntry[] = [];
 let redoStack: HistoryEntry[] = [];
+let pendingTypingHistory: HistoryEntry | null = null;
+let pendingTypingUserEvent: "input" | "delete" | null = null;
+let typingBatchTimer: ReturnType<typeof setTimeout> | null = null;
+const selectionBookmarks = new Set<MutableSelectionBookmark>();
 let isRestoringHistory = false;
 let isNotifying = false;
 let queuedTransactions: Transaction[] = [];
@@ -41,6 +56,8 @@ export function replaceDocumentSource(
     selection: SelectionRange = { anchor: 0, head: 0 },
     annotation: Transaction["annotations"] = { userEvent: "programmatic", addToHistory: false },
 ): void {
+    disposeAllSelectionBookmarks();
+    flushSourceHistoryBatch();
     dispatch({
         changes: [{ from: 0, to: editorState.doc.length, insert: source }],
         selection,
@@ -66,11 +83,39 @@ export function subscribeEditorState(listener: EditorStateListener): () => void 
 }
 
 export function clearSourceHistory(): void {
+    clearTypingBatchTimer();
+    pendingTypingHistory = null;
+    pendingTypingUserEvent = null;
     undoStack = [];
     redoStack = [];
 }
 
+export function flushSourceHistoryBatch(): void {
+    clearTypingBatchTimer();
+    if (!pendingTypingHistory) {
+        return;
+    }
+
+    pushHistoryEntry(pendingTypingHistory, false);
+    pendingTypingHistory = null;
+    pendingTypingUserEvent = null;
+}
+
+export function createSelectionBookmark(selection: SelectionRange = editorState.selection): MappedSelectionBookmark {
+    const bookmark: MutableSelectionBookmark = {
+        selection: normalizeSelection(selection, editorState.doc.length),
+        disposed: false,
+    };
+    selectionBookmarks.add(bookmark);
+
+    return {
+        read: () => bookmark.disposed ? null : { ...bookmark.selection },
+        dispose: () => disposeSelectionBookmark(bookmark),
+    };
+}
+
 export function undoSourceHistory(): boolean {
+    flushSourceHistoryBatch();
     const entry = undoStack.pop();
     if (!entry) {
         return false;
@@ -87,6 +132,7 @@ export function undoSourceHistory(): boolean {
 }
 
 export function redoSourceHistory(): boolean {
+    flushSourceHistoryBatch();
     const entry = redoStack.pop();
     if (!entry) {
         return false;
@@ -115,11 +161,15 @@ function applyDispatch(transaction: Transaction): void {
         revision: previous.revision + 1,
     });
 
+    mapSelectionBookmarks(applied.changes);
+
     if (shouldRecordHistory(normalizedTransaction, nextDocChanged)) {
-        pushHistoryEntry({
+        recordHistoryEntry({
             before: createSnapshot(previous),
             after: createSnapshot(next),
-        });
+        }, normalizedTransaction);
+    } else if (!nextDocChanged && !selectionsEqual(previous.selection, next.selection)) {
+        flushSourceHistoryBatch();
     }
 
     editorState = next;
@@ -146,12 +196,82 @@ function shouldRecordHistory(transaction: Transaction, docChanged: boolean): boo
     return transaction.annotations?.userEvent !== "programmatic";
 }
 
-function pushHistoryEntry(entry: HistoryEntry): void {
+function recordHistoryEntry(entry: HistoryEntry, transaction: Transaction): void {
+    if (transaction.annotations?.historyMode !== "typing") {
+        flushSourceHistoryBatch();
+        pushHistoryEntry(entry);
+        return;
+    }
+
+    const userEvent = transaction.annotations?.userEvent === "delete" ? "delete" : "input";
+    if (pendingTypingHistory && pendingTypingUserEvent !== userEvent) {
+        flushSourceHistoryBatch();
+    }
+
+    if (pendingTypingHistory) {
+        pendingTypingHistory.after = entry.after;
+    } else {
+        redoStack = [];
+        pendingTypingHistory = entry;
+        pendingTypingUserEvent = userEvent;
+    }
+
+    scheduleTypingBatchFlush();
+    if (isTypingBoundaryTransaction(transaction)) {
+        flushSourceHistoryBatch();
+    }
+}
+
+function pushHistoryEntry(entry: HistoryEntry, clearRedo = true): void {
     undoStack.push(entry);
     if (undoStack.length > maxHistoryEntries) {
         undoStack.shift();
     }
-    redoStack = [];
+    if (clearRedo) {
+        redoStack = [];
+    }
+}
+
+function scheduleTypingBatchFlush(): void {
+    clearTypingBatchTimer();
+    typingBatchTimer = setTimeout(flushSourceHistoryBatch, typingBatchDelayMs);
+}
+
+function clearTypingBatchTimer(): void {
+    if (typingBatchTimer !== null) {
+        clearTimeout(typingBatchTimer);
+        typingBatchTimer = null;
+    }
+}
+
+function isTypingBoundaryTransaction(transaction: Transaction): boolean {
+    return transaction.changes.some((change) => change.insert !== "" && /[\s\p{P}]/u.test(change.insert));
+}
+
+function mapSelectionBookmarks(changes: Transaction["changes"]): void {
+    if (changes.length === 0) {
+        return;
+    }
+
+    for (const bookmark of selectionBookmarks) {
+        bookmark.selection = mapSelection(bookmark.selection, changes);
+    }
+}
+
+function disposeSelectionBookmark(bookmark: MutableSelectionBookmark): void {
+    bookmark.disposed = true;
+    selectionBookmarks.delete(bookmark);
+}
+
+function disposeAllSelectionBookmarks(): void {
+    for (const bookmark of selectionBookmarks) {
+        bookmark.disposed = true;
+    }
+    selectionBookmarks.clear();
+}
+
+function selectionsEqual(left: SelectionRange, right: SelectionRange): boolean {
+    return left.anchor === right.anchor && left.head === right.head;
 }
 
 function notifySubscribers(next: EditorState, previous: EditorState, transaction: Transaction): void {

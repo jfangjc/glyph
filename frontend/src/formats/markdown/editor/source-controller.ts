@@ -685,6 +685,11 @@ function readFocusedBlockMarkdownSourceTarget(): BlockMarkdownSourceRange | null
         return selectedRange;
     }
 
+    const selection = document.getSelection();
+    if (selection && !selection.isCollapsed) {
+        return null;
+    }
+
     const source = getFocusedBlockMarkdownSource();
     const sourceSelection = readFocusedBlockMarkdownSourceSelection();
     if (source && sourceSelection?.source === source) {
@@ -695,7 +700,6 @@ function readFocusedBlockMarkdownSourceTarget(): BlockMarkdownSourceRange | null
         };
     }
 
-    const selection = document.getSelection();
     const focusNode = selection?.focusNode;
     if (!source || !selection?.isCollapsed || !focusNode || (focusNode !== source && !source.contains(focusNode))) {
         return null;

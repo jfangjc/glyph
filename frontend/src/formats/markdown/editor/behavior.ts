@@ -29,6 +29,12 @@ import {
 
 export const markdownEditorBehavior: DocumentEditorBehavior = {
     install: installMarkdownEditorBehavior,
+    deactivate: (context) => {
+        commitActiveBlockMarkdownSource(null);
+        commitActiveMarkdownTokenSource({ refocus: false });
+        context.syncActiveBlockIndicator(null);
+        context.syncBlockSourceReveal(null);
+    },
     beforeInput: handleMarkdownBeforeInput,
     input: handleMarkdownInput,
     keydown: handleMarkdownKeydown,

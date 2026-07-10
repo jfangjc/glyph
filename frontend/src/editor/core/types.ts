@@ -19,6 +19,7 @@ export type Transaction = {
     annotations?: {
         userEvent?: "input" | "delete" | "paste" | "format" | "history" | "programmatic";
         addToHistory?: boolean;
+        historyMode?: "typing" | "discrete";
     };
 };
 

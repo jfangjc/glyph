@@ -147,6 +147,11 @@ export function installEditorController(): void {
             onEditorClick: inputController.handleEditorClick,
             onEditorCompositionStart: inputController.handleEditorCompositionStart,
             onEditorCompositionEnd: inputController.handleEditorCompositionEnd,
+            onEditorFocusOut: (event) => {
+                if (!(event.relatedTarget instanceof Node) || !dom.editor.contains(event.relatedTarget)) {
+                    inputController.deactivate();
+                }
+            },
             onTitleBeforeInput: titleController.handleTitleBeforeInput,
             onTitleKeydown: titleController.handleTitleKeydown,
             onTitleInput: titleController.handleTitleInput,
@@ -164,7 +169,10 @@ export function installEditorController(): void {
                     toggleFileTree: fileTree.toggle,
                 }),
             onWindowKeyup: syncLinkOpenIntentFromKeyboard,
-            onWindowBlur: clearLinkOpenIntent,
+            onWindowBlur: () => {
+                clearLinkOpenIntent();
+                inputController.deactivate();
+            },
             onDocumentStateChanged: () => {
                 selectionController.resetSelectionSignature();
                 syncDocumentFormatUi();

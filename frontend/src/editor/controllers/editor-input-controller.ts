@@ -28,7 +28,9 @@ import {
     readSelectedSourceText,
 } from "../core/commands";
 import {
+    createSelectionBookmark,
     dispatch,
+    flushSourceHistoryBatch,
     getEditorState,
     redoSourceHistory,
     undoSourceHistory,
@@ -36,9 +38,11 @@ import {
 import {
     domPointToSourceOffset,
     moveSourceSelectionVertically,
+    resetVerticalNavigationAffinity,
     syncDomSelectionFromState,
     syncStateSelectionFromDom,
 } from "../core/projection";
+import { reportEditorError } from "../editor-status";
 import {
     beginDiscreteUndoTransaction,
     beginTypingUndoTransaction,
@@ -78,6 +82,7 @@ import {
 const supportedPastedImageMimeTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 export type EditorInputController = {
+    deactivate: () => void;
     handleEditorMouseDown: (event: MouseEvent) => void;
     handleEditorChange: (event: Event) => void;
     handleEditorKeydown: (event: KeyboardEvent) => void;
@@ -107,6 +112,7 @@ export function createEditorInputController(options: EditorInputControllerOption
     let preCompositionSourceSelection = getEditorState().selection;
 
     return {
+        deactivate,
         handleEditorMouseDown,
         handleEditorChange,
         handleEditorKeydown,
@@ -122,6 +128,13 @@ export function createEditorInputController(options: EditorInputControllerOption
         handleEditorClick,
         isComposingText: () => isComposingText,
     };
+
+    function deactivate(): void {
+        flushPendingUndoTransaction();
+        flushSourceHistoryBatch();
+        resetVerticalNavigationAffinity();
+        options.getActiveDocumentFormat().editorBehavior?.deactivate?.(createDocumentEditorEventContext());
+    }
 
     function createDocumentEditorEventContext(): DocumentEditorEventContext {
         return {
@@ -145,9 +158,11 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorMouseDown(event: MouseEvent): void {
+        resetVerticalNavigationAffinity();
         const target = event.target;
         if (isSourceFirstMarkdown()) {
             flushPendingUndoTransaction();
+            flushSourceHistoryBatch();
         } else if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
             beginDiscreteUndoTransaction();
         } else {
@@ -456,6 +471,16 @@ export function createEditorInputController(options: EditorInputControllerOption
             return true;
         }
 
+        // Let beforeinput perform source-first range edits. The legacy Markdown
+        // keydown handler mutates DOM ranges directly, while handling deletion
+        // here can race selection projection; both leave EditorState out of sync.
+        if (
+            getSelectedBlockRange() &&
+            (isPlainTextKey(event) || event.key === "Backspace" || event.key === "Delete")
+        ) {
+            return true;
+        }
+
         if (matchesShortcutCommand(event, "edit:select-all", "markdown")) {
             event.preventDefault();
             dispatch({
@@ -510,10 +535,12 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         if (isPlainVerticalNavigationKey(event)) {
-            event.preventDefault();
             syncStateSelectionFromDom();
-            moveSourceSelectionVertically(event.key === "ArrowUp" ? "up" : "down");
-            return true;
+            if (moveSourceSelectionVertically(event.key === "ArrowUp" ? "up" : "down")) {
+                event.preventDefault();
+                return true;
+            }
+            return false;
         }
 
         return false;
@@ -593,13 +620,13 @@ export function createEditorInputController(options: EditorInputControllerOption
             }
 
             event.preventDefault();
-            void pasteSourceFirstMarkdownImage(image);
+            syncStateSelectionFromDom();
+            void pasteSourceFirstMarkdownImage(image, createSelectionBookmark());
             return true;
         }
 
         event.preventDefault();
-        syncStateSelectionFromDom();
-        dispatch(createPasteTransaction(getEditorState(), text));
+        pasteSourceText(text);
         return true;
     }
 
@@ -615,41 +642,57 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (text) {
             dispatch(createPasteTransaction(getEditorState(), text));
         } else if (image) {
-            void pasteSourceFirstMarkdownImage(image);
+            void pasteSourceFirstMarkdownImage(image, createSelectionBookmark());
         }
 
         return true;
     }
 
-    async function pasteSourceFirstMarkdownImage(image: File): Promise<void> {
-        let activeFilePath = options.getActiveFilePath();
-        if (!activeFilePath) {
-            const saved = await options.ensureDocumentSaved({
-                promptForPath: true,
-                suggestedFileName: getSuggestedFileName(),
-            });
-            if (!saved) {
+    async function pasteSourceFirstMarkdownImage(
+        image: File,
+        bookmark: ReturnType<typeof createSelectionBookmark>,
+    ): Promise<void> {
+        try {
+            let activeFilePath = options.getActiveFilePath();
+            if (!activeFilePath) {
+                const saved = await options.ensureDocumentSaved({
+                    promptForPath: true,
+                    suggestedFileName: getSuggestedFileName(),
+                });
+                if (!saved) {
+                    return;
+                }
+
+                activeFilePath = options.getActiveFilePath();
+            }
+
+            if (!activeFilePath) {
                 return;
             }
 
-            activeFilePath = options.getActiveFilePath();
-        }
-
-        if (!activeFilePath) {
-            return;
-        }
-
-        try {
             const dataUrl = await readFileAsDataUrl(image);
             const pastedImage = await savePastedImage(activeFilePath, dataUrl, image.name, image.type);
-            syncStateSelectionFromDom();
+            const selection = bookmark.read();
+            if (!selection) {
+                return;
+            }
+
+            const state = getEditorState();
             dispatch(createPasteTransaction(
-                getEditorState(),
+                { ...state, selection },
                 `![${escapeMarkdownImageAlt(image.name)}](${pastedImage.relativePath})`,
             ));
         } catch (error) {
             console.error("Failed to paste image:", error);
+            reportEditorError("Could not save the pasted image.");
+        } finally {
+            bookmark.dispose();
         }
+    }
+
+    function pasteSourceText(text: string): void {
+        syncStateSelectionFromDom();
+        dispatch(createPasteTransaction(getEditorState(), text));
     }
 
     function syncSourceSelectionFromDropPoint(event: DragEvent): void {

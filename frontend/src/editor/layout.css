@@ -235,3 +235,16 @@ body.app-titlebar-host .document-surface {
         display: none;
     }
 }
+.editor-status[data-state="error"] {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 20;
+    max-width: min(28rem, calc(100vw - 2rem));
+    padding: 0.6rem 0.8rem;
+    border: 1px solid color-mix(in srgb, #d33 55%, transparent);
+    border-radius: 0.4rem;
+    background: color-mix(in srgb, #d33 12%, var(--surface-color, #fff));
+    color: var(--text-color, inherit);
+    box-shadow: 0 0.3rem 1rem rgb(0 0 0 / 18%);
+}

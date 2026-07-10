@@ -2,7 +2,7 @@ import { findSourceBlockAtOffset } from "./block-index";
 import type { Change, EditorState, SourceBlock, Transaction } from "./types";
 
 export function createInsertTextTransaction(state: EditorState, text: string): Transaction {
-    return createReplaceSelectionTransaction(state, text, "input");
+    return createReplaceSelectionTransaction(state, text, "input", "typing");
 }
 
 export function createPasteTransaction(state: EditorState, text: string): Transaction {
@@ -80,7 +80,7 @@ export function createDeleteBackwardTransaction(state: EditorState): Transaction
         return createDeleteRangeTransaction(resetRange.from, resetRange.to, "delete");
     }
 
-    return createDeleteRangeTransaction(offset - 1, offset, "delete");
+    return createDeleteRangeTransaction(offset - 1, offset, "delete", "typing");
 }
 
 export function createDeleteForwardTransaction(state: EditorState): Transaction | null {
@@ -93,7 +93,7 @@ export function createDeleteForwardTransaction(state: EditorState): Transaction 
         return null;
     }
 
-    return createDeleteRangeTransaction(range.from, range.from + 1, "delete");
+    return createDeleteRangeTransaction(range.from, range.from + 1, "delete", "typing");
 }
 
 export function createCheckboxToggleTransaction(state: EditorState, blockId: string): Transaction | null {
@@ -180,6 +180,7 @@ function createReplaceSelectionTransaction(
     state: EditorState,
     text: string,
     userEvent: NonNullable<Transaction["annotations"]>["userEvent"],
+    historyMode?: NonNullable<Transaction["annotations"]>["historyMode"],
 ): Transaction {
     const range = orderedSelection(state);
     const head = range.from + text.length;
@@ -187,7 +188,7 @@ function createReplaceSelectionTransaction(
     return {
         changes: [{ from: range.from, to: range.to, insert: text }],
         selection: { anchor: head, head },
-        annotations: { userEvent },
+        annotations: { userEvent, historyMode },
     };
 }
 
@@ -195,11 +196,12 @@ function createDeleteRangeTransaction(
     from: number,
     to: number,
     userEvent: NonNullable<Transaction["annotations"]>["userEvent"],
+    historyMode?: NonNullable<Transaction["annotations"]>["historyMode"],
 ): Transaction {
     return {
         changes: [{ from, to, insert: "" }],
         selection: { anchor: from, head: from },
-        annotations: { userEvent },
+        annotations: { userEvent, historyMode },
     };
 }
 

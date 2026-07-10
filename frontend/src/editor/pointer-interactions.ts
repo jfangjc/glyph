@@ -18,11 +18,13 @@ import {
 import { getBlockSourceElement } from "./blocks/rendering";
 import { getElement } from "../utils/dom";
 import { clamp } from "../utils/text";
+import { readMarkdownTableCellRange } from "../formats/markdown/table";
 
 type PointerBlockTarget = {
     block: HTMLElement;
     offset: number;
     sourcePosition?: { node: Node; offset: number };
+    tableCell?: { lineIndex: number; cellIndex: number; progress: number };
 };
 
 type PointerDownSelection = {
@@ -229,6 +231,7 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
             block: directBlock,
             offset: getPointerCaretOffset(directBlock, clientX, clientY),
             sourcePosition,
+            tableCell: readTableCellPointerTarget(target, clientX),
         };
     }
 
@@ -240,6 +243,7 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
             block: pointBlock,
             offset: getPointerCaretOffset(pointBlock, clientX, clientY),
             sourcePosition,
+            tableCell: pointTarget instanceof Element ? readTableCellPointerTarget(pointTarget, clientX) : undefined,
         };
     }
 
@@ -637,9 +641,50 @@ function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
 
     pointerTarget.block.dataset.blockSourceActive = "true";
     const sourceLength = source.textContent?.length ?? 0;
-    focusPlainTextElement(source, pointerTarget.offset <= 0 ? 0 : sourceLength);
+    const tableCellOffset = type === "table"
+        ? readTableCellSourceOffset(source.textContent ?? "", pointerTarget.tableCell)
+        : null;
+    focusPlainTextElement(
+        source,
+        tableCellOffset ?? (pointerTarget.offset <= 0 ? 0 : sourceLength),
+    );
     hooks.onBlockActivated?.(pointerTarget.block);
     return true;
+}
+
+function readTableCellPointerTarget(
+    target: Element,
+    clientX: number,
+): PointerBlockTarget["tableCell"] {
+    const cell = target.closest<HTMLElement>("[data-table-source-row][data-table-source-column]");
+    const lineIndex = cell ? Number(cell.dataset.tableSourceRow) : Number.NaN;
+    const cellIndex = cell ? Number(cell.dataset.tableSourceColumn) : Number.NaN;
+    if (!cell || !Number.isInteger(lineIndex) || !Number.isInteger(cellIndex)) {
+        return undefined;
+    }
+
+    const rect = cell.getBoundingClientRect();
+    return {
+        lineIndex,
+        cellIndex,
+        progress: rect.width > 0 ? clamp((clientX - rect.left) / rect.width, 0, 1) : 0,
+    };
+}
+
+function readTableCellSourceOffset(
+    source: string,
+    target: PointerBlockTarget["tableCell"],
+): number | null {
+    if (!target) {
+        return null;
+    }
+
+    const range = readMarkdownTableCellRange(source, target.lineIndex, target.cellIndex);
+    if (!range) {
+        return null;
+    }
+
+    return range.start + Math.round((range.end - range.start) * target.progress);
 }
 
 function requestGutterHover(event: MouseEvent): void {

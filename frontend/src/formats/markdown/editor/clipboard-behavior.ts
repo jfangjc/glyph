@@ -20,13 +20,11 @@ import type {
 } from "../../types";
 import {
     deleteSelectedBlockMarkdownSourceText,
-    getFocusedBlockMarkdownSource,
     insertTextIntoFocusedBlockMarkdownSource,
     readSelectedBlockMarkdownSourceText,
 } from "./source-controller";
 import {
     deleteSelectedMarkdownTokenSourceText,
-    getFocusedMarkdownTokenSource,
     insertTextIntoFocusedMarkdownTokenSource,
     readSelectedMarkdownTokenSourceText,
 } from "./token-controller";
@@ -60,14 +58,8 @@ export function handleMarkdownCut(event: ClipboardEvent, context: DocumentEditor
 
 export function handleMarkdownPaste(event: ClipboardEvent, context: DocumentPasteContext): boolean | Promise<boolean> {
     const sourceText = readDataTransferText(event.clipboardData);
-    if (sourceText && getFocusedMarkdownSource()) {
-        event.preventDefault();
-        context.runDiscreteEdit(() => {
-            if (insertTextIntoFocusedMarkdownSource(sourceText.replace(/\r\n?/g, "\n"))) {
-                context.markEditorDirty();
-            }
-        });
-        return true;
+    if (sourceText) {
+        return false;
     }
 
     const block = getActiveBlock(event.target);
@@ -179,10 +171,6 @@ function readSelectedMarkdownSourceText(): string | null {
 
 function deleteSelectedMarkdownSourceText(): boolean {
     return deleteSelectedBlockMarkdownSourceText() || deleteSelectedMarkdownTokenSourceText();
-}
-
-function getFocusedMarkdownSource(): HTMLElement | null {
-    return getFocusedBlockMarkdownSource() ?? getFocusedMarkdownTokenSource();
 }
 
 function insertTextIntoFocusedMarkdownSource(text: string): boolean {

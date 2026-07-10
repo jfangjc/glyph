@@ -75,6 +75,7 @@ export type DocumentPasteContext = DocumentEditorEventContext & {
 
 export type DocumentEditorBehavior = {
     install?: (hooks: DocumentEditorHooks) => void;
+    deactivate?: (context: DocumentEditorEventContext) => void;
     beforeInput?: (event: InputEvent, context: DocumentEditorEventContext) => boolean;
     input?: (event: Event, context: DocumentEditorEventContext) => boolean;
     keydown?: (event: KeyboardEvent, context: DocumentEditorEventContext) => boolean;

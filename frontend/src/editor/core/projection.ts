@@ -41,6 +41,7 @@ const nativeSourceNavigationTimeoutMs = 500;
 type NativeSourceNavigationDirection = "forward" | "backward";
 
 let pendingNativeSourceNavigation: { direction: NativeSourceNavigationDirection; timestamp: number } | null = null;
+let verticalNavigationAffinity: { preferredColumn: number; revision: number } | null = null;
 
 export function applySourceBlockProjectionMetadata(blockElement: HTMLElement, block: SourceBlock): void {
     blockElement.dataset.blockId = block.id;
@@ -115,16 +116,26 @@ export function installNativeSourceNavigationTracker(editor: HTMLElement): void 
 export function moveSourceSelectionVertically(direction: "up" | "down"): boolean {
     const state = getEditorState();
     if (state.selection.anchor !== state.selection.head) {
+        resetVerticalNavigationAffinity();
         return false;
     }
 
-    const target = normalizeVerticalSourceNavigationTarget(
-        state,
-        state.selection.head,
-        findVerticalSourceNavigationOffset(state.doc, state.selection.head, direction),
-        direction,
-    );
+    if (verticalNavigationAffinity?.revision !== state.revision) {
+        verticalNavigationAffinity = null;
+    }
+
+    const currentLine = readSourceLineAtOffset(state.doc, state.selection.head);
+    const targetLine = readAdjacentSourceLine(state.doc, currentLine, direction);
+    if (!targetLine) {
+        resetVerticalNavigationAffinity();
+        return false;
+    }
+
+    const preferredColumn = verticalNavigationAffinity?.preferredColumn
+        ?? readNavigationColumn(state, currentLine, state.selection.head);
+    const target = readVerticalNavigationTarget(state, targetLine, preferredColumn);
     if (target === null) {
+        resetVerticalNavigationAffinity();
         return false;
     }
 
@@ -133,32 +144,16 @@ export function moveSourceSelectionVertically(direction: "up" | "down"): boolean
         selection: { anchor: target, head: target },
         annotations: { userEvent: "programmatic", addToHistory: false },
     });
+    verticalNavigationAffinity = {
+        preferredColumn,
+        revision: getEditorState().revision,
+    };
     syncDomSelectionFromState();
     return true;
 }
 
-function normalizeVerticalSourceNavigationTarget(
-    state: ReturnType<typeof getEditorState>,
-    fromOffset: number,
-    targetOffset: number | null,
-    direction: "up" | "down",
-): number | null {
-    if (targetOffset === null) {
-        return null;
-    }
-
-    const fromBlock = findSourceBlockAtOffset(state.blocks, fromOffset);
-    if (fromBlock && isPrefixNavigationOffset(fromBlock, fromOffset)) {
-        const adjacent = findAdjacentSourceBlock(state.blocks.blocks, fromBlock, direction === "up" ? -1 : 1);
-        return adjacent ? adjacent.contentFrom : targetOffset;
-    }
-
-    const targetBlock = findSourceBlockAtOffset(state.blocks, targetOffset);
-    if (targetBlock && isPrefixNavigationOffset(targetBlock, targetOffset)) {
-        return targetBlock.contentFrom;
-    }
-
-    return targetOffset;
+export function resetVerticalNavigationAffinity(): void {
+    verticalNavigationAffinity = null;
 }
 
 function findAdjacentSourceBlock(blocks: SourceBlock[], block: SourceBlock, delta: -1 | 1): SourceBlock | null {
@@ -166,11 +161,35 @@ function findAdjacentSourceBlock(blocks: SourceBlock[], block: SourceBlock, delt
     return index < 0 ? null : blocks[index + delta] ?? null;
 }
 
-function isPrefixNavigationOffset(block: SourceBlock, offset: number): boolean {
-    return offset >= block.sourceFrom && offset < block.contentFrom && canNavigatePastSourcePrefix(block);
+function readNavigationColumn(
+    state: ReturnType<typeof getEditorState>,
+    line: { from: number; to: number },
+    offset: number,
+): number {
+    const block = findSourceBlockAtOffset(state.blocks, offset);
+    const base = block && usesContentNavigationColumn(block, line)
+        ? Math.max(line.from, block.contentFrom)
+        : line.from;
+    return Math.max(0, offset - base);
 }
 
-function canNavigatePastSourcePrefix(block: SourceBlock): boolean {
+function readVerticalNavigationTarget(
+    state: ReturnType<typeof getEditorState>,
+    line: { from: number; to: number },
+    preferredColumn: number,
+): number | null {
+    const block = findSourceBlockAtOffset(state.blocks, line.from);
+    const base = block && usesContentNavigationColumn(block, line)
+        ? Math.max(line.from, block.contentFrom)
+        : line.from;
+    return Math.min(line.to, base + preferredColumn);
+}
+
+function usesContentNavigationColumn(block: SourceBlock, line: { from: number; to: number }): boolean {
+    if (line.from !== block.sourceFrom) {
+        return false;
+    }
+
     return (
         block.type === "list" ||
         block.type === "ordered-list" ||
@@ -265,8 +284,8 @@ export function syncStateSelectionFromDom(): boolean {
 
     const state = getEditorState();
     const nextSelection = {
-        anchor: domPointToSourceOffset(selection.anchorNode, selection.anchorOffset),
-        head: domPointToSourceOffset(selection.focusNode, selection.focusOffset),
+        anchor: selectionBoundaryToSourceOffset(selection, "anchor"),
+        head: selectionBoundaryToSourceOffset(selection, "focus"),
     };
     const navigationDirection = consumeNativeSourceNavigation();
     const nativeStepSelection = readNativeSourceNavigationStep(state, nextSelection, navigationDirection);
@@ -314,6 +333,77 @@ export function syncStateSelectionFromDom(): boolean {
     return false;
 }
 
+function selectionBoundaryToSourceOffset(selection: Selection, boundary: "anchor" | "focus"): number {
+    const node = boundary === "anchor" ? selection.anchorNode : selection.focusNode;
+    const offset = boundary === "anchor" ? selection.anchorOffset : selection.focusOffset;
+    if (!node) {
+        return clampOffset(getEditorState().selection.head, getEditorState().doc.length);
+    }
+
+    if (!selection.isCollapsed) {
+        const selectedTokenOffset = readSelectedSourceTokenBoundaryOffset(selection, node, offset);
+        if (selectedTokenOffset !== null) {
+            return selectedTokenOffset;
+        }
+    }
+
+    return domPointToSourceOffset(node, offset);
+}
+
+function readSelectedSourceTokenBoundaryOffset(selection: Selection, node: Node, offset: number): number | null {
+    const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    const block = findBlock(node);
+    if (!range || !block) {
+        return null;
+    }
+
+    const content = getBlockContent(block);
+    const previousToken = findAdjacentSelectedSourceToken(node, offset, "previous", range);
+    if (previousToken && content.contains(previousToken)) {
+        return readSourceTokenPreviewBoundaryOffset(content, previousToken, "end");
+    }
+
+    const nextToken = findAdjacentSelectedSourceToken(node, offset, "next", range);
+    if (nextToken && content.contains(nextToken)) {
+        return readSourceTokenPreviewBoundaryOffset(content, nextToken, "start");
+    }
+
+    return null;
+}
+
+function findAdjacentSelectedSourceToken(
+    node: Node,
+    offset: number,
+    direction: "previous" | "next",
+    range: Range,
+): HTMLElement | null {
+    const token = findAdjacentSourceToken(node, offset, direction);
+    if (!token || token.dataset.active === "true" || readRawSourceTokenText(token) === null) {
+        return null;
+    }
+
+    try {
+        return range.intersectsNode(token) ? token : null;
+    } catch {
+        return null;
+    }
+}
+
+function readSourceTokenPreviewBoundaryOffset(
+    content: HTMLElement,
+    token: HTMLElement,
+    edge: "start" | "end",
+): number | null {
+    const contentFrom = readDatasetNumber(content.dataset.sourceFrom);
+    const tokenRange = readSourceTokenRange(content, token);
+    if (contentFrom === null || !tokenRange) {
+        return null;
+    }
+
+    const tokenOffset = edge === "start" ? tokenRange.from : tokenRange.to;
+    return clampOffset(contentFrom + tokenOffset, getEditorState().doc.length);
+}
+
 function consumeNativeSourceNavigation(): NativeSourceNavigationDirection | null {
     const pending = pendingNativeSourceNavigation;
     pendingNativeSourceNavigation = null;
@@ -340,25 +430,24 @@ function readPlainNativeSourceNavigationDirection(event: KeyboardEvent): NativeS
     return null;
 }
 
-function findVerticalSourceNavigationOffset(doc: string, offset: number, direction: "up" | "down"): number | null {
-    const line = readSourceLineAtOffset(doc, offset);
-    const column = offset - line.from;
-
+function readAdjacentSourceLine(
+    doc: string,
+    line: { from: number; to: number },
+    direction: "up" | "down",
+): { from: number; to: number } | null {
     if (direction === "up") {
         if (line.from === 0) {
             return null;
         }
 
-        const previousLine = readSourceLineEndingAtOffset(doc, line.from - 1);
-        return previousLine.from + Math.min(column, previousLine.to - previousLine.from);
+        return readSourceLineEndingAtOffset(doc, line.from - 1);
     }
 
     if (line.to >= doc.length) {
         return null;
     }
 
-    const nextLine = readSourceLineAtOffset(doc, line.to + 1);
-    return nextLine.from + Math.min(column, nextLine.to - nextLine.from);
+    return readSourceLineAtOffset(doc, line.to + 1);
 }
 
 function readSourceLineAtOffset(doc: string, offset: number): { from: number; to: number } {

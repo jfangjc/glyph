@@ -25,6 +25,7 @@ type EditorEventHandlers = {
     onEditorClick: (event: MouseEvent) => void;
     onEditorCompositionStart: (event: CompositionEvent) => void;
     onEditorCompositionEnd: (event: CompositionEvent) => void;
+    onEditorFocusOut: (event: FocusEvent) => void;
     onTitleBeforeInput: (event: InputEvent) => void;
     onTitleKeydown: (event: KeyboardEvent) => void;
     onTitleInput: (event: Event) => void;
@@ -62,6 +63,7 @@ export function installEditorEventListeners(
     targets.editor.addEventListener("click", handlers.onEditorClick);
     targets.editor.addEventListener("compositionstart", handlers.onEditorCompositionStart);
     targets.editor.addEventListener("compositionend", handlers.onEditorCompositionEnd);
+    targets.editor.addEventListener("focusout", handlers.onEditorFocusOut);
     targets.title.addEventListener("beforeinput", handlers.onTitleBeforeInput);
     targets.title.addEventListener("keydown", handlers.onTitleKeydown);
     targets.title.addEventListener("input", handlers.onTitleInput);
