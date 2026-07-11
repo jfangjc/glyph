@@ -15,7 +15,9 @@ export type CodeBlockSourceParts = {
 export function getCodeBlockRawMarkdown(block: HTMLElement): string {
     const source = readCodeBlockSourceParts(block);
 
-    return source ? `${source.prefix}\n${source.text}\n${source.suffix}` : getRenderedContentText(getBlockContent(block));
+    return source
+        ? `${source.prefix}\n${source.text}${source.text === "" ? "" : "\n"}${source.suffix}`
+        : getRenderedContentText(getBlockContent(block));
 }
 
 export function readCodeBlockSourceParts(block: HTMLElement): CodeBlockSourceParts | null {

@@ -43,7 +43,11 @@ type NativeSourceNavigationDirection = "forward" | "backward";
 let pendingNativeSourceNavigation: { direction: NativeSourceNavigationDirection; timestamp: number } | null = null;
 let verticalNavigationAffinity: { preferredColumn: number; revision: number } | null = null;
 
-export function applySourceBlockProjectionMetadata(blockElement: HTMLElement, block: SourceBlock): void {
+export function applySourceBlockProjectionMetadata(
+    blockElement: HTMLElement,
+    block: SourceBlock,
+    documentSource: string,
+): void {
     blockElement.dataset.blockId = block.id;
     blockElement.dataset.sourceFrom = String(block.sourceFrom);
     blockElement.dataset.sourceTo = String(block.sourceTo);
@@ -53,6 +57,22 @@ export function applySourceBlockProjectionMetadata(blockElement: HTMLElement, bl
     const content = getBlockContent(blockElement);
     content.dataset.sourceFrom = String(block.contentFrom);
     content.dataset.sourceTo = String(block.contentTo);
+
+    if (block.type === "code") {
+        const prefix = getBlockSourceElement(content, "prefix");
+        const suffix = getBlockSourceElement(content, "suffix");
+        if (prefix) {
+            prefix.textContent = documentSource.slice(block.sourceFrom, block.contentFrom).replace(/\r?\n$/, "");
+        }
+        if (suffix) {
+            suffix.textContent = documentSource.slice(block.contentTo, block.sourceTo).replace(/^\r?\n/, "");
+        }
+
+        applySourceElementRange(prefix, block.sourceFrom);
+        applySourceElementRange(suffix, block.sourceTo, "end");
+        applySourceElementRange(getBlockSourceElement(content, "atomic"), block.sourceFrom);
+        return;
+    }
 
     applyPrefixSourceElementRange(getBlockSourceElement(content, "prefix"), block.sourceFrom, block.contentFrom);
     applySourceElementRange(getBlockSourceElement(content, "suffix"), block.sourceTo, "end");
@@ -133,7 +153,7 @@ export function moveSourceSelectionVertically(direction: "up" | "down"): boolean
 
     const preferredColumn = verticalNavigationAffinity?.preferredColumn
         ?? readNavigationColumn(state, currentLine, state.selection.head);
-    const target = readVerticalNavigationTarget(state, targetLine, preferredColumn);
+    const target = readVerticalNavigationTarget(state, currentLine, targetLine, preferredColumn, direction);
     if (target === null) {
         resetVerticalNavigationAffinity();
         return false;
@@ -175,14 +195,26 @@ function readNavigationColumn(
 
 function readVerticalNavigationTarget(
     state: ReturnType<typeof getEditorState>,
-    line: { from: number; to: number },
+    currentLine: { from: number; to: number },
+    targetLine: { from: number; to: number },
     preferredColumn: number,
+    direction: "up" | "down",
 ): number | null {
-    const block = findSourceBlockAtOffset(state.blocks, line.from);
-    const base = block && usesContentNavigationColumn(block, line)
-        ? Math.max(line.from, block.contentFrom)
-        : line.from;
-    return Math.min(line.to, base + preferredColumn);
+    const currentBlock = findSourceBlockAtOffset(state.blocks, currentLine.from);
+    const targetBlock = findSourceBlockAtOffset(state.blocks, targetLine.from);
+    if (
+        direction === "up" &&
+        targetBlock?.type === "code" &&
+        currentBlock?.id !== targetBlock.id &&
+        targetLine.to === targetBlock.sourceTo
+    ) {
+        return targetBlock.sourceTo;
+    }
+
+    const base = targetBlock && usesContentNavigationColumn(targetBlock, targetLine)
+        ? Math.max(targetLine.from, targetBlock.contentFrom)
+        : targetLine.from;
+    return Math.min(targetLine.to, base + preferredColumn);
 }
 
 function usesContentNavigationColumn(block: SourceBlock, line: { from: number; to: number }): boolean {
@@ -274,6 +306,7 @@ export function syncDomSelectionFromState(): void {
 
     clearActiveSourceTokensOutsideSelection();
     syncListBlockSourceActivationFromState(state);
+    syncCodeBlockSourceActivationFromState(state);
 }
 
 export function syncStateSelectionFromDom(): boolean {
@@ -538,6 +571,27 @@ function syncListBlockSourceActivationFromState(state: ReturnType<typeof getEdit
     }
 }
 
+function syncCodeBlockSourceActivationFromState(state: ReturnType<typeof getEditorState>): void {
+    const selectedFrom = Math.min(state.selection.anchor, state.selection.head);
+    const selectedTo = Math.max(state.selection.anchor, state.selection.head);
+    const codeBlocks = document.querySelectorAll<HTMLElement>("[data-block][data-type='code']");
+
+    for (const block of Array.from(codeBlocks)) {
+        const sourceBlock = state.blocks.blocks.find((candidate) => candidate.id === block.dataset.blockId);
+        const selectionTouchesBlock = Boolean(sourceBlock && (
+            state.selection.anchor === state.selection.head
+                ? state.selection.head >= sourceBlock.sourceFrom && state.selection.head <= sourceBlock.sourceTo
+                : selectedFrom <= sourceBlock.sourceTo && selectedTo >= sourceBlock.sourceFrom
+        ));
+
+        if (selectionTouchesBlock) {
+            block.dataset.blockSourceActive = "true";
+        } else {
+            delete block.dataset.blockSourceActive;
+        }
+    }
+}
+
 function readActiveListSourceBlock(state: ReturnType<typeof getEditorState>): SourceBlock | null {
     if (state.selection.anchor !== state.selection.head) {
         return null;
@@ -553,12 +607,13 @@ function readActiveListSourceBlock(state: ReturnType<typeof getEditorState>): So
 
 function isOffsetInsideSourceElement(source: HTMLElement, offset: number, sourceFrom: number, sourceTo: number): boolean {
     const position = readBlockSourcePosition(source);
+    const isCodeSource = source.closest<HTMLElement>("[data-block]")?.dataset.type === "code";
     if (position === "prefix") {
-        return offset >= sourceFrom && offset < sourceTo;
+        return offset >= sourceFrom && (isCodeSource ? offset <= sourceTo : offset < sourceTo);
     }
 
     if (position === "suffix") {
-        return offset > sourceFrom && offset <= sourceTo;
+        return (isCodeSource ? offset >= sourceFrom : offset > sourceFrom) && offset <= sourceTo;
     }
 
     return offset >= sourceFrom && offset <= sourceTo;

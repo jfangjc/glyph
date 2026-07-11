@@ -14,10 +14,7 @@ import {
 } from "./input-behavior";
 import { handleMarkdownKeydown } from "./keyboard-behavior";
 import {
-    commitActiveBlockMarkdownSource,
     configureMarkdownSourceController,
-    handleBlockMarkdownSourceClick,
-    syncActiveBlockMarkdownSource,
 } from "./source-controller";
 import {
     commitActiveMarkdownTokenSource,
@@ -30,7 +27,6 @@ import {
 export const markdownEditorBehavior: DocumentEditorBehavior = {
     install: installMarkdownEditorBehavior,
     deactivate: (context) => {
-        commitActiveBlockMarkdownSource(null);
         commitActiveMarkdownTokenSource({ refocus: false });
         context.syncActiveBlockIndicator(null);
         context.syncBlockSourceReveal(null);
@@ -40,22 +36,10 @@ export const markdownEditorBehavior: DocumentEditorBehavior = {
     keydown: handleMarkdownKeydown,
     mouseDown: handleMarkdownEditorMouseDown,
     click: (event) => {
-        if (handleBlockMarkdownSourceClick(event)) {
-            return true;
-        }
-
         handleMarkdownEditorClick(event);
         return true;
     },
     selectionChange: (_context, selection) => {
-        const sourceTarget = selection.sourceTarget;
-        const focusedBlockSource =
-            sourceTarget?.kind === "block-source" &&
-            selection.focusNode &&
-            (selection.focusNode === sourceTarget.source || sourceTarget.source.contains(selection.focusNode))
-                ? sourceTarget.source
-                : null;
-        syncActiveBlockMarkdownSource(selection.focusBlock, focusedBlockSource);
         handleMarkdownSelectionChange(selection);
         return true;
     },
@@ -64,7 +48,6 @@ export const markdownEditorBehavior: DocumentEditorBehavior = {
     paste: handleMarkdownPaste,
     drop: handleMarkdownDrop,
     beforeSerialize: () => {
-        commitActiveBlockMarkdownSource();
         commitActiveMarkdownTokenSource();
     },
 };
@@ -74,6 +57,6 @@ function installMarkdownEditorBehavior(hooks: DocumentEditorHooks): void {
         markEditorDirty: hooks.markEditorDirty,
     });
     configureMarkdownTokenController({
-        syncActiveBlockMarkdownSource,
+        syncActiveBlockMarkdownSource: () => {},
     });
 }

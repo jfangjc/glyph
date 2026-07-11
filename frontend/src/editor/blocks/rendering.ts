@@ -31,6 +31,19 @@ export function renderCodeBlockContent(content: HTMLElement, text: string, sourc
     appendBlockSourceElement(content, source.suffix, "suffix", false, source.suffixEditable);
 }
 
+export function updateCodeBlockBodyContent(content: HTMLElement, text: string): boolean {
+    const body = content.querySelector<HTMLElement>(".markdown-code-block-body");
+    if (!body) {
+        return false;
+    }
+
+    const renderedText = renderCodeBlockBodyText(text);
+    if (body.textContent !== renderedText) {
+        body.textContent = renderedText;
+    }
+    return true;
+}
+
 export function renderAtomicBlockContent(content: HTMLElement, source: BlockSource): void {
     content.replaceChildren();
     appendBlockSourceElement(content, source.atomic ?? source.prefix, "atomic", false, source.atomicEditable);
@@ -176,7 +189,7 @@ function appendPlainTextBodyElement(content: HTMLElement, text: string, highligh
 }
 
 function renderCodeBlockBodyText(text: string): string {
-    return text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
+    return text === "" || text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
 }
 
 function renderPlainTextContentText(text: string): string {

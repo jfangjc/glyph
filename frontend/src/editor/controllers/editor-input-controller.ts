@@ -21,6 +21,7 @@ import {
     createDeleteBackwardTransaction,
     createDeleteForwardTransaction,
     createEnterTransaction,
+    createIndentCodeTransaction,
     createIndentListTransaction,
     createInlineFormatTransaction,
     createInsertTextTransaction,
@@ -315,18 +316,8 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (isSourceFirstMarkdown()) {
             const insert = event.data ?? "";
             if (insert) {
-                dispatch({
-                    changes: [{
-                        from: Math.min(preCompositionSourceSelection.anchor, preCompositionSourceSelection.head),
-                        to: Math.max(preCompositionSourceSelection.anchor, preCompositionSourceSelection.head),
-                        insert,
-                    }],
-                    selection: {
-                        anchor: Math.min(preCompositionSourceSelection.anchor, preCompositionSourceSelection.head) + insert.length,
-                        head: Math.min(preCompositionSourceSelection.anchor, preCompositionSourceSelection.head) + insert.length,
-                    },
-                    annotations: { userEvent: "input" },
-                });
+                const state = getEditorState();
+                dispatch(createInsertTextTransaction({ ...state, selection: preCompositionSourceSelection }, insert));
             } else {
                 syncDomSelectionFromState();
             }
@@ -512,7 +503,9 @@ export function createEditorInputController(options: EditorInputControllerOption
 
         if (event.key === "Tab") {
             syncStateSelectionFromDom();
-            const transaction = createIndentListTransaction(getEditorState(), event.shiftKey ? -1 : 1);
+            const state = getEditorState();
+            const transaction = createIndentListTransaction(state, event.shiftKey ? -1 : 1)
+                ?? createIndentCodeTransaction(state, event.shiftKey ? -1 : 1);
             if (!transaction) {
                 return false;
             }

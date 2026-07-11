@@ -1274,7 +1274,7 @@ function getBlockRawMarkdownOffset(
         return sourceOffset;
     }
 
-    return source.prefix.length + 1 + source.text.length + 1 + sourceOffset;
+    return source.prefix.length + 1 + source.text.length + (source.text === "" ? 0 : 1) + sourceOffset;
 }
 
 function parseEditedRawMarkdownBlock(

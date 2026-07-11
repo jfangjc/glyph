@@ -207,7 +207,7 @@ function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
         return false;
     }
 
-    if (target.closest(".format-block-source[data-block-source-editable='true'], .markdown-token-editing")) {
+    if (target.closest(".markdown-token-editing")) {
         return true;
     }
 
@@ -621,6 +621,24 @@ function areCaretRectsOnSameLine(first: DOMRect, second: DOMRect): boolean {
 }
 
 function focusPointerTargetBlock(pointerTarget: PointerBlockTarget): void {
+    if (pointerTarget.sourcePosition) {
+        const selection = document.getSelection();
+        if (!selection) {
+            return;
+        }
+
+        const range = document.createRange();
+        const editor = getElement<HTMLElement>("editor");
+        pointerTarget.block.dataset.blockSourceActive = "true";
+        editor.focus({ preventScroll: true });
+        range.setStart(pointerTarget.sourcePosition.node, pointerTarget.sourcePosition.offset);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        hooks.onBlockActivated?.(pointerTarget.block);
+        return;
+    }
+
     if (focusAtomicPreviewSource(pointerTarget)) {
         return;
     }

@@ -1,5 +1,6 @@
 import {
     configureBlockView,
+    applyBlockProperties,
     createBlock,
     findBlock,
     getBlockText,
@@ -9,6 +10,7 @@ import {
     readEditorBlock,
     setBlockText,
 } from "../editor/blocks/view";
+import { updateCodeBlockBodyContent } from "../editor/blocks/rendering";
 import { readBlockType, type ParsedBlock } from "../editor/blocks/model";
 import { applySourceBlockProjectionMetadata } from "../editor/core/projection";
 import type { EditorState, SourceBlock } from "../editor/core/types";
@@ -114,14 +116,48 @@ export function replaceEditorBlocks(blocks: ParsedBlock[]): void {
 
 export function replaceEditorBlocksFromSourceState(state: EditorState): void {
     const { editor } = readEditorDom();
-    const nextBlocks = state.blocks.blocks.map((sourceBlock) => {
+    const currentBlocks = getEditorBlocks();
+    const nextBlocks = state.blocks.blocks.map((sourceBlock, index) => {
         const block = readParsedBlockFromSourceState(state, sourceBlock);
-        const element = createBlock(block.type, block.text, block);
-        applySourceBlockProjectionMetadata(element, sourceBlock);
+        const current = currentBlocks[index];
+        const element = current && readBlockType(current.dataset.type) === block.type
+            ? updateProjectedBlock(current, block)
+            : createBlock(block.type, block.text, block);
+        applySourceBlockProjectionMetadata(element, sourceBlock, state.doc);
         return element;
     });
 
-    editor.replaceChildren(...nextBlocks);
+    reconcileEditorBlocks(editor, currentBlocks, nextBlocks);
+}
+
+function updateProjectedBlock(element: HTMLElement, block: ParsedBlock): HTMLElement {
+    applyBlockProperties(element, block);
+    const content = element.querySelector<HTMLElement>(".block-content");
+    if (block.type === "code" && content && updateCodeBlockBodyContent(content, block.text)) {
+        return element;
+    }
+
+    if (getBlockText(element) !== block.text) {
+        setBlockText(element, block.text);
+    }
+    return element;
+}
+
+function reconcileEditorBlocks(editor: HTMLElement, currentBlocks: HTMLElement[], nextBlocks: HTMLElement[]): void {
+    const sharedLength = Math.min(currentBlocks.length, nextBlocks.length);
+    for (let index = 0; index < sharedLength; index += 1) {
+        if (currentBlocks[index] !== nextBlocks[index]) {
+            currentBlocks[index].replaceWith(nextBlocks[index]);
+        }
+    }
+
+    for (const stale of currentBlocks.slice(nextBlocks.length)) {
+        stale.remove();
+    }
+
+    for (const added of nextBlocks.slice(currentBlocks.length)) {
+        editor.append(added);
+    }
 }
 
 export function readParsedBlocksFromSourceState(state: EditorState): ParsedBlock[] {

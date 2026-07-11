@@ -441,10 +441,18 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
         const fence = readCodeFence(line);
 
         if (fence) {
+            const closingFenceIndex = lines.findIndex((candidate, candidateIndex) => (
+                candidateIndex > index && isClosingCodeFence(candidate, fence.marker)
+            ));
+            if (closingFenceIndex < 0) {
+                blocks.push({ type: "paragraph", text: line });
+                continue;
+            }
+
             const codeLines: string[] = [];
             index += 1;
 
-            while (index < lines.length && !isClosingCodeFence(lines[index], fence.marker)) {
+            while (index < closingFenceIndex) {
                 codeLines.push(lines[index]);
                 index += 1;
             }

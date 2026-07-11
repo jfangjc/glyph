@@ -132,12 +132,12 @@ function getDomTextOffsetForRenderedContentOffset(text: string, offset: number):
     let renderedOffset = 0;
 
     for (let index = 0; index < text.length; index += 1) {
-        if (text[index] === caretSpacerCharacter) {
-            continue;
-        }
-
         if (renderedOffset >= offset) {
             return index;
+        }
+
+        if (text[index] === caretSpacerCharacter) {
+            continue;
         }
 
         renderedOffset += 1;
