@@ -24,11 +24,21 @@ import {
     stripCaretSpacers,
 } from "../selection/rendered-content-dom";
 import { getElement } from "../../utils/dom";
+import { nextGraphemeBoundary, previousGraphemeBoundary } from "../../utils/text-boundaries";
 
 type DomPoint = {
     node: Node;
     offset: number;
 };
+
+type DomSelectionSnapshot = {
+    anchorNode: Node | null;
+    anchorOffset: number;
+    focusNode: Node | null;
+    focusOffset: number;
+};
+
+let projectedDomSelection: DomSelectionSnapshot | null = null;
 
 type SourceOffsetToDomPointOptions = {
     activateBlockSource?: boolean;
@@ -87,6 +97,8 @@ export function sourceOffsetToDomPoint(offset: number, options: SourceOffsetToDo
     if (!sourceBlock || !blockElement) {
         return fallbackEditorDomPoint();
     }
+
+    applySourceBlockProjectionMetadata(blockElement, sourceBlock, state.doc);
 
     const content = getBlockContent(blockElement);
     const sourcePoint = findSourceElementDomPoint(content, clampedOffset, options.activateBlockSource ?? false);
@@ -250,9 +262,14 @@ export function domPointToSourceOffset(node: Node, offset: number): number {
         return clampOffset(state.selection.head, state.doc.length);
     }
 
+    const sourceBlock = state.blocks.blocks.find((candidate) => candidate.id === block.dataset.blockId);
+    if (sourceBlock) {
+        applySourceBlockProjectionMetadata(block, sourceBlock, state.doc);
+    }
+
     const content = getBlockContent(block);
-    const contentFrom = readDatasetNumber(content.dataset.sourceFrom) ?? readDatasetNumber(block.dataset.contentFrom);
-    const contentTo = readDatasetNumber(content.dataset.sourceTo) ?? readDatasetNumber(block.dataset.contentTo);
+    const contentFrom = sourceBlock?.contentFrom ?? readDatasetNumber(content.dataset.sourceFrom) ?? readDatasetNumber(block.dataset.contentFrom);
+    const contentTo = sourceBlock?.contentTo ?? readDatasetNumber(content.dataset.sourceTo) ?? readDatasetNumber(block.dataset.contentTo);
     if (contentFrom === null || contentTo === null) {
         return clampOffset(state.selection.head, state.doc.length);
     }
@@ -282,6 +299,8 @@ export function syncDomSelectionFromState(): void {
         return;
     }
 
+    reconcileActiveSourceTokensFromState(state);
+
     const activateSourceTokens = state.selection.anchor === state.selection.head;
     const anchor = sourceOffsetToDomPoint(state.selection.anchor, {
         activateBlockSource: true,
@@ -307,6 +326,7 @@ export function syncDomSelectionFromState(): void {
     clearActiveSourceTokensOutsideSelection();
     syncListBlockSourceActivationFromState(state);
     syncCodeBlockSourceActivationFromState(state);
+    projectedDomSelection = readDomSelectionSnapshot(selection);
 }
 
 export function syncStateSelectionFromDom(): boolean {
@@ -314,6 +334,11 @@ export function syncStateSelectionFromDom(): boolean {
     if (!selection?.anchorNode || !selection.focusNode) {
         return false;
     }
+
+    if (projectedDomSelection && domSelectionMatchesSnapshot(selection, projectedDomSelection)) {
+        return false;
+    }
+    projectedDomSelection = null;
 
     const state = getEditorState();
     const nextSelection = {
@@ -364,6 +389,59 @@ export function syncStateSelectionFromDom(): boolean {
         annotations: { userEvent: "programmatic", addToHistory: false },
     });
     return false;
+}
+
+function readDomSelectionSnapshot(selection: Selection): DomSelectionSnapshot {
+    return {
+        anchorNode: selection.anchorNode,
+        anchorOffset: selection.anchorOffset,
+        focusNode: selection.focusNode,
+        focusOffset: selection.focusOffset,
+    };
+}
+
+function domSelectionMatchesSnapshot(selection: Selection, snapshot: DomSelectionSnapshot): boolean {
+    return (
+        selection.anchorNode === snapshot.anchorNode &&
+        selection.anchorOffset === snapshot.anchorOffset &&
+        selection.focusNode === snapshot.focusNode &&
+        selection.focusOffset === snapshot.focusOffset
+    );
+}
+
+function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditorState>): void {
+    const collapsed = state.selection.anchor === state.selection.head;
+    const activeTokens = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"));
+    const blocksToRender = new Set<HTMLElement>();
+
+    for (const token of activeTokens) {
+        const block = findBlock(token);
+        if (!block) {
+            continue;
+        }
+        const content = getBlockContent(block);
+        const contentFrom = readDatasetNumber(content.dataset.sourceFrom);
+        const tokenRange = readSourceTokenRange(content, token);
+        const tokenFrom = contentFrom !== null && tokenRange ? contentFrom + tokenRange.from : null;
+        const tokenTo = contentFrom !== null && tokenRange ? contentFrom + tokenRange.to : null;
+        const selectionInsideToken = Boolean(
+            collapsed &&
+            tokenFrom !== null &&
+            tokenTo !== null &&
+            state.selection.head > tokenFrom &&
+            state.selection.head < tokenTo,
+        );
+        if (!selectionInsideToken) {
+            blocksToRender.add(block);
+        }
+    }
+
+    for (const block of blocksToRender) {
+        const sourceBlock = state.blocks.blocks.find((candidate) => candidate.id === block.dataset.blockId);
+        if (sourceBlock) {
+            setBlockText(block, state.doc.slice(sourceBlock.contentFrom, sourceBlock.contentTo));
+        }
+    }
 }
 
 function selectionBoundaryToSourceOffset(selection: Selection, boundary: "anchor" | "focus"): number {
@@ -772,7 +850,9 @@ export function findSourceNavigationStepTarget(
     }
 
     const previousOffset = state.selection.head;
-    const targetOffset = direction === "forward" ? previousOffset + 1 : previousOffset - 1;
+    const targetOffset = direction === "forward"
+        ? nextGraphemeBoundary(state.doc, previousOffset)
+        : previousGraphemeBoundary(state.doc, previousOffset);
     if (targetOffset < 0 || targetOffset > state.doc.length) {
         return null;
     }
@@ -1054,18 +1134,27 @@ function activateRawSourceTokenAtOffset(token: HTMLElement, rawSource: string, o
     token.classList.add(markdownTokenEditingClass);
     token.contentEditable = "true";
     token.spellcheck = false;
+    token.setAttribute("role", "textbox");
+    token.setAttribute("aria-label", "Markdown source");
     token.replaceChildren(document.createTextNode(rawSource));
     return getPlainTextDomPoint(token, offset);
 }
 
 function clearActiveSourceTokensOutsideSelection(): void {
     const selection = document.getSelection();
+    const focusNode = selection?.focusNode ?? null;
+    const focusedActiveToken = focusNode
+        ? (focusNode instanceof Element ? focusNode : focusNode.parentElement)?.closest<HTMLElement>(
+            ".markdown-token[data-active='true']",
+        ) ?? null
+        : null;
     const focusBlock = findBlock(selection?.focusNode ?? null);
     const activeBlocks = Array.from(
         new Set(
             Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))
+                .filter((token) => token !== focusedActiveToken)
                 .map((token) => findBlock(token))
-                .filter((block): block is HTMLElement => Boolean(block) && block !== focusBlock),
+                .filter((block): block is HTMLElement => Boolean(block)),
         ),
     );
 
@@ -1073,6 +1162,11 @@ function clearActiveSourceTokensOutsideSelection(): void {
         if (block.isConnected) {
             setBlockText(block, getBlockText(block));
         }
+    }
+
+
+    if (!focusedActiveToken && focusBlock?.querySelector(".markdown-token[data-active='true']")) {
+        setBlockText(focusBlock, getBlockText(focusBlock));
     }
 }
 

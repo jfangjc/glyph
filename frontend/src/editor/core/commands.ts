@@ -1,5 +1,16 @@
 import { findSourceBlockAtOffset } from "./block-index";
 import type { Change, EditorState, SourceBlock, Transaction } from "./types";
+import {
+    nextGraphemeBoundary,
+    nextLineBoundary,
+    nextWordBoundary,
+    previousGraphemeBoundary,
+    previousLineBoundary,
+    previousWordBoundary,
+} from "../../utils/text-boundaries";
+
+export type DeleteDirection = "backward" | "forward";
+export type DeleteGranularity = "grapheme" | "word" | "soft-line" | "hard-line";
 
 export function createInsertTextTransaction(state: EditorState, text: string): Transaction {
     const normalizedText = normalizeInsertedText(text);
@@ -133,50 +144,49 @@ export function createIndentCodeTransaction(state: EditorState, delta: number): 
 }
 
 export function createDeleteBackwardTransaction(state: EditorState): Transaction | null {
+    return createDeleteTransaction(state, "backward", "grapheme");
+}
+
+export function createDeleteForwardTransaction(state: EditorState): Transaction | null {
+    return createDeleteTransaction(state, "forward", "grapheme");
+}
+
+export function createDeleteTransaction(
+    state: EditorState,
+    direction: DeleteDirection,
+    granularity: DeleteGranularity,
+): Transaction | null {
     const range = orderedSelection(state);
     if (range.from !== range.to) {
         return createDeleteRangeTransaction(range.from, range.to, "delete");
     }
 
     const offset = range.from;
-    if (offset <= 0) {
+    if (direction === "backward" && offset <= 0 || direction === "forward" && offset >= state.doc.length) {
         return null;
     }
 
-    const codeBoundaryNavigation = createCodeBoundaryNavigationTransaction(state, offset, "backward");
+    const codeBoundaryNavigation = createCodeBoundaryNavigationTransaction(state, offset, direction);
     if (codeBoundaryNavigation) {
         return codeBoundaryNavigation;
     }
 
-    const hiddenIndentRange = readHiddenListIndentRange(state, offset);
-    if (hiddenIndentRange && offset > hiddenIndentRange.from && offset <= hiddenIndentRange.to) {
-        return null;
+    if (direction === "backward") {
+        const hiddenIndentRange = readHiddenListIndentRange(state, offset);
+        if (hiddenIndentRange && offset > hiddenIndentRange.from && offset <= hiddenIndentRange.to) {
+            return null;
+        }
+
+        const resetRange = readResetBlockPrefixRange(state, offset);
+        if (resetRange) {
+            return createDeleteRangeTransaction(resetRange.from, resetRange.to, "delete");
+        }
     }
 
-    const resetRange = readResetBlockPrefixRange(state, offset);
-    if (resetRange) {
-        return createDeleteRangeTransaction(resetRange.from, resetRange.to, "delete");
-    }
-
-    return createDeleteRangeTransaction(offset - 1, offset, "delete", "typing");
-}
-
-export function createDeleteForwardTransaction(state: EditorState): Transaction | null {
-    const range = orderedSelection(state);
-    if (range.from !== range.to) {
-        return createDeleteRangeTransaction(range.from, range.to, "delete");
-    }
-
-    const codeBoundaryNavigation = createCodeBoundaryNavigationTransaction(state, range.from, "forward");
-    if (codeBoundaryNavigation) {
-        return codeBoundaryNavigation;
-    }
-
-    if (range.from >= state.doc.length) {
-        return null;
-    }
-
-    return createDeleteRangeTransaction(range.from, range.from + 1, "delete", "typing");
+    const boundary = readDeleteBoundary(state.doc, offset, direction, granularity);
+    return direction === "backward"
+        ? createDeleteRangeTransaction(boundary, offset, "delete", "typing")
+        : createDeleteRangeTransaction(offset, boundary, "delete", "typing");
 }
 
 export function createCheckboxToggleTransaction(state: EditorState, blockId: string): Transaction | null {
@@ -201,6 +211,10 @@ export function createCheckboxToggleTransaction(state: EditorState, blockId: str
 export function createInlineFormatTransaction(state: EditorState, marker: "*" | "**"): Transaction | null {
     const range = orderedSelection(state);
     if (range.from === range.to) {
+        const block = findSourceBlockAtOffset(state.blocks, range.from);
+        if (block && !isRichMarkdownBlock(block.type)) {
+            return null;
+        }
         return {
             changes: [{ from: range.from, to: range.to, insert: marker + marker }],
             selection: { anchor: range.from + marker.length, head: range.from + marker.length },
@@ -208,37 +222,86 @@ export function createInlineFormatTransaction(state: EditorState, marker: "*" | 
         };
     }
 
-    const selectedText = state.doc.slice(range.from, range.to);
-    const before = state.doc.slice(Math.max(0, range.from - marker.length), range.from);
-    const after = state.doc.slice(range.to, range.to + marker.length);
-    let changes: Change[];
-    let head: number;
-
-    if (selectedText.startsWith(marker) && selectedText.endsWith(marker) && selectedText.length >= marker.length * 2) {
-        changes = [
-            { from: range.to - marker.length, to: range.to, insert: "" },
-            { from: range.from, to: range.from + marker.length, insert: "" },
-        ];
-        head = range.to - marker.length * 2;
-    } else if (before === marker && after === marker) {
-        changes = [
-            { from: range.to, to: range.to + marker.length, insert: "" },
-            { from: range.from - marker.length, to: range.from, insert: "" },
-        ];
-        head = range.to - marker.length;
-    } else {
-        changes = [
-            { from: range.from, to: range.from, insert: marker },
-            { from: range.to, to: range.to, insert: marker },
-        ];
-        head = range.to + marker.length * 2;
+    const segments = readFormattableSegments(state, range);
+    if (segments.length === 0) {
+        return null;
     }
+
+    const removeFormatting = segments.every((segment) => readFormatRemoval(state.doc, segment, marker) !== null);
+    const changes = segments.flatMap((segment): Change[] => {
+        const removal = readFormatRemoval(state.doc, segment, marker);
+        if (removeFormatting && removal) {
+            return removal;
+        }
+        if (removal) {
+            return [];
+        }
+        return [
+            { from: segment.from, to: segment.from, insert: marker },
+            { from: segment.to, to: segment.to, insert: marker },
+        ];
+    });
+
+    const delta = changes.reduce((total, change) => total + change.insert.length - (change.to - change.from), 0);
+    const forward = state.selection.anchor <= state.selection.head;
+    const nextFrom = Math.max(0, range.from + Math.min(0, delta));
+    const nextTo = Math.max(nextFrom, range.to + delta);
 
     return {
         changes,
-        selection: { anchor: range.from, head },
+        selection: forward ? { anchor: nextFrom, head: nextTo } : { anchor: nextTo, head: nextFrom },
         annotations: { userEvent: "format" },
     };
+}
+
+function readFormattableSegments(
+    state: EditorState,
+    range: { from: number; to: number },
+): Array<{ from: number; to: number }> {
+    return state.blocks.blocks
+        .filter((block) => isRichMarkdownBlock(block.type))
+        .map((block) => ({
+            from: Math.max(range.from, block.contentFrom),
+            to: Math.min(range.to, block.contentTo),
+        }))
+        .filter((segment) => segment.from < segment.to && state.doc.slice(segment.from, segment.to).trim() !== "");
+}
+
+function readFormatRemoval(
+    doc: string,
+    segment: { from: number; to: number },
+    marker: "*" | "**",
+): Change[] | null {
+    const selected = doc.slice(segment.from, segment.to);
+    if (selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= marker.length * 2) {
+        return [
+            { from: segment.from, to: segment.from + marker.length, insert: "" },
+            { from: segment.to - marker.length, to: segment.to, insert: "" },
+        ];
+    }
+
+    if (
+        doc.slice(Math.max(0, segment.from - marker.length), segment.from) === marker &&
+        doc.slice(segment.to, segment.to + marker.length) === marker
+    ) {
+        return [
+            { from: segment.from - marker.length, to: segment.from, insert: "" },
+            { from: segment.to, to: segment.to + marker.length, insert: "" },
+        ];
+    }
+
+    return null;
+}
+
+function isRichMarkdownBlock(type: SourceBlock["type"]): boolean {
+    return (
+        type === "paragraph" ||
+        type === "quote" ||
+        type === "list" ||
+        type === "ordered-list" ||
+        type === "todo" ||
+        type.startsWith("heading-")
+    );
 }
 
 export function readSelectedSourceText(state: EditorState): string | null {
@@ -496,6 +559,23 @@ function createDeleteRangeTransaction(
         selection: { anchor: from, head: from },
         annotations: { userEvent, historyMode },
     };
+}
+
+function readDeleteBoundary(
+    doc: string,
+    offset: number,
+    direction: DeleteDirection,
+    granularity: DeleteGranularity,
+): number {
+    if (granularity === "word") {
+        return direction === "backward" ? previousWordBoundary(doc, offset) : nextWordBoundary(doc, offset);
+    }
+
+    if (granularity === "soft-line" || granularity === "hard-line") {
+        return direction === "backward" ? previousLineBoundary(doc, offset) : nextLineBoundary(doc, offset);
+    }
+
+    return direction === "backward" ? previousGraphemeBoundary(doc, offset) : nextGraphemeBoundary(doc, offset);
 }
 
 function orderedSelection(state: EditorState): { from: number; to: number } {

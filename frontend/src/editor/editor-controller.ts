@@ -122,6 +122,7 @@ export function installEditorController(): void {
         ensureMarkdownExportSaved,
         toggleFileTree: fileTree.toggle,
         isMarkdownDocument: () => documentState.activeFormatId === "markdown",
+        executeEditorCommand: inputController.executeCommand,
     });
 
     installEditorEventListeners(

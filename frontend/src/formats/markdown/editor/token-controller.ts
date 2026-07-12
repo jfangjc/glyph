@@ -23,6 +23,11 @@ import { getElement } from "../../../utils/dom";
 import { clamp } from "../../../utils/text";
 import { setPointerSelecting } from "../../../editor/pointer-interactions";
 import type { DocumentEditorSelectionState } from "../../types";
+import { dispatch } from "../../../editor/core/store";
+import {
+    domPointToSourceOffset,
+    syncDomSelectionFromState,
+} from "../../../editor/core/projection";
 
 type MarkdownTokenMatcher = (token: HTMLElement) => boolean;
 
@@ -79,7 +84,9 @@ export function handleEditorClick(event: MouseEvent): void {
             return;
         }
 
-        activateMarkdownTokenSourceAtPoint(token, event.clientX, event.clientY);
+        if (!selectMarkdownTokenSourceAtPoint(event.clientX, event.clientY)) {
+            activateMarkdownTokenSourceAtPoint(token, event.clientX, event.clientY);
+        }
         return;
     }
 
@@ -101,6 +108,22 @@ export function handleEditorClick(event: MouseEvent): void {
 
         void Browser.OpenURL(href).catch((error) => console.error("Failed to open URL:", error));
     }
+}
+
+function selectMarkdownTokenSourceAtPoint(clientX: number, clientY: number): boolean {
+    const position = getCaretPositionFromPoint(clientX, clientY);
+    if (!position) {
+        return false;
+    }
+
+    const offset = domPointToSourceOffset(position.node, position.offset);
+    dispatch({
+        changes: [],
+        selection: { anchor: offset, head: offset },
+        annotations: { userEvent: "programmatic", addToHistory: false },
+    });
+    syncDomSelectionFromState();
+    return true;
 }
 
 function scrollToInternalMarkdownAnchor(href: string): boolean {
@@ -284,6 +307,8 @@ function setActiveMarkdownToken(token: HTMLElement): HTMLElement | null {
     token.classList.add(editingTokenClass);
     token.contentEditable = "true";
     token.spellcheck = false;
+    token.setAttribute("role", "textbox");
+    token.setAttribute("aria-label", "Markdown source");
     token.replaceChildren(document.createTextNode(raw));
     activeMarkdownTokens.add(token);
     return token;

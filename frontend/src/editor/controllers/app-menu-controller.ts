@@ -2,9 +2,8 @@ import { Window } from "@wailsio/runtime";
 import { applyZoomShortcut } from "../../app/zoom";
 import { canUseWindowPrintRuntime } from "../../platform/runtime";
 import type { AppMenuCommandDetail } from "../../platform/window-controls/window-controls";
-import { redoSourceHistory, undoSourceHistory } from "../core/store";
 import type { FindReplaceController } from "../find-replace";
-import { redoHistoryChange, undoHistoryChange } from "./undo-controller";
+import type { EditorCommand } from "./editor-input-controller";
 
 export type AppMenuController = {
     handleAppMenuCommand: (event: CustomEvent<AppMenuCommandDetail>) => void;
@@ -22,6 +21,7 @@ type AppMenuControllerOptions = {
     ensureMarkdownExportSaved: () => Promise<boolean>;
     toggleFileTree: () => void;
     isMarkdownDocument: () => boolean;
+    executeEditorCommand: (command: EditorCommand) => Promise<void>;
 };
 
 export function createAppMenuController(options: AppMenuControllerOptions): AppMenuController {
@@ -51,30 +51,22 @@ export function createAppMenuController(options: AppMenuControllerOptions): AppM
                 void exportCurrentDocumentToPdf();
                 return;
             case "edit:undo":
-                if (options.isMarkdownDocument()) {
-                    undoSourceHistory();
-                } else {
-                    undoHistoryChange();
-                }
+                void options.executeEditorCommand("undo");
                 return;
             case "edit:redo":
-                if (options.isMarkdownDocument()) {
-                    redoSourceHistory();
-                } else {
-                    redoHistoryChange();
-                }
+                void options.executeEditorCommand("redo");
                 return;
             case "edit:cut":
-                runEditableCommand("cut");
+                void options.executeEditorCommand("cut");
                 return;
             case "edit:copy":
-                runEditableCommand("copy");
+                void options.executeEditorCommand("copy");
                 return;
             case "edit:paste":
-                runEditableCommand("paste");
+                void options.executeEditorCommand("paste");
                 return;
             case "edit:select-all":
-                selectAllFromMenu(options.editor);
+                void options.executeEditorCommand("select-all");
                 return;
             case "edit:find":
                 options.findReplaceController.openFind();
@@ -164,21 +156,6 @@ function waitForPreviewImages(root: HTMLElement): Promise<void> {
                 }),
         ),
     ).then(() => undefined);
-}
-
-function runEditableCommand(command: "cut" | "copy" | "paste"): void {
-    document.execCommand(command);
-}
-
-function selectAllFromMenu(editor: HTMLElement): void {
-    const activeElement = document.activeElement;
-    if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
-        activeElement.select();
-        return;
-    }
-
-    editor.focus();
-    document.execCommand("selectAll");
 }
 
 function assertUnhandledMenuCommand(command: never): never {

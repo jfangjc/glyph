@@ -38,12 +38,12 @@ export function installSourceStateDocumentIntegration(): void {
     }
 
     sourceStateIntegrationInstalled = true;
-    subscribeEditorState((next, previous) => {
+    subscribeEditorState((next, previous, transaction) => {
         if (documentState.activeFormatId !== "markdown" || next.doc === previous.doc) {
             return;
         }
 
-        syncMarkdownProjectionFromState(next);
+        syncMarkdownProjectionFromState(next, previous, transaction);
         documentState.hasUnsavedChanges = next.doc !== documentState.lastSavedContent;
         notifyDocumentStateChanged();
     });
@@ -147,18 +147,79 @@ function loadMarkdownDocument(documentFile: DocumentFile, format: DocumentFormat
     notifyDocumentStateChanged();
 }
 
-function syncMarkdownProjectionFromState(state: ReturnType<typeof getEditorState>): void {
+function syncMarkdownProjectionFromState(
+    state: ReturnType<typeof getEditorState>,
+    previous?: ReturnType<typeof getEditorState>,
+    transaction?: Parameters<Parameters<typeof subscribeEditorState>[0]>[2],
+): void {
+    const projectionStartedAt = readPerformanceNow();
     const format = getActiveDocumentFormat();
-    const blocks = readParsedBlocksFromSourceState(state);
-
-    loadDocumentRenderContext(format, blocks, format.readReferences?.(blocks) ?? {});
-    syncRenderBlockViewContext(format, documentState.activeFilePath);
-    replaceEditorBlocksFromSourceState(state);
-    applyDocumentRenderContext(format);
-    syncDocumentFooter(format);
-    syncDocumentPreview(format, {
-        activeFilePath: documentState.activeFilePath,
-        isSavingDocument: documentState.isSavingDocument,
-    });
+    const refreshRenderContext = shouldRefreshMarkdownRenderContext(state, previous, transaction);
+    const renderContextStartedAt = readPerformanceNow();
+    const blocks = refreshRenderContext ? readParsedBlocksFromSourceState(state) : null;
+    const renderContextChanged = blocks
+        ? loadDocumentRenderContext(format, blocks, format.readReferences?.(blocks) ?? {})
+        : false;
+    measureEditorPerformance("glyph:render-context", renderContextStartedAt);
+    if (renderContextChanged) {
+        syncRenderBlockViewContext(format, documentState.activeFilePath);
+    }
+    replaceEditorBlocksFromSourceState(state, previous);
+    if (renderContextChanged) {
+        applyDocumentRenderContext(format);
+        syncDocumentFooter(format);
+        syncDocumentPreview(format, {
+            activeFilePath: documentState.activeFilePath,
+            isSavingDocument: documentState.isSavingDocument,
+        });
+    }
+    const selectionStartedAt = readPerformanceNow();
     syncDomSelectionFromState();
+    measureEditorPerformance("glyph:selection-restoration", selectionStartedAt);
+    measureEditorPerformance("glyph:projection", projectionStartedAt);
+}
+
+function readPerformanceNow(): number {
+    return typeof performance === "undefined" ? 0 : performance.now();
+}
+
+function measureEditorPerformance(name: string, startedAt: number): void {
+    if (!import.meta.env.DEV || typeof performance === "undefined") {
+        return;
+    }
+    performance.measure(name, { start: startedAt, end: performance.now() });
+    if (performance.getEntriesByName(name).length > 100) {
+        performance.clearMeasures(name);
+    }
+}
+
+function shouldRefreshMarkdownRenderContext(
+    state: ReturnType<typeof getEditorState>,
+    previous: ReturnType<typeof getEditorState> | undefined,
+    transaction: Parameters<Parameters<typeof subscribeEditorState>[0]>[2] | undefined,
+): boolean {
+    if (!previous || !transaction) {
+        return true;
+    }
+
+    const contextTypes = new Set(["reference", "footnote-definition"]);
+    for (const change of transaction.changes) {
+        const removed = previous.doc.slice(change.from, change.to);
+        if (/[\n#\[\]<>`$|:]/.test(change.insert + removed)) {
+            return true;
+        }
+
+        const previousBlock = previous.blocks.blocks.find((block) => change.from <= block.sourceTo && change.to >= block.sourceFrom);
+        const nextBlock = state.blocks.blocks.find((block) => change.from <= block.sourceTo);
+        if (
+            previousBlock?.type.startsWith("heading-") ||
+            nextBlock?.type.startsWith("heading-") ||
+            previousBlock && contextTypes.has(previousBlock.type) ||
+            nextBlock && contextTypes.has(nextBlock.type)
+        ) {
+            return true;
+        }
+    }
+
+    return false;
 }

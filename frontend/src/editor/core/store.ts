@@ -149,15 +149,23 @@ export function redoSourceHistory(): boolean {
 }
 
 function applyDispatch(transaction: Transaction): void {
+    const transactionStartedAt = readPerformanceNow();
     const previous = editorState;
     const applied = applyTransactionToDoc(previous.doc, previous.selection, transaction);
     const normalizedTransaction = { ...transaction, changes: applied.changes };
     const nextDocChanged = applied.doc !== previous.doc;
     const nextSelection = normalizeSelection(applied.selection, applied.doc.length);
+    const blockIndexStartedAt = readPerformanceNow();
+    const blocks = buildBlockIndex(applied.doc, {
+        previousDoc: previous.doc,
+        previous: previous.blocks,
+        changes: applied.changes,
+    });
+    measureEditorPerformance("glyph:block-index", blockIndexStartedAt);
     const next = freezeEditorState({
         doc: applied.doc,
         selection: nextSelection,
-        blocks: buildBlockIndex(applied.doc, previous.blocks),
+        blocks,
         revision: previous.revision + 1,
     });
 
@@ -174,6 +182,21 @@ function applyDispatch(transaction: Transaction): void {
 
     editorState = next;
     notifySubscribers(next, previous, normalizedTransaction);
+    measureEditorPerformance("glyph:transaction", transactionStartedAt);
+}
+
+function readPerformanceNow(): number {
+    return typeof performance === "undefined" ? 0 : performance.now();
+}
+
+function measureEditorPerformance(name: string, startedAt: number): void {
+    if (!import.meta.env.DEV || typeof performance === "undefined") {
+        return;
+    }
+    performance.measure(name, { start: startedAt, end: performance.now() });
+    if (performance.getEntriesByName(name).length > 100) {
+        performance.clearMeasures(name);
+    }
 }
 
 function restoreSnapshot(snapshot: EditorSnapshot): void {

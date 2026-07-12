@@ -4,10 +4,17 @@ import {
     createBlock,
     findBlock,
     getBlockText,
+    getTodoCheckbox,
     getEditorBlocks,
     getSerializableEditorBlocks,
     isRichTextBlockType,
     readEditorBlock,
+    readBlockCodeFence,
+    readBlockIndent,
+    readBlockListMarker,
+    readBlockListNumber,
+    readBlockQuoteLevel,
+    readBlockRuleMarker,
     setBlockText,
 } from "../editor/blocks/view";
 import { updateCodeBlockBodyContent } from "../editor/blocks/rendering";
@@ -32,10 +39,17 @@ export function loadDocumentRenderContext(
     format: DocumentFormat,
     blocks: ParsedBlock[],
     fallbackReferences: DocumentReferenceMap,
-): void {
-    documentRenderContext = readFormatRenderContext(format, blocks, fallbackReferences);
+): boolean {
+    const nextContext = readFormatRenderContext(format, blocks, fallbackReferences);
+    const nextSnapshot = JSON.stringify(nextContext);
+    if (nextSnapshot === documentReferencesSnapshot) {
+        return false;
+    }
+
+    documentRenderContext = nextContext;
     documentReferences = documentRenderContext.references;
-    documentReferencesSnapshot = JSON.stringify(documentRenderContext);
+    documentReferencesSnapshot = nextSnapshot;
+    return true;
 }
 
 export function serializeDocumentBlocks(format: DocumentFormat, activeFilePath: string | null): ParsedBlock[] {
@@ -114,20 +128,63 @@ export function replaceEditorBlocks(blocks: ParsedBlock[]): void {
     focusBlockAtOffset(nextBlocks[0], 0);
 }
 
-export function replaceEditorBlocksFromSourceState(state: EditorState): void {
+export function replaceEditorBlocksFromSourceState(state: EditorState, previous?: EditorState): void {
     const { editor } = readEditorDom();
     const currentBlocks = getEditorBlocks();
-    const nextBlocks = state.blocks.blocks.map((sourceBlock, index) => {
+    const currentById = new Map(currentBlocks.map((block) => [block.dataset.blockId, block]));
+    const previousById = new Map(previous?.blocks.blocks.map((block) => [block.id, block]) ?? []);
+    const nextBlocks = state.blocks.blocks.map((sourceBlock) => {
         const block = readParsedBlockFromSourceState(state, sourceBlock);
-        const current = currentBlocks[index];
+        const current = currentById.get(sourceBlock.id);
+        const previousBlock = previousById.get(sourceBlock.id);
+        const sourceChanged = !previous || !previousBlock || !sourceBlocksEquivalent(state, sourceBlock, previous, previousBlock);
         const element = current && readBlockType(current.dataset.type) === block.type
-            ? updateProjectedBlock(current, block)
+            ? sourceChanged && projectedBlockNeedsUpdate(current, block) ? updateProjectedBlock(current, block) : current
             : createBlock(block.type, block.text, block);
-        applySourceBlockProjectionMetadata(element, sourceBlock, state.doc);
+        if (sourceChanged || !current) {
+            applySourceBlockProjectionMetadata(element, sourceBlock, state.doc);
+        }
         return element;
     });
 
     reconcileEditorBlocks(editor, currentBlocks, nextBlocks);
+}
+
+function sourceBlocksEquivalent(
+    state: EditorState,
+    block: SourceBlock,
+    previous: EditorState,
+    previousBlock: SourceBlock,
+): boolean {
+    return (
+        block.type === previousBlock.type &&
+        state.doc.slice(block.contentFrom, block.contentTo) === previous.doc.slice(previousBlock.contentFrom, previousBlock.contentTo) &&
+        block.indent === previousBlock.indent &&
+        block.checked === previousBlock.checked &&
+        block.codeFence === previousBlock.codeFence &&
+        block.codeInfo === previousBlock.codeInfo &&
+        block.listMarker === previousBlock.listMarker &&
+        block.listNumber === previousBlock.listNumber &&
+        block.quoteLevel === previousBlock.quoteLevel &&
+        block.ruleMarker === previousBlock.ruleMarker &&
+        block.mathSource === previousBlock.mathSource
+    );
+}
+
+function projectedBlockNeedsUpdate(element: HTMLElement, block: ParsedBlock): boolean {
+    const type = readBlockType(element.dataset.type);
+    return (
+        getBlockText(element) !== block.text ||
+        readBlockIndent(element) !== (block.indent ?? 0) ||
+        readBlockListMarker(element) !== block.listMarker ||
+        readBlockListNumber(element) !== block.listNumber ||
+        readBlockQuoteLevel(element) !== block.quoteLevel ||
+        readBlockCodeFence(element) !== block.codeFence ||
+        (element.dataset.codeInfo ?? "") !== (block.codeInfo ?? "") ||
+        readBlockRuleMarker(element) !== block.ruleMarker ||
+        (type === "todo" && getTodoCheckbox(element).checked !== Boolean(block.checked)) ||
+        (type === "math" && element.dataset.mathSource !== block.mathSource)
+    );
 }
 
 function updateProjectedBlock(element: HTMLElement, block: ParsedBlock): HTMLElement {
@@ -144,19 +201,19 @@ function updateProjectedBlock(element: HTMLElement, block: ParsedBlock): HTMLEle
 }
 
 function reconcileEditorBlocks(editor: HTMLElement, currentBlocks: HTMLElement[], nextBlocks: HTMLElement[]): void {
-    const sharedLength = Math.min(currentBlocks.length, nextBlocks.length);
-    for (let index = 0; index < sharedLength; index += 1) {
-        if (currentBlocks[index] !== nextBlocks[index]) {
-            currentBlocks[index].replaceWith(nextBlocks[index]);
+    const nextSet = new Set(nextBlocks);
+    for (const block of currentBlocks) {
+        if (!nextSet.has(block)) {
+            block.remove();
         }
     }
 
-    for (const stale of currentBlocks.slice(nextBlocks.length)) {
-        stale.remove();
-    }
-
-    for (const added of nextBlocks.slice(currentBlocks.length)) {
-        editor.append(added);
+    for (let index = 0; index < nextBlocks.length; index += 1) {
+        const next = nextBlocks[index];
+        const currentAtIndex = editor.children[index];
+        if (currentAtIndex !== next) {
+            editor.insertBefore(next, currentAtIndex ?? null);
+        }
     }
 }
 

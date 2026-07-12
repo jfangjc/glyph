@@ -1,4 +1,5 @@
 import { getSuggestedFileName } from "../../app/window-title";
+import { Clipboard } from "@wailsio/runtime";
 import { savePastedImage } from "../../bridge/documents";
 import {
     matchesShortcutCommand,
@@ -20,6 +21,7 @@ import {
     createCutTransaction,
     createDeleteBackwardTransaction,
     createDeleteForwardTransaction,
+    createDeleteTransaction,
     createEnterTransaction,
     createIndentCodeTransaction,
     createIndentListTransaction,
@@ -64,11 +66,19 @@ import {
 } from "../input/editor-input";
 import { handleEditorKeydown as handleEditorKeydownCommand } from "../input/editor-keydown";
 import { isPlainTextKey } from "../input/keyboard-events";
+import {
+    createMarkdownClipboardPayload,
+    htmlToMarkdown,
+    readMarkdownClipboardInsert,
+    writeMarkdownClipboardPayload,
+} from "../../formats/markdown/clipboard";
 import { handleEditorMouseDown as handleEditorMouseDownCommand } from "../pointer-interactions";
 import {
     getCaretPositionFromPoint,
     getSelectedBlockRange,
+    selectEditorContents,
 } from "../selection/caret";
+import { readEditorDom } from "../editor-dom";
 import {
     isTypingBoundaryKeydown,
     readBeforeInputUndoKind,
@@ -98,7 +108,18 @@ export type EditorInputController = {
     handleEditorDrop: (event: DragEvent) => void;
     handleEditorClick: (event: MouseEvent) => void;
     isComposingText: () => boolean;
+    executeCommand: (command: EditorCommand) => Promise<void>;
 };
+
+export type EditorCommand =
+    | "undo"
+    | "redo"
+    | "select-all"
+    | "bold"
+    | "italic"
+    | "copy"
+    | "cut"
+    | "paste";
 
 type EditorInputControllerOptions = {
     hooks: DocumentEditorHooks;
@@ -128,7 +149,219 @@ export function createEditorInputController(options: EditorInputControllerOption
         handleEditorDrop,
         handleEditorClick,
         isComposingText: () => isComposingText,
+        executeCommand,
     };
+
+    async function executeCommand(command: EditorCommand): Promise<void> {
+        const activeTextInput = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement
+            ? document.activeElement
+            : null;
+
+        if (command === "undo" || command === "redo") {
+            if (isSourceFirstMarkdown() && !activeTextInput) {
+                if (command === "undo") undoSourceHistory();
+                else redoSourceHistory();
+            } else if (command === "undo") {
+                undoHistoryChange();
+            } else {
+                redoHistoryChange();
+            }
+            return;
+        }
+
+        if (command === "bold" || command === "italic") {
+            if (!isSourceFirstMarkdown() || activeTextInput) {
+                return;
+            }
+            syncSourceSelectionForCommand();
+            const transaction = createInlineFormatTransaction(getEditorState(), command === "bold" ? "**" : "*");
+            if (transaction) {
+                dispatch(transaction);
+            } else {
+                reportEditorError("No formattable text selected");
+            }
+            return;
+        }
+
+        if (activeTextInput) {
+            await executeTextInputClipboardCommand(activeTextInput, command);
+            return;
+        }
+
+        if (command === "select-all") {
+            if (isSourceFirstMarkdown()) {
+                dispatch({
+                    changes: [],
+                    selection: { anchor: 0, head: getEditorState().doc.length },
+                    annotations: { userEvent: "programmatic", addToHistory: false },
+                });
+                syncDomSelectionFromState();
+            } else {
+                selectEditorContents(readEditorDom().editor);
+            }
+            return;
+        }
+
+        if (!isSourceFirstMarkdown()) {
+            await executeLegacyEditorClipboardCommand(command);
+            return;
+        }
+
+        if (command === "paste") {
+            syncSourceSelectionForCommand();
+            const bookmark = createSelectionBookmark();
+            try {
+                const text = await readNativeMarkdownClipboard();
+                const selection = bookmark.read();
+                if (text && selection) {
+                    const state = getEditorState();
+                    dispatch(createPasteTransaction({ ...state, selection }, text));
+                }
+            } catch (error) {
+                console.error("Failed to read clipboard:", error);
+                reportEditorError("Could not read the clipboard.");
+            } finally {
+                bookmark.dispose();
+            }
+            return;
+        }
+
+        syncSourceSelectionForCommand();
+        const state = getEditorState();
+        const selectedText = readSelectedSourceText(state);
+        if (selectedText === null) {
+            return;
+        }
+        const bookmark = createSelectionBookmark(state.selection);
+        try {
+            await writeNativeMarkdownClipboard(createMarkdownClipboardPayload(selectedText));
+            if (command === "cut") {
+                const selection = bookmark.read();
+                if (selection) {
+                    const current = getEditorState();
+                    const transaction = createCutTransaction({ ...current, selection });
+                    if (transaction) {
+                        dispatch(transaction);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error("Failed to write clipboard:", error);
+            reportEditorError("Could not write to the clipboard.");
+        } finally {
+            bookmark.dispose();
+        }
+    }
+
+    function syncSourceSelectionForCommand(): void {
+        const selection = getEditorState().selection;
+        if (selection.anchor === selection.head) {
+            syncStateSelectionFromDom();
+        }
+    }
+
+    async function executeTextInputClipboardCommand(
+        input: HTMLInputElement | HTMLTextAreaElement,
+        command: "copy" | "cut" | "paste" | "select-all",
+    ): Promise<void> {
+        if (command === "select-all") {
+            input.select();
+            return;
+        }
+
+        const start = input.selectionStart ?? 0;
+        const end = input.selectionEnd ?? start;
+        if (command === "copy" || command === "cut") {
+            if (start === end) return;
+            const value = input.value.slice(start, end);
+            await writeNativeMarkdownClipboard({ markdown: value, plainText: value, html: escapeClipboardText(value) });
+            if (command === "cut") {
+                input.setRangeText("", start, end, "start");
+                input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteByCut" }));
+            }
+            return;
+        }
+
+        const value = await readNativePlainClipboard();
+        input.setRangeText(value, start, end, "end");
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: value }));
+    }
+
+    async function executeLegacyEditorClipboardCommand(command: "copy" | "cut" | "paste"): Promise<void> {
+        const { editor } = readEditorDom();
+        if (command === "paste") {
+            const value = await readNativePlainClipboard();
+            const transfer = new DataTransfer();
+            transfer.setData("text/plain", value);
+            const target = document.getSelection()?.focusNode?.parentElement ?? editor;
+            target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
+            return;
+        }
+
+        const transfer = new DataTransfer();
+        editor.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: transfer }));
+        const value = transfer.getData("text/plain");
+        if (!value) return;
+        await writeNativeMarkdownClipboard({ markdown: value, plainText: value, html: escapeClipboardText(value) });
+        if (command === "cut") {
+            editor.dispatchEvent(new ClipboardEvent("cut", {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: new DataTransfer(),
+            }));
+        }
+    }
+
+    async function writeNativeMarkdownClipboard(payload: ReturnType<typeof createMarkdownClipboardPayload>): Promise<void> {
+        if (navigator.clipboard?.write && typeof ClipboardItem === "function") {
+            try {
+                const clipboardData: Record<string, Blob> = {
+                    "text/plain": new Blob([payload.plainText], { type: "text/plain" }),
+                    "text/html": new Blob([payload.html], { type: "text/html" }),
+                };
+                if (typeof ClipboardItem.supports !== "function" || ClipboardItem.supports("text/markdown")) {
+                    clipboardData["text/markdown"] = new Blob([payload.markdown], { type: "text/markdown" });
+                }
+                await navigator.clipboard.write([new ClipboardItem(clipboardData)]);
+                return;
+            } catch {
+                // Wails clipboard is the permission-safe desktop fallback.
+            }
+        }
+        await Clipboard.SetText(payload.markdown);
+    }
+
+    async function readNativeMarkdownClipboard(): Promise<string> {
+        if (navigator.clipboard?.read) {
+            try {
+                const items = await navigator.clipboard.read();
+                for (const type of ["text/markdown", "text/html", "text/plain"] as const) {
+                    const item = items.find((candidate) => candidate.types.includes(type));
+                    if (!item) continue;
+                    const value = await (await item.getType(type)).text();
+                    return type === "text/html" ? htmlToMarkdown(value) : value.replace(/\r\n?/g, "\n");
+                }
+            } catch {
+                // Wails clipboard is the permission-safe desktop fallback.
+            }
+        }
+        return (await Clipboard.Text()).replace(/\r\n?/g, "\n");
+    }
+
+    async function readNativePlainClipboard(): Promise<string> {
+        if (navigator.clipboard?.readText) {
+            try {
+                return (await navigator.clipboard.readText()).replace(/\r\n?/g, "\n");
+            } catch {
+                // Wails clipboard is the permission-safe desktop fallback.
+            }
+        }
+        return (await Clipboard.Text()).replace(/\r\n?/g, "\n");
+    }
+
+    function escapeClipboardText(value: string): string {
+        return `<pre>${value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>`;
+    }
 
     function deactivate(): void {
         flushPendingUndoTransaction();
@@ -205,21 +438,13 @@ export function createEditorInputController(options: EditorInputControllerOption
     function handleEditorKeydown(event: KeyboardEvent): void {
         if (matchesShortcutCommand(event, "edit:undo", "editor")) {
             event.preventDefault();
-            if (isSourceFirstMarkdown()) {
-                undoSourceHistory();
-            } else {
-                undoHistoryChange();
-            }
+            void executeCommand("undo");
             return;
         }
 
         if (matchesShortcutCommand(event, "edit:redo", "editor")) {
             event.preventDefault();
-            if (isSourceFirstMarkdown()) {
-                redoSourceHistory();
-            } else {
-                redoHistoryChange();
-            }
+            void executeCommand("redo");
             return;
         }
 
@@ -474,23 +699,14 @@ export function createEditorInputController(options: EditorInputControllerOption
 
         if (matchesShortcutCommand(event, "edit:select-all", "markdown")) {
             event.preventDefault();
-            dispatch({
-                changes: [],
-                selection: { anchor: 0, head: getEditorState().doc.length },
-                annotations: { userEvent: "programmatic", addToHistory: false },
-            });
-            syncDomSelectionFromState();
+            void executeCommand("select-all");
             return true;
         }
 
         const inlineFormat = readInlineFormatShortcut(event, "markdown");
         if (inlineFormat) {
             event.preventDefault();
-            syncStateSelectionFromDom();
-            const transaction = createInlineFormatTransaction(getEditorState(), inlineFormat === "bold" ? "**" : "*");
-            if (transaction) {
-                dispatch(transaction);
-            }
+            void executeCommand(inlineFormat);
             return true;
         }
 
@@ -518,9 +734,11 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (event.key === "Backspace" || event.key === "Delete") {
             event.preventDefault();
             syncStateSelectionFromDom();
-            const transaction = event.key === "Backspace"
-                ? createDeleteBackwardTransaction(getEditorState())
-                : createDeleteForwardTransaction(getEditorState());
+            const transaction = createDeleteTransaction(
+                getEditorState(),
+                event.key === "Backspace" ? "backward" : "forward",
+                readDeleteGranularityFromKeydown(event),
+            );
             if (transaction) {
                 dispatch(transaction);
             }
@@ -546,6 +764,13 @@ export function createEditorInputController(options: EditorInputControllerOption
 
         const transaction = readSourceFirstBeforeInputTransaction(event);
         if (!transaction) {
+            if (/^(?:insert|delete|format)/.test(event.inputType)) {
+                event.preventDefault();
+                console.warn(`Cancelled unsupported beforeinput operation: ${event.inputType}`);
+                syncDomSelectionFromState();
+                reportEditorError("An unsupported editing operation was safely cancelled.");
+                return true;
+            }
             return false;
         }
 
@@ -559,7 +784,10 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function readSourceFirstBeforeInputTransaction(event: InputEvent): (() => Parameters<typeof dispatch>[0] | null) | null {
-        if (event.inputType === "insertText" && event.data !== null) {
+        if (
+            (event.inputType === "insertText" || event.inputType === "insertReplacementText") &&
+            event.data !== null
+        ) {
             return () => createInsertTextTransaction(getEditorState(), event.data ?? "");
         }
 
@@ -575,23 +803,67 @@ export function createEditorInputController(options: EditorInputControllerOption
             return () => createDeleteForwardTransaction(getEditorState());
         }
 
+        if (event.inputType === "deleteWordBackward") {
+            return () => createDeleteTransaction(getEditorState(), "backward", "word");
+        }
+
+        if (event.inputType === "deleteWordForward") {
+            return () => createDeleteTransaction(getEditorState(), "forward", "word");
+        }
+
+        if (event.inputType === "deleteSoftLineBackward" || event.inputType === "deleteHardLineBackward") {
+            return () => createDeleteTransaction(
+                getEditorState(),
+                "backward",
+                event.inputType === "deleteSoftLineBackward" ? "soft-line" : "hard-line",
+            );
+        }
+
+        if (event.inputType === "deleteSoftLineForward" || event.inputType === "deleteHardLineForward") {
+            return () => createDeleteTransaction(
+                getEditorState(),
+                "forward",
+                event.inputType === "deleteSoftLineForward" ? "soft-line" : "hard-line",
+            );
+        }
+
+        if (event.inputType === "deleteEntireSoftLine") {
+            return () => createDeleteEntireLineTransaction();
+        }
+
         return null;
     }
 
+    function createDeleteEntireLineTransaction(): Parameters<typeof dispatch>[0] | null {
+        const state = getEditorState();
+        const head = state.selection.head;
+        const lineFrom = state.doc.lastIndexOf("\n", Math.max(0, head - 1)) + 1;
+        const nextBreak = state.doc.indexOf("\n", head);
+        const lineTo = nextBreak < 0 ? state.doc.length : Math.min(state.doc.length, nextBreak + 1);
+        if (lineFrom === lineTo) {
+            return null;
+        }
+        return {
+            changes: [{ from: lineFrom, to: lineTo, insert: "" }],
+            selection: { anchor: lineFrom, head: lineFrom },
+            annotations: { userEvent: "delete", historyMode: "typing" },
+        };
+    }
+
     function handleSourceFirstMarkdownCopy(event: ClipboardEvent): boolean {
-        syncStateSelectionFromDom();
+        syncSourceSelectionForCommand();
         const selectedText = readSelectedSourceText(getEditorState());
         if (selectedText === null || !event.clipboardData) {
             return false;
         }
 
         event.preventDefault();
-        writeSourceClipboardText(event.clipboardData, selectedText);
+        writeMarkdownClipboardPayload(event.clipboardData, createMarkdownClipboardPayload(selectedText));
         return true;
     }
 
     function handleSourceFirstMarkdownCut(event: ClipboardEvent): boolean {
-        syncStateSelectionFromDom();
+        syncSourceSelectionForCommand();
         const selectedText = readSelectedSourceText(getEditorState());
         const transaction = createCutTransaction(getEditorState());
         if (selectedText === null || !transaction || !event.clipboardData) {
@@ -599,14 +871,14 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         event.preventDefault();
-        writeSourceClipboardText(event.clipboardData, selectedText);
+        writeMarkdownClipboardPayload(event.clipboardData, createMarkdownClipboardPayload(selectedText));
         dispatch(transaction);
         return true;
     }
 
     function handleSourceFirstMarkdownPaste(event: ClipboardEvent): boolean {
-        const text = readDataTransferText(event.clipboardData);
-        if (!text) {
+        const insert = readMarkdownClipboardInsert(event.clipboardData);
+        if (!insert?.markdown) {
             const image = readClipboardImage(event.clipboardData);
             if (!image) {
                 return false;
@@ -619,7 +891,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         event.preventDefault();
-        pasteSourceText(text);
+        pasteSourceText(insert.markdown);
         return true;
     }
 
@@ -703,11 +975,6 @@ export function createEditorInputController(options: EditorInputControllerOption
         });
     }
 
-    function writeSourceClipboardText(clipboardData: DataTransfer, text: string): void {
-        clipboardData.setData("text/plain", text);
-        clipboardData.setData("text/markdown", text);
-    }
-
     function isSourceFirstMarkdown(): boolean {
         return options.getActiveDocumentFormat().id === "markdown";
     }
@@ -720,6 +987,16 @@ export function createEditorInputController(options: EditorInputControllerOption
             !event.metaKey &&
             !event.shiftKey
         );
+    }
+
+    function readDeleteGranularityFromKeydown(event: KeyboardEvent): "grapheme" | "word" | "hard-line" {
+        if (event.metaKey) {
+            return "hard-line";
+        }
+        if (event.ctrlKey || event.altKey) {
+            return "word";
+        }
+        return "grapheme";
     }
 
     function isDiscreteEditorKeydown(event: KeyboardEvent): boolean {
