@@ -1,6 +1,8 @@
 package launch
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,21 +14,81 @@ import (
 
 const OpenDocumentRequestedEvent = "glyph:open-document-requested"
 
-var supportedDocumentExtensions = []string{".md", ".markdown", ".tex", ".org", ".typ", ".txt", ".text"}
+type formatCatalog struct {
+	Formats []struct {
+		ID               string   `json:"id"`
+		Label            string   `json:"label"`
+		Extensions       []string `json:"extensions"`
+		DefaultExtension string   `json:"defaultExtension"`
+		DefaultFileName  string   `json:"defaultFileName"`
+		Adapter          string   `json:"adapter"`
+	} `json:"formats"`
+}
 
 func init() {
 	application.RegisterEvent[string](OpenDocumentRequestedEvent)
 }
 
 type Service struct {
-	app *application.App
-	mu  sync.Mutex
+	app                         *application.App
+	mu                          sync.Mutex
+	supportedDocumentExtensions []string
 
 	pendingOpenDocumentPaths []string
 }
 
-func NewService() *Service {
-	return &Service{}
+func NewService(supportedDocumentExtensions []string) *Service {
+	return &Service{supportedDocumentExtensions: append([]string(nil), supportedDocumentExtensions...)}
+}
+
+func ParseFileAssociations(data []byte) ([]string, error) {
+	var catalog formatCatalog
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		return nil, fmt.Errorf("parse format catalog: %w", err)
+	}
+	if len(catalog.Formats) == 0 {
+		return nil, fmt.Errorf("format catalog contains no formats")
+	}
+
+	ids := make(map[string]struct{}, len(catalog.Formats))
+	extensions := make(map[string]struct{})
+	associations := make([]string, 0)
+	for _, format := range catalog.Formats {
+		format.ID = strings.TrimSpace(format.ID)
+		if format.ID == "" {
+			return nil, fmt.Errorf("format catalog contains an empty id")
+		}
+		if strings.TrimSpace(format.Label) == "" || strings.TrimSpace(format.DefaultFileName) == "" {
+			return nil, fmt.Errorf("format %q is missing its label or default file name", format.ID)
+		}
+		if format.Adapter != "" && format.Adapter != "markdown" && format.Adapter != "latex" {
+			return nil, fmt.Errorf("unknown format adapter %q for format %q", format.Adapter, format.ID)
+		}
+		if _, exists := ids[format.ID]; exists {
+			return nil, fmt.Errorf("duplicate format id %q", format.ID)
+		}
+		ids[format.ID] = struct{}{}
+
+		defaultExtension := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(format.DefaultExtension), "."))
+		defaultFound := false
+		for _, extension := range format.Extensions {
+			extension = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(extension), "."))
+			if extension == "" {
+				return nil, fmt.Errorf("format %q contains an empty extension", format.ID)
+			}
+			if _, exists := extensions[extension]; exists {
+				return nil, fmt.Errorf("duplicate format extension %q", extension)
+			}
+			extensions[extension] = struct{}{}
+			associations = append(associations, "."+extension)
+			defaultFound = defaultFound || extension == defaultExtension
+		}
+		if !defaultFound {
+			return nil, fmt.Errorf("default extension %q is not registered for format %q", format.DefaultExtension, format.ID)
+		}
+	}
+
+	return associations, nil
 }
 
 func BindApp(service *Service, app *application.App) {
@@ -65,7 +127,7 @@ func (s *Service) queueArgs(args []string, workingDir string) {
 }
 
 func (s *Service) queueOpenDocumentPath(path string, workingDir string) {
-	resolvedPath, ok := resolveDocumentPath(path, workingDir)
+	resolvedPath, ok := s.resolveDocumentPath(path, workingDir)
 	if !ok {
 		return
 	}
@@ -92,17 +154,17 @@ func (s *Service) TakePendingOpenDocumentPaths() []string {
 	return paths
 }
 
-func FileAssociations() []string {
+func FileAssociations(supportedDocumentExtensions []string) []string {
 	return append([]string(nil), supportedDocumentExtensions...)
 }
 
-func resolveDocumentPath(path string, workingDir string) (string, bool) {
+func (s *Service) resolveDocumentPath(path string, workingDir string) (string, bool) {
 	trimmedPath := strings.TrimSpace(path)
 	if trimmedPath == "" || strings.Contains(trimmedPath, "://") {
 		return "", false
 	}
 
-	if !isSupportedDocumentExtension(filepath.Ext(trimmedPath)) {
+	if !s.isSupportedDocumentExtension(filepath.Ext(trimmedPath)) {
 		return "", false
 	}
 
@@ -119,9 +181,9 @@ func resolveDocumentPath(path string, workingDir string) (string, bool) {
 	return absolutePath, true
 }
 
-func isSupportedDocumentExtension(extension string) bool {
+func (s *Service) isSupportedDocumentExtension(extension string) bool {
 	extension = strings.ToLower(extension)
-	for _, supportedExtension := range supportedDocumentExtensions {
+	for _, supportedExtension := range s.supportedDocumentExtensions {
 		if extension == supportedExtension {
 			return true
 		}

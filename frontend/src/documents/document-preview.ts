@@ -3,10 +3,10 @@ import type { DocumentFormat, DocumentPreviewBehavior, DocumentPreviewContext } 
 let activePreviewBehavior: DocumentPreviewBehavior | null = null;
 
 export function syncDocumentPreview(format: DocumentFormat, context: DocumentPreviewContext): void {
-    if (activePreviewBehavior && activePreviewBehavior !== format.previewBehavior) {
+    if (activePreviewBehavior && activePreviewBehavior !== format.preview) {
         activePreviewBehavior.deactivate(context);
     }
 
-    activePreviewBehavior = format.previewBehavior ?? null;
+    activePreviewBehavior = format.preview ?? null;
     activePreviewBehavior?.sync(context);
 }

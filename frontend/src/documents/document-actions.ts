@@ -337,12 +337,12 @@ async function resolveSavePath(options: SaveDocumentOptions): Promise<string | n
         return resolveEditedActiveFilePath(
             documentState.activeFilePath,
             getElement<HTMLInputElement>("document-title").value,
-            getDocumentFormatById(documentState.activeFormatId).defaultExtension,
+            getDocumentFormatById(documentState.activeFormatId).descriptor.defaultExtension,
         );
     }
 
-    const defaultExtension = getDocumentFormatById(documentState.activeFormatId).defaultExtension;
-    const defaultFileName = getDocumentFormatById(documentState.activeFormatId).defaultFileName;
+    const defaultExtension = getDocumentFormatById(documentState.activeFormatId).descriptor.defaultExtension;
+    const defaultFileName = getDocumentFormatById(documentState.activeFormatId).descriptor.defaultFileName;
     const titleFileName = getElement<HTMLInputElement>("document-title").value.trim();
     const suggestedFileName =
         (options.suggestedFileName ??

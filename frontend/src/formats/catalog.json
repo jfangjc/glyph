@@ -1,0 +1,46 @@
+{
+    "formats": [
+        {
+            "id": "markdown",
+            "label": "Markdown",
+            "extensions": ["md", "markdown"],
+            "defaultExtension": "md",
+            "defaultFileName": "Untitled.md",
+            "adapter": "markdown",
+            "editableTitle": true
+        },
+        {
+            "id": "latex",
+            "label": "LaTeX",
+            "extensions": ["tex"],
+            "defaultExtension": "tex",
+            "defaultFileName": "Untitled.tex",
+            "adapter": "latex",
+            "editableTitle": false
+        },
+        {
+            "id": "org",
+            "label": "Org Mode",
+            "extensions": ["org"],
+            "defaultExtension": "org",
+            "defaultFileName": "Untitled.org",
+            "editableTitle": false
+        },
+        {
+            "id": "typst",
+            "label": "Typst",
+            "extensions": ["typ"],
+            "defaultExtension": "typ",
+            "defaultFileName": "Untitled.typ",
+            "editableTitle": false
+        },
+        {
+            "id": "plain-text",
+            "label": "Plain Text",
+            "extensions": ["txt", "text"],
+            "defaultExtension": "txt",
+            "defaultFileName": "Untitled.txt",
+            "editableTitle": false
+        }
+    ]
+}

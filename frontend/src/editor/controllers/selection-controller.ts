@@ -1,9 +1,4 @@
-import type {
-    DocumentEditorEventContext,
-    DocumentEditorHooks,
-    DocumentEditorSelectionState,
-    DocumentFormat,
-} from "../../formats/types";
+import type { DocumentEditorHooks, DocumentEditorSelectionState } from "../core/types";
 import {
     findBlock,
     getBlockContent,
@@ -28,7 +23,6 @@ export type SelectionController = {
 
 type SelectionControllerOptions = {
     hooks: DocumentEditorHooks;
-    getActiveDocumentFormat: () => DocumentFormat;
     isComposingText: () => boolean;
 };
 
@@ -48,7 +42,6 @@ export function createSelectionController(options: SelectionControllerOptions): 
         }
 
         if (
-            options.getActiveDocumentFormat().id === "markdown" &&
             !options.isComposingText() &&
             syncStateSelectionFromDom()
         ) {
@@ -62,23 +55,12 @@ export function createSelectionController(options: SelectionControllerOptions): 
 
         lastSelectionSignature = selectionState.signature;
         options.hooks.syncActiveBlockIndicator(selectionState.focusBlock);
-        options.getActiveDocumentFormat().editorBehavior?.selectionChange?.(
-            createDocumentEditorEventContext(),
-            selectionState,
-        );
         syncBlockSourceReveal(selectionState);
         syncDocumentOutlineToSelection();
     }
 
     function resetSelectionSignature(): void {
         lastSelectionSignature = "";
-    }
-
-    function createDocumentEditorEventContext(): DocumentEditorEventContext {
-        return {
-            ...options.hooks,
-            isComposingText: options.isComposingText(),
-        };
     }
 
     function syncBlockSourceReveal(selectionState: DocumentEditorSelectionState): void {

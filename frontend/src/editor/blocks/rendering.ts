@@ -1,5 +1,6 @@
 import { caretSpacerCharacter } from "../selection/rendered-content-dom";
 import { escapeHtml } from "../../utils/text";
+import { getPlainTextBoundaryOffset } from "../../utils/dom";
 
 export type BlockSource = {
     prefix?: string;
@@ -66,7 +67,7 @@ export function renderPreviewBlockContent(
     );
 
     const preview = document.createElement("div");
-    preview.className = className;
+    preview.className = `${className} format-block-preview`;
     preview.dataset.sourceIgnore = "true";
     preview.contentEditable = "false";
     // Format renderers must only return escaped or sanitized HTML.
@@ -206,27 +207,4 @@ function getBlockSourceClassName(position: BlockSourcePosition): string {
 function getPlainTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } {
     const text = root.firstChild ?? root.appendChild(document.createTextNode(""));
     return { node: text, offset: Math.min(offset, text.textContent?.length ?? 0) };
-}
-
-function getPlainTextBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
-    if (current === anchorNode) {
-        if (current.nodeType === Node.TEXT_NODE) {
-            return (current.textContent ?? "").slice(0, anchorOffset).length;
-        }
-
-        return Array.from(current.childNodes)
-            .slice(0, Math.max(0, anchorOffset))
-            .reduce((offset, child) => offset + (child.textContent ?? "").length, 0);
-    }
-
-    let offset = 0;
-    for (const child of Array.from(current.childNodes)) {
-        if (child === anchorNode || child.contains(anchorNode)) {
-            return offset + getPlainTextBoundaryOffset(child, anchorNode, anchorOffset);
-        }
-
-        offset += (child.textContent ?? "").length;
-    }
-
-    return offset;
 }

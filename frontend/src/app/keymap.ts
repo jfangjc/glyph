@@ -228,23 +228,6 @@ export function readInlineFormatShortcut(
     return null;
 }
 
-export function readZoomShortcut(event: KeyboardEvent): ZoomShortcut | null {
-    const command = readShortcutCommand(event, "global");
-    if (command === "view:zoom-in") {
-        return "in";
-    }
-
-    if (command === "view:zoom-out") {
-        return "out";
-    }
-
-    if (command === "view:zoom-reset") {
-        return "reset";
-    }
-
-    return null;
-}
-
 function matchesShortcutBinding(event: KeyboardEvent, binding: ShortcutBinding): boolean {
     if (binding.primary && !(event.ctrlKey || event.metaKey)) {
         return false;

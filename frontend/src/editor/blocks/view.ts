@@ -17,7 +17,6 @@ import {
     getRenderedContentText,
 } from "../selection/rendered-content-dom";
 import { escapeHtml } from "../../utils/text";
-import { readMathSourceText } from "../../formats/markdown/math";
 
 export type BlockEditingKind = "rich" | "plain" | "source-preview" | "atomic";
 
@@ -30,6 +29,7 @@ type BlockRenderContext = {
     renderBlockContent?: (type: BlockType, text: string, context: DocumentRenderContext) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
+    readInteractiveBlockText?: (type: BlockType, source: string) => string;
     plainTextHighlightPolicy?: PlainTextHighlightPolicy;
 };
 
@@ -690,23 +690,10 @@ export function getBlockText(block: HTMLElement): string {
     const content = getBlockContent(block);
     const type = readBlockType(block.dataset.type);
 
-    if (type === "table") {
-        const source = getBlockSourceElement(content, "atomic");
-        if (source) {
-            return source.textContent ?? "";
-        }
-    }
-
-    if (type === "math") {
-        const source = getBlockSourceElement(content, "atomic");
-        if (source) {
-            return readMathSourceText(source.textContent ?? "");
-        }
-    }
-
-    if (type === "html" || type === "definition-list") {
-        const source = getBlockSourceElement(content, "atomic");
-        return source?.textContent ?? "";
+    const interactiveSource = getBlockSourceElement(content, "atomic");
+    if (interactiveSource) {
+        const source = interactiveSource.textContent ?? "";
+        return renderContext.readInteractiveBlockText?.(type, source) ?? source;
     }
 
     if (isPlainTextBlockType(type)) {

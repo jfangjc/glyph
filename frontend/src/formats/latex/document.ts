@@ -1,26 +1,22 @@
 import type { BlockType } from "../../editor/blocks/model";
+import type { DocumentFormat, DocumentFormatDescriptor } from "../types";
 import { createSourceDocumentFormat } from "../source/document";
 import { latexPreviewBehavior } from "./preview";
 import { renderLatexSourceHtml } from "./source-highlight";
 
-export const latexDocumentFormat = createSourceDocumentFormat({
-    id: "latex",
-    label: "LaTeX",
-    extensions: ["tex"],
-    defaultExtension: "tex",
-    defaultFileName: "Untitled.tex",
-    renderPlainTextContent: renderLatexPlainTextContent,
-    previewBehavior: latexPreviewBehavior,
-    plainTextHighlightPolicy: {
-        liveMaxChars: 8000,
-        delayMs: 120,
-    },
-});
+export function createLatexDocumentFormat(descriptor: DocumentFormatDescriptor): DocumentFormat {
+    return createSourceDocumentFormat(descriptor, {
+        render: {
+            renderPlainTextContent: renderLatexPlainTextContent,
+            plainTextHighlightPolicy: {
+                liveMaxChars: 8000,
+                delayMs: 120,
+            },
+        },
+        preview: latexPreviewBehavior,
+    });
+}
 
 function renderLatexPlainTextContent(type: BlockType, text: string): string | null {
-    if (type !== "source") {
-        return null;
-    }
-
-    return renderLatexSourceHtml(text);
+    return type === "source" ? renderLatexSourceHtml(text) : null;
 }

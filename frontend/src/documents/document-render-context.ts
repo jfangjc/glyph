@@ -6,7 +6,6 @@ import {
     getBlockText,
     getTodoCheckbox,
     getEditorBlocks,
-    getSerializableEditorBlocks,
     isRichTextBlockType,
     readEditorBlock,
     readBlockCodeFence,
@@ -33,7 +32,6 @@ let documentReferences: DocumentReferenceMap = {};
 let documentRenderContext: DocumentRenderContext = { references: documentReferences };
 let documentReferencesSnapshot = "{}";
 let referenceRerenderRequestId = 0;
-let referenceSyncFrame = 0;
 
 export function loadDocumentRenderContext(
     format: DocumentFormat,
@@ -52,43 +50,9 @@ export function loadDocumentRenderContext(
     return true;
 }
 
-export function serializeDocumentBlocks(format: DocumentFormat, activeFilePath: string | null): ParsedBlock[] {
-    format.editorBehavior?.beforeSerialize?.();
-    if (!flushDocumentReferenceSync(format, activeFilePath)) {
-        syncDocumentReferences(format, activeFilePath);
-    }
-
-    return getSerializableEditorBlocks().map(readEditorBlock);
-}
-
-export function scheduleDocumentReferenceSync(
-    getFormat: () => DocumentFormat,
-    getActiveFilePath: () => string | null,
-): void {
-    if (referenceSyncFrame) {
-        return;
-    }
-
-    referenceSyncFrame = window.requestAnimationFrame(() => {
-        referenceSyncFrame = 0;
-        syncDocumentReferences(getFormat(), getActiveFilePath());
-    });
-}
-
-export function flushDocumentReferenceSync(format: DocumentFormat, activeFilePath: string | null): boolean {
-    if (referenceSyncFrame) {
-        window.cancelAnimationFrame(referenceSyncFrame);
-        referenceSyncFrame = 0;
-        syncDocumentReferences(format, activeFilePath);
-        return true;
-    }
-
-    return false;
-}
-
 export function syncDocumentReferences(activeFormat: DocumentFormat, activeFilePath: string | null): void {
     const blocks = getEditorBlocks().map(readEditorBlock);
-    const nextContext = readFormatRenderContext(activeFormat, blocks, activeFormat.readReferences?.(blocks) ?? {});
+    const nextContext = readFormatRenderContext(activeFormat, blocks, activeFormat.render.readReferences?.(blocks) ?? {});
     const nextReferencesSnapshot = JSON.stringify(nextContext);
     if (nextReferencesSnapshot === documentReferencesSnapshot) {
         applyDocumentRenderContext(activeFormat);
@@ -110,22 +74,14 @@ export function syncBlockViewContext(format: DocumentFormat, activeFilePath: str
 }
 
 export function applyDocumentRenderContext(format: DocumentFormat): void {
-    format.applyRenderContext?.(getEditorBlocks(), documentRenderContext);
+    format.render.applyRenderContext?.(getEditorBlocks(), documentRenderContext);
 }
 
 export function syncDocumentFooter(format: DocumentFormat): void {
     const { footer } = readEditorDom();
-    const html = format.renderDocumentFooter?.(documentRenderContext) ?? "";
+    const html = format.render.renderDocumentFooter?.(documentRenderContext) ?? "";
     footer.hidden = html === "";
     footer.innerHTML = html;
-}
-
-export function replaceEditorBlocks(blocks: ParsedBlock[]): void {
-    const { editor } = readEditorDom();
-    const nextBlocks = blocks.map((block) => createBlock(block.type, block.text, block));
-
-    editor.replaceChildren(...nextBlocks);
-    focusBlockAtOffset(nextBlocks[0], 0);
 }
 
 export function replaceEditorBlocksFromSourceState(state: EditorState, previous?: EditorState): void {
@@ -226,12 +182,13 @@ function createBlockViewContext(format: DocumentFormat, activeFilePath: string |
         context: documentRenderContext,
         references: documentReferences,
         activeFilePath,
-        renderInlineContent: format.renderInline,
-        renderPlainTextContent: format.renderPlainTextContent,
-        renderBlockContent: format.renderBlock,
-        hydrateRenderedContent: format.hydrateRenderedContent,
-        readBlockSource: format.readBlockSource,
-        plainTextHighlightPolicy: format.plainTextHighlightPolicy,
+        renderInlineContent: format.render.renderInline,
+        renderPlainTextContent: format.render.renderPlainTextContent,
+        renderBlockContent: format.render.renderBlock,
+        hydrateRenderedContent: format.render.hydrateRenderedContent,
+        readBlockSource: format.render.readBlockSource,
+        readInteractiveBlockText: format.render.readInteractiveBlockText,
+        plainTextHighlightPolicy: format.render.plainTextHighlightPolicy,
     });
 }
 
@@ -240,7 +197,7 @@ function readFormatRenderContext(
     blocks: ParsedBlock[],
     fallbackReferences: DocumentReferenceMap,
 ): DocumentRenderContext {
-    return format.readRenderContext?.(blocks) ?? { references: fallbackReferences };
+    return format.render.readRenderContext?.(blocks) ?? { references: fallbackReferences };
 }
 
 function readParsedBlockFromSourceState(state: EditorState, block: SourceBlock): ParsedBlock {

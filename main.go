@@ -21,13 +21,20 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed frontend/src/formats/catalog.json
+var formatCatalog []byte
+
 const (
 	windowCloseRequestedEvent = "glyph:window-close-requested"
 	windowCloseConfirmedEvent = "glyph:window-close-confirmed"
 )
 
 func main() {
-	launchService := launch.NewService()
+	fileAssociations, err := launch.ParseFileAssociations(formatCatalog)
+	if err != nil {
+		log.Fatal(err)
+	}
+	launchService := launch.NewService(fileAssociations)
 	windowStateStore := windowstate.New("Glyph")
 	savedWindowState := windowStateStore.Load()
 	var allowWindowClose atomic.Bool
@@ -43,7 +50,7 @@ func main() {
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
-		FileAssociations: launch.FileAssociations(),
+		FileAssociations: launch.FileAssociations(fileAssociations),
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: "app.glyph.editor",
 			ExitCode: 0,

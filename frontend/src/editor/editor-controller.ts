@@ -16,24 +16,20 @@ import {
 import {
     documentState,
     documentStateChangedEvent,
-    markDocumentDirty,
 } from "../documents/document-state";
 import {
     getActiveDocumentFormat,
     installSourceStateDocumentIntegration,
     loadDocument,
-    markEditorDirty,
     serializeDocument,
     syncBlockViewContext,
     syncDocumentFormatUi,
 } from "../documents/document-session";
 import { installFileTree, restoreLastOpenDirectory } from "../documents/file-tree";
-import type { DocumentEditorHooks } from "../formats/types";
-import { getDocumentFormats } from "../formats/registry";
+import type { DocumentEditorHooks } from "./core/types";
 import {
     appMenuCommandEvent,
 } from "../platform/window-controls/window-controls";
-import { configureBlockOperations } from "./blocks/operations";
 import {
     createAppMenuController,
 } from "./controllers/app-menu-controller";
@@ -87,8 +83,6 @@ export function installEditorController(): void {
     const findReplaceController = installFindReplaceController({
         editor: dom.editor,
         shell: dom.shell,
-        onDirty: markEditorDirty,
-        isSourceFirstMarkdown: () => documentState.activeFormatId === "markdown",
     });
     const inputController = createEditorInputController({
         hooks: editorHooks,
@@ -101,14 +95,12 @@ export function installEditorController(): void {
         isComposingText: inputController.isComposingText,
         hasActiveFileWithUnsavedChanges: () =>
             Boolean(documentState.activeFilePath && documentState.hasUnsavedChanges),
-        markDocumentDirty,
         saveDocument: () => saveCurrentDocument(),
         syncActiveBlockIndicator,
         syncBlockSourceReveal,
     });
     const selectionController = createSelectionController({
         hooks: editorHooks,
-        getActiveDocumentFormat,
         isComposingText: inputController.isComposingText,
     });
     const appMenuController = createAppMenuController({
@@ -119,9 +111,9 @@ export function installEditorController(): void {
         openDocument,
         openDirectory: fileTree.openDirectory,
         saveDocument: saveDocumentFromEditor,
-        ensureMarkdownExportSaved,
+        ensureExportSaved,
         toggleFileTree: fileTree.toggle,
-        isMarkdownDocument: () => documentState.activeFormatId === "markdown",
+        canExport: () => Boolean(getActiveDocumentFormat().export),
         executeEditorCommand: inputController.executeCommand,
     });
 
@@ -195,16 +187,13 @@ export function installEditorController(): void {
     });
     configurePointerInteractions({
         onBlockActivated: syncActiveBlockIndicator,
+        getProjectionCapability: () => getActiveDocumentFormat().projection,
     });
     installNativeSourceNavigationTracker(dom.editor);
     configureEditorUiState({
-        hasBlockSource: (type) => Boolean(getActiveDocumentFormat().hasBlockSource?.(type)),
+        hasBlockSource: (type) => Boolean(getActiveDocumentFormat().render.hasBlockSource?.(type)),
     });
     installSourceStateDocumentIntegration();
-    installDocumentFormatEditorBehaviors(editorHooks);
-    configureBlockOperations({
-        parseFragment: (content) => getActiveDocumentFormat().parseFragment(content),
-    });
     bindDocumentActions({ loadDocument, serializeDocument });
     installOpenDocumentRequests();
     installWindowCloseRequests(getSuggestedFileName);
@@ -224,16 +213,8 @@ async function restoreStartupDocument(): Promise<void> {
     }
 }
 
-function installDocumentFormatEditorBehaviors(hooks: DocumentEditorHooks): void {
-    for (const format of getDocumentFormats()) {
-        format.editorBehavior?.install?.(hooks);
-    }
-}
-
 function createDocumentEditorHooks(): DocumentEditorHooks {
     return {
-        markDocumentDirty,
-        markEditorDirty,
         syncActiveBlockIndicator,
         syncBlockSourceReveal,
         syncBlockSourceRevealBlocks,
@@ -254,7 +235,7 @@ async function saveDocumentFromEditor(promptForPath = false): Promise<void> {
     });
 }
 
-async function ensureMarkdownExportSaved(): Promise<boolean> {
+async function ensureExportSaved(): Promise<boolean> {
     if (!canUseDesktopFileSystem()) {
         return true;
     }

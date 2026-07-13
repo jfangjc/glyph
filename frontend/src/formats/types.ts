@@ -1,10 +1,6 @@
-import type { BlockType, ParsedBlock, ParsedDocument } from "../editor/blocks/model";
-import type { BlockSource, BlockSourcePosition } from "../editor/blocks/rendering";
-
-export type DocumentFileLike = {
-    name: string;
-    content: string;
-};
+import type { BlockType, ParsedBlock } from "../editor/blocks/model";
+import type { BlockSource } from "../editor/blocks/rendering";
+import type { BlockIndexBuilder, EditorState, ProjectionCapability, Transaction } from "../editor/core/types";
 
 export type DocumentReference = {
     destination: string;
@@ -16,77 +12,6 @@ export type DocumentReferenceMap = Record<string, DocumentReference>;
 export type DocumentRenderContext = {
     references: DocumentReferenceMap;
     data?: unknown;
-};
-
-export type ParsedDocumentFragment = {
-    blocks: ParsedBlock[];
-    references?: DocumentReferenceMap;
-};
-
-export type DocumentEditorHooks = {
-    markDocumentDirty: () => void;
-    markEditorDirty: () => void;
-    syncActiveBlockIndicator: (block: HTMLElement | null) => void;
-    syncBlockSourceReveal: (block: HTMLElement | null) => void;
-    syncBlockSourceRevealBlocks: (blocks: HTMLElement[]) => void;
-};
-
-export type DocumentEditorEventContext = DocumentEditorHooks & {
-    isComposingText: boolean;
-};
-
-export type DocumentSourceSelectionTarget =
-    | {
-          kind: "block-source";
-          block: HTMLElement;
-          source: HTMLElement;
-          sourcePosition: BlockSourcePosition;
-          sourceOffset: number;
-      }
-    | {
-          kind: "inline-source";
-          block: HTMLElement;
-          token: HTMLElement;
-          source: HTMLElement;
-          sourceOffset: number;
-      };
-
-export type DocumentEditorSelectionState = {
-    selection: Selection | null;
-    isCollapsed: boolean;
-    anchorNode: Node | null;
-    focusNode: Node | null;
-    anchorOffset: number;
-    focusOffset: number;
-    anchorBlock: HTMLElement | null;
-    focusBlock: HTMLElement | null;
-    anchorBlockOffset: number | null;
-    focusBlockOffset: number | null;
-    selectedBlocks: HTMLElement[];
-    sourceTarget: DocumentSourceSelectionTarget | null;
-};
-
-export type DocumentPasteContext = DocumentEditorEventContext & {
-    getActiveDocumentFormat: () => DocumentFormat;
-    getActiveFilePath: () => string | null;
-    ensureDocumentSaved: () => Promise<boolean>;
-    runDiscreteEdit: (edit: () => void) => void;
-};
-
-export type DocumentEditorBehavior = {
-    install?: (hooks: DocumentEditorHooks) => void;
-    deactivate?: (context: DocumentEditorEventContext) => void;
-    beforeInput?: (event: InputEvent, context: DocumentEditorEventContext) => boolean;
-    input?: (event: Event, context: DocumentEditorEventContext) => boolean;
-    keydown?: (event: KeyboardEvent, context: DocumentEditorEventContext) => boolean;
-    mouseDown?: (event: MouseEvent, context: DocumentEditorEventContext) => boolean;
-    click?: (event: MouseEvent, context: DocumentEditorEventContext) => boolean;
-    selectionChange?: (context: DocumentEditorEventContext, selection: DocumentEditorSelectionState) => boolean;
-    copy?: (event: ClipboardEvent, context: DocumentEditorEventContext) => boolean;
-    cut?: (event: ClipboardEvent, context: DocumentEditorEventContext) => boolean;
-    paste?: (event: ClipboardEvent, context: DocumentPasteContext) => boolean | Promise<boolean>;
-    drop?: (event: DragEvent, context: DocumentPasteContext) => boolean | Promise<boolean>;
-    beforeSerialize?: () => void;
 };
 
 export type DocumentPreviewContext = {
@@ -104,28 +29,64 @@ export type PlainTextHighlightPolicy = {
     delayMs: number;
 };
 
-export type DocumentFormat = {
+export type DocumentFormatDescriptor = {
     id: string;
     label: string;
     extensions: string[];
     defaultExtension: string;
     defaultFileName: string;
-    supportsTitle: boolean;
-    parseDocument: (documentFile: DocumentFileLike) => ParsedDocument;
-    parseFragment: (content: string) => ParsedDocumentFragment;
-    serializeDocument: (title: string, usesTitle: boolean, blocks: ParsedBlock[]) => string;
+    editableTitle: boolean;
+};
+
+export type RenderCapability = {
     readReferences?: (blocks: ParsedBlock[]) => DocumentReferenceMap;
     readRenderContext?: (blocks: ParsedBlock[]) => DocumentRenderContext;
     applyRenderContext?: (blocks: HTMLElement[], context: DocumentRenderContext) => void;
     renderDocumentFooter?: (context: DocumentRenderContext) => string;
     hasBlockSource?: (type: BlockType) => boolean;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
+    readInteractiveBlockText?: (type: BlockType, source: string) => string;
     renderInline?: (text: string, context: DocumentRenderContext) => string;
     renderPlainTextContent?: (type: BlockType, text: string) => string | null;
     renderBlock?: (type: BlockType, text: string, context: DocumentRenderContext) => string | null;
     hydrateRenderedContent?: (content: HTMLElement, activeFilePath: string | null) => void;
-    editorBehavior?: DocumentEditorBehavior;
-    previewBehavior?: DocumentPreviewBehavior;
-    clipboardMimeTypes?: string[];
     plainTextHighlightPolicy?: PlainTextHighlightPolicy;
+};
+
+export type EditingCapability = {
+    createEnterTransaction?: (state: EditorState, options?: { shiftKey?: boolean }) => Transaction;
+    createTabTransaction?: (state: EditorState, delta: -1 | 1) => Transaction | null;
+    createInlineFormatTransaction?: (state: EditorState, marker: "*" | "**") => Transaction | null;
+    createCheckboxToggleTransaction?: (state: EditorState, blockId: string) => Transaction | null;
+    createPastedImageSource?: (relativePath: string, originalName: string) => string;
+};
+
+export type ClipboardPayload = {
+    markdown: string;
+    plainText: string;
+    html: string;
+};
+
+export type ClipboardCapability = {
+    mimeTypes: string[];
+    richHtml: boolean;
+    createPayload?: (source: string) => ClipboardPayload;
+    write?: (clipboard: DataTransfer, source: string) => void;
+    read?: (clipboard: DataTransfer | null | undefined) => string | null;
+    convertHtml?: (html: string) => string;
+};
+
+export type ExportCapability = {
+    kind: "pdf";
+};
+
+export type DocumentFormat = {
+    descriptor: DocumentFormatDescriptor;
+    index: { build: BlockIndexBuilder };
+    render: RenderCapability;
+    editing?: EditingCapability;
+    clipboard?: ClipboardCapability;
+    projection?: ProjectionCapability;
+    preview?: DocumentPreviewBehavior;
+    export?: ExportCapability;
 };

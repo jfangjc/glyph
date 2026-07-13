@@ -22,11 +22,6 @@ export const documentState: DocumentState = {
     lastSavedContent: "",
 };
 
-export function markDocumentDirty(): void {
-    documentState.hasUnsavedChanges = true;
-    notifyDocumentStateChanged();
-}
-
 export function notifyDocumentStateChanged(): void {
     window.dispatchEvent(new CustomEvent(documentStateChangedEvent));
 }

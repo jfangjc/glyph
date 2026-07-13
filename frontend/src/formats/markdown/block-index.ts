@@ -1,15 +1,9 @@
-import { parseMarkdownBlocksWithRanges } from "../../formats/markdown/parse";
-import type { BlockIndex, Change, SourceBlock } from "./types";
+import type { BlockIndex, BlockIndexBuildContext, Change, SourceBlock } from "../../editor/core/types";
+import { parseMarkdownBlocksWithRanges } from "./parse";
 
 let nextBlockId = 1;
 
-type BuildBlockIndexOptions = {
-    previousDoc: string;
-    previous: BlockIndex;
-    changes: Change[];
-};
-
-export function buildBlockIndex(doc: string, options?: BuildBlockIndexOptions): BlockIndex {
+export function buildBlockIndex(doc: string, options?: BlockIndexBuildContext): BlockIndex {
     const incremental = options ? buildIncrementalBlockIndex(doc, options) : null;
     if (incremental) {
         return incremental;
@@ -80,7 +74,7 @@ function reserveUnchangedBlockIds(
     return ids;
 }
 
-function buildIncrementalBlockIndex(doc: string, options: BuildBlockIndexOptions): BlockIndex | null {
+function buildIncrementalBlockIndex(doc: string, options: BlockIndexBuildContext): BlockIndex | null {
     if (options.changes.length !== 1) {
         return null;
     }
@@ -97,6 +91,10 @@ function buildIncrementalBlockIndex(doc: string, options: BuildBlockIndexOptions
         !(block.contentFrom === block.contentTo && change.from === block.contentFrom)
     ));
     if (!affected) {
+        return null;
+    }
+
+    if (affected.type === "paragraph" && readChangedLine(doc, change).includes("|")) {
         return null;
     }
 
@@ -147,35 +145,20 @@ function buildIncrementalBlockIndex(doc: string, options: BuildBlockIndexOptions
     return { blocks };
 }
 
+function readChangedLine(doc: string, change: Change): string {
+    const previousBreak = change.from > 0 ? doc.lastIndexOf("\n", change.from - 1) : -1;
+    const lineFrom = previousBreak + 1;
+    const insertedTo = change.from + change.insert.length;
+    const nextBreak = doc.indexOf("\n", insertedTo);
+    const lineTo = nextBreak < 0 ? doc.length : nextBreak;
+    return doc.slice(lineFrom, lineTo);
+}
+
 function stripMappedBlock(
     block: SourceBlock & { mappedFrom: number; mappedTo: number; used: boolean },
 ): SourceBlock {
     const { mappedFrom: _mappedFrom, mappedTo: _mappedTo, used: _used, ...sourceBlock } = block;
     return sourceBlock;
-}
-
-export function findSourceBlockAtOffset(index: BlockIndex, offset: number): SourceBlock | null {
-    if (index.blocks.length === 0) {
-        return null;
-    }
-
-    for (const block of index.blocks) {
-        if (offset >= block.sourceFrom && offset <= block.sourceTo) {
-            return block;
-        }
-    }
-
-    const nextBlock = index.blocks.find((block) => offset < block.sourceFrom);
-    if (nextBlock) {
-        const previousBlock = index.blocks[index.blocks.indexOf(nextBlock) - 1];
-        return previousBlock ?? nextBlock;
-    }
-
-    return index.blocks[index.blocks.length - 1];
-}
-
-export function getSourceBlockText(doc: string, block: SourceBlock): string {
-    return doc.slice(block.contentFrom, block.contentTo);
 }
 
 function readReusableBlockId(

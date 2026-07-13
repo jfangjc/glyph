@@ -1,6 +1,6 @@
-import { buildBlockIndex } from "./block-index";
 import { applyTransactionToDoc, mapSelection, normalizeSelection } from "./transaction";
 import type {
+    BlockIndexBuilder,
     EditorSnapshot,
     EditorState,
     EditorStateListener,
@@ -28,10 +28,13 @@ const typingBatchDelayMs = 1200;
 
 let editorState = freezeEditorState({
     doc: "",
+    title: "Untitled",
     selection: { anchor: 0, head: 0 },
-    blocks: buildBlockIndex(""),
+    blocks: { blocks: [] },
     revision: 0,
 });
+let blockIndexBuilder: BlockIndexBuilder = () => ({ blocks: [] });
+let blockIndexInvalidated = true;
 let listeners: EditorStateListener[] = [];
 let undoStack: HistoryEntry[] = [];
 let redoStack: HistoryEntry[] = [];
@@ -47,21 +50,27 @@ export function getEditorState(): EditorState {
     return editorState;
 }
 
-export function getMarkdownSource(): string {
+export function getDocumentSource(): string {
     return editorState.doc;
 }
 
-export function replaceDocumentSource(
+export function configureBlockIndexBuilder(builder: BlockIndexBuilder): void {
+    blockIndexBuilder = builder;
+    blockIndexInvalidated = true;
+}
+
+export function replaceDocumentState(
     source: string,
+    title: string,
     selection: SelectionRange = { anchor: 0, head: 0 },
-    annotation: Transaction["annotations"] = { userEvent: "programmatic", addToHistory: false },
 ): void {
     disposeAllSelectionBookmarks();
     flushSourceHistoryBatch();
     dispatch({
         changes: [{ from: 0, to: editorState.doc.length, insert: source }],
+        title,
         selection,
-        annotations: annotation,
+        annotations: { userEvent: "programmatic", addToHistory: false },
     });
 }
 
@@ -156,14 +165,18 @@ function applyDispatch(transaction: Transaction): void {
     const nextDocChanged = applied.doc !== previous.doc;
     const nextSelection = normalizeSelection(applied.selection, applied.doc.length);
     const blockIndexStartedAt = readPerformanceNow();
-    const blocks = buildBlockIndex(applied.doc, {
-        previousDoc: previous.doc,
-        previous: previous.blocks,
-        changes: applied.changes,
-    });
+    const blocks = nextDocChanged || blockIndexInvalidated
+        ? blockIndexBuilder(applied.doc, {
+            previousDoc: previous.doc,
+            previous: previous.blocks,
+            changes: applied.changes,
+        })
+        : previous.blocks;
+    blockIndexInvalidated = false;
     measureEditorPerformance("glyph:block-index", blockIndexStartedAt);
     const next = freezeEditorState({
         doc: applied.doc,
+        title: transaction.title ?? previous.title,
         selection: nextSelection,
         blocks,
         revision: previous.revision + 1,
@@ -171,7 +184,7 @@ function applyDispatch(transaction: Transaction): void {
 
     mapSelectionBookmarks(applied.changes);
 
-    if (shouldRecordHistory(normalizedTransaction, nextDocChanged)) {
+    if (shouldRecordHistory(normalizedTransaction, nextDocChanged || next.title !== previous.title)) {
         recordHistoryEntry({
             before: createSnapshot(previous),
             after: createSnapshot(next),
@@ -185,11 +198,11 @@ function applyDispatch(transaction: Transaction): void {
     measureEditorPerformance("glyph:transaction", transactionStartedAt);
 }
 
-function readPerformanceNow(): number {
+export function readPerformanceNow(): number {
     return typeof performance === "undefined" ? 0 : performance.now();
 }
 
-function measureEditorPerformance(name: string, startedAt: number): void {
+export function measureEditorPerformance(name: string, startedAt: number): void {
     if (!import.meta.env.DEV || typeof performance === "undefined") {
         return;
     }
@@ -202,13 +215,14 @@ function measureEditorPerformance(name: string, startedAt: number): void {
 function restoreSnapshot(snapshot: EditorSnapshot): void {
     dispatch({
         changes: [{ from: 0, to: editorState.doc.length, insert: snapshot.doc }],
+        title: snapshot.title,
         selection: snapshot.selection,
         annotations: { userEvent: "history", addToHistory: false },
     });
 }
 
-function shouldRecordHistory(transaction: Transaction, docChanged: boolean): boolean {
-    if (isRestoringHistory || !docChanged) {
+function shouldRecordHistory(transaction: Transaction, stateChanged: boolean): boolean {
+    if (isRestoringHistory || !stateChanged) {
         return false;
     }
 
@@ -320,6 +334,7 @@ function flushQueuedTransactions(): void {
 function createSnapshot(state: EditorState): EditorSnapshot {
     return {
         doc: state.doc,
+        title: state.title,
         selection: state.selection,
     };
 }

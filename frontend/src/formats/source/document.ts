@@ -1,49 +1,45 @@
-import type { BlockType, ParsedBlock, ParsedDocument } from "../../editor/blocks/model";
-import { titleFromFileName } from "../file-names";
-import type { DocumentFileLike, DocumentFormat, ParsedDocumentFragment } from "../types";
+import type { BlockIndex, BlockIndexBuildContext } from "../../editor/core/types";
+import type {
+    DocumentFormat,
+    DocumentFormatDescriptor,
+    DocumentPreviewBehavior,
+    RenderCapability,
+} from "../types";
 
-type SourceDocumentFormatOptions = {
-    id: string;
-    label: string;
-    extensions: string[];
-    defaultExtension: string;
-    defaultFileName: string;
-    renderPlainTextContent?: (type: BlockType, text: string) => string | null;
-} & Pick<DocumentFormat, "previewBehavior" | "plainTextHighlightPolicy">;
+type SourceDocumentCapabilities = {
+    render?: RenderCapability;
+    preview?: DocumentPreviewBehavior;
+};
 
-export function createSourceDocumentFormat(options: SourceDocumentFormatOptions): DocumentFormat {
+export function createSourceDocumentFormat(
+    descriptor: DocumentFormatDescriptor,
+    capabilities: SourceDocumentCapabilities = {},
+): DocumentFormat {
     return {
-        ...options,
-        supportsTitle: false,
-        parseDocument: parseSourceDocument,
-        parseFragment: parseSourceFragment,
-        serializeDocument: serializeSourceDocument,
-        renderPlainTextContent: options.renderPlainTextContent,
-        previewBehavior: options.previewBehavior,
-        plainTextHighlightPolicy: options.plainTextHighlightPolicy,
+        descriptor,
+        index: { build: buildSourceBlockIndex },
+        render: capabilities.render ?? {},
+        preview: capabilities.preview,
+        clipboard: {
+            mimeTypes: ["text/plain"],
+            richHtml: false,
+        },
     };
 }
 
-function parseSourceDocument(documentFile: DocumentFileLike): ParsedDocument {
+function buildSourceBlockIndex(source: string, context?: BlockIndexBuildContext): BlockIndex {
+    const previous = context?.previous.blocks[0];
     return {
-        title: titleFromFileName(documentFile.name),
-        usesTitle: false,
-        blocks: [{ type: "source", text: normalizeSourceContent(documentFile.content) }],
-        references: {},
+        blocks: [{
+            id: previous?.type === "source" ? previous.id : "source-document",
+            type: "source",
+            text: source,
+            sourceFrom: 0,
+            sourceTo: source.length,
+            contentFrom: 0,
+            contentTo: source.length,
+            lineFrom: 0,
+            lineTo: Math.max(0, source.split("\n").length - 1),
+        }],
     };
-}
-
-function parseSourceFragment(content: string): ParsedDocumentFragment {
-    return {
-        blocks: [{ type: "source", text: normalizeSourceContent(content) }],
-        references: {},
-    };
-}
-
-function serializeSourceDocument(_title: string, _usesTitle: boolean, blocks: ParsedBlock[]): string {
-    return blocks.map((block) => block.text).join("\n");
-}
-
-function normalizeSourceContent(content: string): string {
-    return content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
 }

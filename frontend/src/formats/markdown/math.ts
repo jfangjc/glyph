@@ -1,7 +1,5 @@
 import katex from "katex";
-import type { ParsedBlock } from "../../editor/blocks/model";
 import { escapeHtml } from "../../utils/text";
-import { findUnescapedSequence } from "./utils";
 
 const mathRenderCacheLimit = 512;
 const mathRenderCache = new Map<string, string>();
@@ -50,46 +48,4 @@ export function readMathSourceText(rawMarkdown: string): string {
     }
 
     return rawMarkdown;
-}
-
-export function splitCompactDisplayMathBlocks(text: string): ParsedBlock[] | null {
-    const blocks: ParsedBlock[] = [];
-    let cursor = 0;
-    let foundMath = false;
-
-    while (cursor < text.length) {
-        const start = findUnescapedSequence(text, "$$", cursor);
-        if (start < 0) {
-            appendParagraphBlock(blocks, text.slice(cursor));
-            break;
-        }
-
-        const sourceStart = start + 2;
-        const end = findUnescapedSequence(text, "$$", sourceStart);
-        if (end < 0) {
-            appendParagraphBlock(blocks, text.slice(cursor));
-            break;
-        }
-
-        const raw = text.slice(start, end + 2);
-        const source = readMathSourceText(raw);
-        if (source.trim() === "") {
-            appendParagraphBlock(blocks, text.slice(cursor, end + 2));
-            cursor = end + 2;
-            continue;
-        }
-
-        appendParagraphBlock(blocks, text.slice(cursor, start));
-        blocks.push({ type: "math", text: source, mathSource: raw });
-        foundMath = true;
-        cursor = end + 2;
-    }
-
-    return foundMath ? blocks : null;
-}
-
-function appendParagraphBlock(blocks: ParsedBlock[], text: string): void {
-    if (text !== "") {
-        blocks.push({ type: "paragraph", text });
-    }
 }

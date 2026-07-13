@@ -6,26 +6,18 @@ import {
     readInlineFormatShortcut,
 } from "../../app/keymap";
 import type {
-    DocumentEditorEventContext,
-    DocumentEditorHooks,
+    ClipboardPayload,
     DocumentFormat,
-    DocumentPasteContext,
 } from "../../formats/types";
+import type { DocumentEditorHooks } from "../core/types";
 import {
     findBlock,
-    getBlockText,
-    setBlockText,
 } from "../blocks/view";
 import {
-    createCheckboxToggleTransaction,
     createCutTransaction,
     createDeleteBackwardTransaction,
     createDeleteForwardTransaction,
     createDeleteTransaction,
-    createEnterTransaction,
-    createIndentCodeTransaction,
-    createIndentListTransaction,
-    createInlineFormatTransaction,
     createInsertTextTransaction,
     createPasteTransaction,
     readSelectedSourceText,
@@ -46,49 +38,8 @@ import {
     syncStateSelectionFromDom,
 } from "../core/projection";
 import { reportEditorError } from "../editor-status";
-import {
-    beginDiscreteUndoTransaction,
-    beginTypingUndoTransaction,
-    commitUndoTransaction,
-    flushPendingUndoTransaction,
-} from "../history/undo-history";
-import {
-    handleEditorCopy as handleEditorCopyCommand,
-    handleEditorCut as handleEditorCutCommand,
-    handleEditorDragOver as handleEditorDragOverCommand,
-    handleEditorDrop as handleEditorDropCommand,
-    handleEditorPaste as handleEditorPasteCommand,
-    readDataTransferText,
-} from "../input/editor-clipboard";
-import {
-    handleEditorBeforeInput as handleEditorBeforeInputCommand,
-    handleEditorInput as handleEditorInputCommand,
-} from "../input/editor-input";
-import { handleEditorKeydown as handleEditorKeydownCommand } from "../input/editor-keydown";
-import { isPlainTextKey } from "../input/keyboard-events";
-import {
-    createMarkdownClipboardPayload,
-    htmlToMarkdown,
-    readMarkdownClipboardInsert,
-    writeMarkdownClipboardPayload,
-} from "../../formats/markdown/clipboard";
 import { handleEditorMouseDown as handleEditorMouseDownCommand } from "../pointer-interactions";
-import {
-    getCaretPositionFromPoint,
-    getSelectedBlockRange,
-    selectEditorContents,
-} from "../selection/caret";
-import { readEditorDom } from "../editor-dom";
-import {
-    isTypingBoundaryKeydown,
-    readBeforeInputUndoKind,
-    shouldEndTypingBatchAfterInput,
-} from "./input-transactions";
-import {
-    redoHistoryChange,
-    runDiscreteEdit,
-    undoHistoryChange,
-} from "./undo-controller";
+import { getCaretPositionFromPoint } from "../selection/caret";
 
 const supportedPastedImageMimeTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
@@ -130,7 +81,6 @@ type EditorInputControllerOptions = {
 
 export function createEditorInputController(options: EditorInputControllerOptions): EditorInputController {
     let isComposingText = false;
-    let shouldFlushTypingBatchAfterInput = false;
     let preCompositionSourceSelection = getEditorState().selection;
 
     return {
@@ -158,23 +108,22 @@ export function createEditorInputController(options: EditorInputControllerOption
             : null;
 
         if (command === "undo" || command === "redo") {
-            if (isSourceFirstMarkdown() && !activeTextInput) {
+            if (!activeTextInput) {
                 if (command === "undo") undoSourceHistory();
                 else redoSourceHistory();
-            } else if (command === "undo") {
-                undoHistoryChange();
-            } else {
-                redoHistoryChange();
             }
             return;
         }
 
         if (command === "bold" || command === "italic") {
-            if (!isSourceFirstMarkdown() || activeTextInput) {
+            if (!supportsRichSourceEditing() || activeTextInput) {
                 return;
             }
             syncSourceSelectionForCommand();
-            const transaction = createInlineFormatTransaction(getEditorState(), command === "bold" ? "**" : "*");
+            const transaction = options.getActiveDocumentFormat().editing?.createInlineFormatTransaction?.(
+                getEditorState(),
+                command === "bold" ? "**" : "*",
+            );
             if (transaction) {
                 dispatch(transaction);
             } else {
@@ -189,21 +138,12 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         if (command === "select-all") {
-            if (isSourceFirstMarkdown()) {
-                dispatch({
-                    changes: [],
-                    selection: { anchor: 0, head: getEditorState().doc.length },
-                    annotations: { userEvent: "programmatic", addToHistory: false },
-                });
-                syncDomSelectionFromState();
-            } else {
-                selectEditorContents(readEditorDom().editor);
-            }
-            return;
-        }
-
-        if (!isSourceFirstMarkdown()) {
-            await executeLegacyEditorClipboardCommand(command);
+            dispatch({
+                changes: [],
+                selection: { anchor: 0, head: getEditorState().doc.length },
+                annotations: { userEvent: "programmatic", addToHistory: false },
+            });
+            syncDomSelectionFromState();
             return;
         }
 
@@ -211,7 +151,9 @@ export function createEditorInputController(options: EditorInputControllerOption
             syncSourceSelectionForCommand();
             const bookmark = createSelectionBookmark();
             try {
-                const text = await readNativeMarkdownClipboard();
+                const text = supportsRichSourceEditing()
+                    ? await readNativeRichClipboard()
+                    : await readNativePlainClipboard();
                 const selection = bookmark.read();
                 if (text && selection) {
                     const state = getEditorState();
@@ -234,7 +176,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
         const bookmark = createSelectionBookmark(state.selection);
         try {
-            await writeNativeMarkdownClipboard(createMarkdownClipboardPayload(selectedText));
+            await writeNativeClipboard(createClipboardPayload(selectedText), supportsRichSourceEditing());
             if (command === "cut") {
                 const selection = bookmark.read();
                 if (selection) {
@@ -254,10 +196,7 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function syncSourceSelectionForCommand(): void {
-        const selection = getEditorState().selection;
-        if (selection.anchor === selection.head) {
-            syncStateSelectionFromDom();
-        }
+        syncStateSelectionFromDom();
     }
 
     async function executeTextInputClipboardCommand(
@@ -274,7 +213,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (command === "copy" || command === "cut") {
             if (start === end) return;
             const value = input.value.slice(start, end);
-            await writeNativeMarkdownClipboard({ markdown: value, plainText: value, html: escapeClipboardText(value) });
+            await writeNativeClipboard({ markdown: value, plainText: value, html: escapeClipboardText(value) }, false);
             if (command === "cut") {
                 input.setRangeText("", start, end, "start");
                 input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteByCut" }));
@@ -287,39 +226,17 @@ export function createEditorInputController(options: EditorInputControllerOption
         input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: value }));
     }
 
-    async function executeLegacyEditorClipboardCommand(command: "copy" | "cut" | "paste"): Promise<void> {
-        const { editor } = readEditorDom();
-        if (command === "paste") {
-            const value = await readNativePlainClipboard();
-            const transfer = new DataTransfer();
-            transfer.setData("text/plain", value);
-            const target = document.getSelection()?.focusNode?.parentElement ?? editor;
-            target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
-            return;
-        }
-
-        const transfer = new DataTransfer();
-        editor.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: transfer }));
-        const value = transfer.getData("text/plain");
-        if (!value) return;
-        await writeNativeMarkdownClipboard({ markdown: value, plainText: value, html: escapeClipboardText(value) });
-        if (command === "cut") {
-            editor.dispatchEvent(new ClipboardEvent("cut", {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: new DataTransfer(),
-            }));
-        }
-    }
-
-    async function writeNativeMarkdownClipboard(payload: ReturnType<typeof createMarkdownClipboardPayload>): Promise<void> {
+    async function writeNativeClipboard(
+        payload: ClipboardPayload,
+        includeMarkdown: boolean,
+    ): Promise<void> {
         if (navigator.clipboard?.write && typeof ClipboardItem === "function") {
             try {
                 const clipboardData: Record<string, Blob> = {
                     "text/plain": new Blob([payload.plainText], { type: "text/plain" }),
                     "text/html": new Blob([payload.html], { type: "text/html" }),
                 };
-                if (typeof ClipboardItem.supports !== "function" || ClipboardItem.supports("text/markdown")) {
+                if (includeMarkdown && (typeof ClipboardItem.supports !== "function" || ClipboardItem.supports("text/markdown"))) {
                     clipboardData["text/markdown"] = new Blob([payload.markdown], { type: "text/markdown" });
                 }
                 await navigator.clipboard.write([new ClipboardItem(clipboardData)]);
@@ -331,7 +248,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         await Clipboard.SetText(payload.markdown);
     }
 
-    async function readNativeMarkdownClipboard(): Promise<string> {
+    async function readNativeRichClipboard(): Promise<string> {
         if (navigator.clipboard?.read) {
             try {
                 const items = await navigator.clipboard.read();
@@ -339,7 +256,9 @@ export function createEditorInputController(options: EditorInputControllerOption
                     const item = items.find((candidate) => candidate.types.includes(type));
                     if (!item) continue;
                     const value = await (await item.getType(type)).text();
-                    return type === "text/html" ? htmlToMarkdown(value) : value.replace(/\r\n?/g, "\n");
+                    return type === "text/html"
+                        ? options.getActiveDocumentFormat().clipboard?.convertHtml?.(value) ?? value
+                        : value.replace(/\r\n?/g, "\n");
                 }
             } catch {
                 // Wails clipboard is the permission-safe desktop fallback.
@@ -364,75 +283,30 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function deactivate(): void {
-        flushPendingUndoTransaction();
         flushSourceHistoryBatch();
         resetVerticalNavigationAffinity();
-        options.getActiveDocumentFormat().editorBehavior?.deactivate?.(createDocumentEditorEventContext());
-    }
-
-    function createDocumentEditorEventContext(): DocumentEditorEventContext {
-        return {
-            ...options.hooks,
-            isComposingText,
-        };
-    }
-
-    function createDocumentPasteContext(): DocumentPasteContext {
-        return {
-            ...createDocumentEditorEventContext(),
-            getActiveDocumentFormat: options.getActiveDocumentFormat,
-            getActiveFilePath: options.getActiveFilePath,
-            ensureDocumentSaved: () =>
-                options.ensureDocumentSaved({
-                    promptForPath: true,
-                    suggestedFileName: getSuggestedFileName(),
-                }),
-            runDiscreteEdit,
-        };
     }
 
     function handleEditorMouseDown(event: MouseEvent): void {
         resetVerticalNavigationAffinity();
-        const target = event.target;
-        if (isSourceFirstMarkdown()) {
-            flushPendingUndoTransaction();
-            flushSourceHistoryBatch();
-        } else if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
-            beginDiscreteUndoTransaction();
-        } else {
-            flushPendingUndoTransaction();
-        }
-
-        const context = createDocumentEditorEventContext();
-        const handledByFormat = options.getActiveDocumentFormat().editorBehavior?.mouseDown?.(event, context) ?? false;
-        if (!handledByFormat) {
-            handleEditorMouseDownCommand(event);
-        }
+        flushSourceHistoryBatch();
+        handleEditorMouseDownCommand(event);
     }
 
     function handleEditorChange(event: Event): void {
         const target = event.target;
-        if (isSourceFirstMarkdown() && target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
+        if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
             const block = findBlock(target);
             const blockId = block?.dataset.blockId;
-            const transaction = blockId ? createCheckboxToggleTransaction(getEditorState(), blockId) : null;
+            const transaction = blockId
+                ? options.getActiveDocumentFormat().editing?.createCheckboxToggleTransaction?.(getEditorState(), blockId)
+                : null;
             if (transaction) {
                 dispatch(transaction);
             }
             return;
         }
 
-        if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
-            const block = findBlock(target);
-            if (block) {
-                setBlockText(block, getBlockText(block));
-            }
-
-            options.hooks.syncActiveBlockIndicator(block);
-            options.hooks.syncBlockSourceReveal(block);
-            commitUndoTransaction();
-            options.hooks.markDocumentDirty();
-        }
     }
 
     function handleEditorKeydown(event: KeyboardEvent): void {
@@ -448,122 +322,46 @@ export function createEditorInputController(options: EditorInputControllerOption
             return;
         }
 
-        if (isSourceFirstMarkdown() && handleSourceFirstMarkdownKeydown(event)) {
+        if (handleSourceKeydown(event)) {
             return;
-        }
-
-        if (isTodoCheckboxActivation(event)) {
-            beginDiscreteUndoTransaction();
-            return;
-        }
-
-        if (isTypingBoundaryKeydown(event)) {
-            flushPendingUndoTransaction();
-        }
-
-        const shouldTrackPlainTextSelectionReplacement = isPlainTextKey(event) && Boolean(getSelectedBlockRange());
-        if (shouldTrackPlainTextSelectionReplacement) {
-            beginTypingUndoTransaction();
-        }
-
-        const shouldTrackDiscreteEdit = !shouldTrackPlainTextSelectionReplacement && isDiscreteEditorKeydown(event);
-        if (shouldTrackDiscreteEdit) {
-            beginDiscreteUndoTransaction();
-        }
-
-        const context = createDocumentEditorEventContext();
-        const handledByFormat = options.getActiveDocumentFormat().editorBehavior?.keydown?.(event, context) ?? false;
-        if (!handledByFormat) {
-            handleEditorKeydownCommand(event, context);
-        }
-
-        if (shouldTrackDiscreteEdit || shouldTrackPlainTextSelectionReplacement) {
-            commitUndoTransaction();
         }
     }
 
     function handleEditorBeforeInput(event: InputEvent): void {
-        const undoKind = readBeforeInputUndoKind(event, isComposingText);
+        const undoKind = event.inputType === "historyUndo"
+            ? "history-undo"
+            : event.inputType === "historyRedo" ? "history-redo" : null;
         if (undoKind === "history-undo" || undoKind === "history-redo") {
             event.preventDefault();
-            if (isSourceFirstMarkdown()) {
-                if (undoKind === "history-undo") {
-                    undoSourceHistory();
-                } else {
-                    redoSourceHistory();
-                }
+            if (undoKind === "history-undo") {
+                undoSourceHistory();
             } else {
-                if (undoKind === "history-undo") {
-                    undoHistoryChange();
-                } else {
-                    redoHistoryChange();
-                }
+                redoSourceHistory();
             }
             return;
         }
 
-        if (isSourceFirstMarkdown() && handleSourceFirstMarkdownBeforeInput(event)) {
-            return;
-        }
-
-        if (undoKind === "typing") {
-            beginTypingUndoTransaction();
-            shouldFlushTypingBatchAfterInput = shouldEndTypingBatchAfterInput(event);
-        } else if (undoKind === "discrete") {
-            beginDiscreteUndoTransaction();
-            shouldFlushTypingBatchAfterInput = false;
-        }
-
-        const context = createDocumentEditorEventContext();
-        const handledByFormat = options.getActiveDocumentFormat().editorBehavior?.beforeInput?.(event, context) ?? false;
-        if (!handledByFormat) {
-            handleEditorBeforeInputCommand(event, context);
-        }
-
-        if (event.defaultPrevented && undoKind) {
-            commitUndoTransaction();
-            flushTypingBatchAfterInputIfNeeded();
-        }
+        handleSourceBeforeInput(event);
     }
 
     function handleEditorCompositionStart(): void {
         isComposingText = true;
-        if (isSourceFirstMarkdown()) {
-            syncStateSelectionFromDom();
-            preCompositionSourceSelection = getEditorState().selection;
-        } else {
-            beginTypingUndoTransaction();
-        }
+        syncStateSelectionFromDom();
+        preCompositionSourceSelection = getEditorState().selection;
     }
 
     function handleEditorCompositionEnd(event: CompositionEvent): void {
         isComposingText = false;
-        if (isSourceFirstMarkdown()) {
-            const insert = event.data ?? "";
-            if (insert) {
-                const state = getEditorState();
-                dispatch(createInsertTextTransaction({ ...state, selection: preCompositionSourceSelection }, insert));
-            } else {
-                syncDomSelectionFromState();
-            }
-            return;
+        const insert = event.data ?? "";
+        if (insert) {
+            const state = getEditorState();
+            dispatch(createInsertTextTransaction({ ...state, selection: preCompositionSourceSelection }, insert));
+        } else {
+            syncDomSelectionFromState();
         }
-
-        handleEditorInput(event);
     }
 
-    function handleEditorInput(event: Event): void {
-        if (isSourceFirstMarkdown()) {
-            return;
-        }
-
-        const context = createDocumentEditorEventContext();
-        const handledByFormat = options.getActiveDocumentFormat().editorBehavior?.input?.(event, context) ?? false;
-        if (!handledByFormat) {
-            handleEditorInputCommand(event, context);
-        }
-        commitUndoTransaction();
-        flushTypingBatchAfterInputIfNeeded();
+    function handleEditorInput(_event: Event): void {
     }
 
     function handleEditorPaste(event: ClipboardEvent): void {
@@ -571,75 +369,21 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorCopy(event: ClipboardEvent): void {
-        if (isSourceFirstMarkdown() && handleSourceFirstMarkdownCopy(event)) {
-            return;
-        }
-
-        const context = createDocumentEditorEventContext();
-        const handledByFormat = options.getActiveDocumentFormat().editorBehavior?.copy?.(event, context) ?? false;
-        if (handledByFormat) {
-            return;
-        }
-
-        handleEditorCopyCommand(event, {
-            getActiveDocumentFormat: options.getActiveDocumentFormat,
-            markEditorDirty: options.hooks.markEditorDirty,
-        });
+        handleSourceCopy(event);
     }
 
     function handleEditorCut(event: ClipboardEvent): void {
-        if (isSourceFirstMarkdown() && handleSourceFirstMarkdownCut(event)) {
-            return;
-        }
-
-        runDiscreteEdit(() => {
-            const context = createDocumentEditorEventContext();
-            const handledByFormat = options.getActiveDocumentFormat().editorBehavior?.cut?.(event, context) ?? false;
-            if (handledByFormat) {
-                return;
-            }
-
-            handleEditorCutCommand(event, {
-                getActiveDocumentFormat: options.getActiveDocumentFormat,
-                markEditorDirty: options.hooks.markEditorDirty,
-            });
-        });
+        handleSourceCut(event);
     }
 
     function handleEditorPasteFromFormatOrGeneric(event: ClipboardEvent): void {
-        if (isSourceFirstMarkdown() && handleSourceFirstMarkdownPaste(event)) {
-            return;
-        }
-
-        const context = createDocumentPasteContext();
-        const handledByFormat = options.getActiveDocumentFormat().editorBehavior?.paste?.(event, context) ?? false;
-        if (isPromiseLike(handledByFormat)) {
-            void handledByFormat.then((handled) => {
-                if (!handled) {
-                    runGenericPaste(event);
-                }
-            });
-            return;
-        }
-
-        if (handledByFormat) {
-            return;
-        }
-
-        runGenericPaste(event);
-    }
-
-    function runGenericPaste(event: ClipboardEvent): void {
-        runDiscreteEdit(() => {
-            handleEditorPasteCommand(event, {
-                getActiveDocumentFormat: options.getActiveDocumentFormat,
-                markEditorDirty: options.hooks.markEditorDirty,
-            });
-        });
+        handleSourcePaste(event);
     }
 
     function handleEditorDragOver(event: DragEvent): void {
-        handleEditorDragOverCommand(event);
+        if (event.dataTransfer?.types.includes("text/plain") || readClipboardImage(event.dataTransfer)) {
+            event.preventDefault();
+        }
     }
 
     function handleEditorDrop(event: DragEvent): void {
@@ -647,42 +391,17 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorDropFromFormatOrGeneric(event: DragEvent): void {
-        if (isSourceFirstMarkdown() && handleSourceFirstMarkdownDrop(event)) {
-            return;
-        }
-
-        const context = createDocumentPasteContext();
-        const handledByFormat = options.getActiveDocumentFormat().editorBehavior?.drop?.(event, context) ?? false;
-        if (isPromiseLike(handledByFormat)) {
-            void handledByFormat.then((handled) => {
-                if (!handled) {
-                    runGenericDrop(event);
-                }
-            });
-            return;
-        }
-
-        if (handledByFormat) {
-            return;
-        }
-
-        runGenericDrop(event);
-    }
-
-    function runGenericDrop(event: DragEvent): void {
-        runDiscreteEdit(() => {
-            handleEditorDropCommand(event, {
-                getActiveDocumentFormat: options.getActiveDocumentFormat,
-                markEditorDirty: options.hooks.markEditorDirty,
-            });
-        });
+        handleSourceDrop(event);
     }
 
     function handleEditorClick(event: MouseEvent): void {
-        options.getActiveDocumentFormat().editorBehavior?.click?.(event, createDocumentEditorEventContext());
+        const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
+        if (link && (event.ctrlKey || event.metaKey)) {
+            window.open(link.href, "_blank", "noopener,noreferrer");
+        }
     }
 
-    function handleSourceFirstMarkdownKeydown(event: KeyboardEvent): boolean {
+    function handleSourceKeydown(event: KeyboardEvent): boolean {
         if (isComposingText) {
             return true;
         }
@@ -691,8 +410,8 @@ export function createEditorInputController(options: EditorInputControllerOption
         // keydown handler mutates DOM ranges directly, while handling deletion
         // here can race selection projection; both leave EditorState out of sync.
         if (
-            getSelectedBlockRange() &&
-            (isPlainTextKey(event) || event.key === "Backspace" || event.key === "Delete")
+            getEditorState().selection.anchor !== getEditorState().selection.head &&
+            (isPlainTextKeydown(event) || event.key === "Backspace" || event.key === "Delete")
         ) {
             return true;
         }
@@ -713,21 +432,37 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (event.key === "Enter") {
             event.preventDefault();
             syncStateSelectionFromDom();
-            dispatch(createEnterTransaction(getEditorState()));
+            const state = getEditorState();
+            dispatch(
+                options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state, { shiftKey: event.shiftKey })
+                ?? createInsertTextTransaction(state, "\n"),
+            );
+            syncDomSelectionFromState();
             return true;
         }
 
         if (event.key === "Tab") {
             syncStateSelectionFromDom();
             const state = getEditorState();
-            const transaction = createIndentListTransaction(state, event.shiftKey ? -1 : 1)
-                ?? createIndentCodeTransaction(state, event.shiftKey ? -1 : 1);
+            const transaction = options.getActiveDocumentFormat().editing?.createTabTransaction?.(
+                state,
+                event.shiftKey ? -1 : 1,
+            ) ?? null;
             if (!transaction) {
-                return false;
+                const block = state.blocks.blocks.find((candidate) => (
+                    state.selection.head >= candidate.contentFrom && state.selection.head <= candidate.contentTo
+                ));
+                if (block?.type !== "source") {
+                    return false;
+                }
+                event.preventDefault();
+                dispatch(createInsertTextTransaction(state, "\t"));
+                return true;
             }
 
             event.preventDefault();
             dispatch(transaction);
+            syncDomSelectionFromState();
             return true;
         }
 
@@ -757,12 +492,12 @@ export function createEditorInputController(options: EditorInputControllerOption
         return false;
     }
 
-    function handleSourceFirstMarkdownBeforeInput(event: InputEvent): boolean {
+    function handleSourceBeforeInput(event: InputEvent): boolean {
         if (isComposingText) {
             return true;
         }
 
-        const transaction = readSourceFirstBeforeInputTransaction(event);
+        const transaction = readSourceBeforeInputTransaction(event);
         if (!transaction) {
             if (/^(?:insert|delete|format)/.test(event.inputType)) {
                 event.preventDefault();
@@ -783,7 +518,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         return true;
     }
 
-    function readSourceFirstBeforeInputTransaction(event: InputEvent): (() => Parameters<typeof dispatch>[0] | null) | null {
+    function readSourceBeforeInputTransaction(event: InputEvent): (() => Parameters<typeof dispatch>[0] | null) | null {
         if (
             (event.inputType === "insertText" || event.inputType === "insertReplacementText") &&
             event.data !== null
@@ -792,7 +527,11 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
-            return () => createEnterTransaction(getEditorState());
+            return () => {
+                const state = getEditorState();
+                return options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state)
+                    ?? createInsertTextTransaction(state, "\n");
+            };
         }
 
         if (event.inputType === "deleteContentBackward") {
@@ -850,54 +589,82 @@ export function createEditorInputController(options: EditorInputControllerOption
         };
     }
 
-    function handleSourceFirstMarkdownCopy(event: ClipboardEvent): boolean {
+    function handleSourceCopy(event: ClipboardEvent): boolean {
         syncSourceSelectionForCommand();
         const selectedText = readSelectedSourceText(getEditorState());
         if (selectedText === null || !event.clipboardData) {
-            return false;
+            return preventUnmappedSourceClipboardDefault(event);
         }
 
         event.preventDefault();
-        writeMarkdownClipboardPayload(event.clipboardData, createMarkdownClipboardPayload(selectedText));
+        if (!writeSourceClipboard(event.clipboardData, selectedText)) {
+            syncDomSelectionFromState();
+        }
         return true;
     }
 
-    function handleSourceFirstMarkdownCut(event: ClipboardEvent): boolean {
+    function handleSourceCut(event: ClipboardEvent): boolean {
         syncSourceSelectionForCommand();
         const selectedText = readSelectedSourceText(getEditorState());
         const transaction = createCutTransaction(getEditorState());
         if (selectedText === null || !transaction || !event.clipboardData) {
-            return false;
+            return preventUnmappedSourceClipboardDefault(event);
         }
 
         event.preventDefault();
-        writeMarkdownClipboardPayload(event.clipboardData, createMarkdownClipboardPayload(selectedText));
+        if (!writeSourceClipboard(event.clipboardData, selectedText)) {
+            syncDomSelectionFromState();
+            return true;
+        }
         dispatch(transaction);
         return true;
     }
 
-    function handleSourceFirstMarkdownPaste(event: ClipboardEvent): boolean {
-        const insert = readMarkdownClipboardInsert(event.clipboardData);
-        if (!insert?.markdown) {
-            const image = readClipboardImage(event.clipboardData);
+    function preventUnmappedSourceClipboardDefault(event: ClipboardEvent): boolean {
+        const selection = document.getSelection();
+        const editor = document.getElementById("editor");
+        const hasEditorRange = Boolean(
+            selection &&
+            !selection.isCollapsed &&
+            editor &&
+            selection.anchorNode &&
+            selection.focusNode &&
+            editor.contains(selection.anchorNode) &&
+            editor.contains(selection.focusNode),
+        );
+        if (!hasEditorRange) {
+            return false;
+        }
+
+        event.preventDefault();
+        syncDomSelectionFromState();
+        return true;
+    }
+
+    function handleSourcePaste(event: ClipboardEvent): boolean {
+        const insert = supportsRichSourceEditing()
+            ? options.getActiveDocumentFormat().clipboard?.read?.(event.clipboardData) ?? ""
+            : event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
+        if (!insert) {
+            const image = supportsRichSourceEditing() ? readClipboardImage(event.clipboardData) : null;
             if (!image) {
                 return false;
             }
 
             event.preventDefault();
             syncStateSelectionFromDom();
-            void pasteSourceFirstMarkdownImage(image, createSelectionBookmark());
+            void pasteSourceImage(image, createSelectionBookmark());
             return true;
         }
 
         event.preventDefault();
-        pasteSourceText(insert.markdown);
+        pasteSourceText(insert);
         return true;
     }
 
-    function handleSourceFirstMarkdownDrop(event: DragEvent): boolean {
-        const text = readDataTransferText(event.dataTransfer);
-        const image = readClipboardImage(event.dataTransfer);
+    function handleSourceDrop(event: DragEvent): boolean {
+        const text = readDroppedText(event.dataTransfer);
+        const image = supportsRichSourceEditing() ? readClipboardImage(event.dataTransfer) : null;
         if (!text && !image) {
             return false;
         }
@@ -907,13 +674,13 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (text) {
             dispatch(createPasteTransaction(getEditorState(), text));
         } else if (image) {
-            void pasteSourceFirstMarkdownImage(image, createSelectionBookmark());
+            void pasteSourceImage(image, createSelectionBookmark());
         }
 
         return true;
     }
 
-    async function pasteSourceFirstMarkdownImage(
+    async function pasteSourceImage(
         image: File,
         bookmark: ReturnType<typeof createSelectionBookmark>,
     ): Promise<void> {
@@ -943,10 +710,13 @@ export function createEditorInputController(options: EditorInputControllerOption
             }
 
             const state = getEditorState();
-            dispatch(createPasteTransaction(
-                { ...state, selection },
-                `![${escapeMarkdownImageAlt(image.name)}](${pastedImage.relativePath})`,
-            ));
+            const source = options.getActiveDocumentFormat().editing?.createPastedImageSource?.(
+                pastedImage.relativePath,
+                image.name,
+            );
+            if (source) {
+                dispatch(createPasteTransaction({ ...state, selection }, source));
+            }
         } catch (error) {
             console.error("Failed to paste image:", error);
             reportEditorError("Could not save the pasted image.");
@@ -975,8 +745,27 @@ export function createEditorInputController(options: EditorInputControllerOption
         });
     }
 
-    function isSourceFirstMarkdown(): boolean {
-        return options.getActiveDocumentFormat().id === "markdown";
+    function supportsRichSourceEditing(): boolean {
+        const format = options.getActiveDocumentFormat();
+        return Boolean(format.clipboard?.richHtml && format.clipboard.mimeTypes.includes("text/markdown"));
+    }
+
+    function writeSourceClipboard(clipboard: DataTransfer, text: string): boolean {
+        try {
+            if (supportsRichSourceEditing()) {
+                const write = options.getActiveDocumentFormat().clipboard?.write;
+                if (!write) {
+                    return false;
+                }
+                write(clipboard, text);
+            } else {
+                clipboard.setData("text/plain", text);
+            }
+            return true;
+        } catch (error) {
+            console.error("Failed to populate the source clipboard:", error);
+            return false;
+        }
     }
 
     function isPlainVerticalNavigationKey(event: KeyboardEvent): boolean {
@@ -989,6 +778,13 @@ export function createEditorInputController(options: EditorInputControllerOption
         );
     }
 
+    function createClipboardPayload(text: string): ClipboardPayload {
+        return supportsRichSourceEditing()
+            ? options.getActiveDocumentFormat().clipboard?.createPayload?.(text)
+                ?? { markdown: text, plainText: text, html: escapeClipboardText(text) }
+            : { markdown: text, plainText: text, html: escapeClipboardText(text) };
+    }
+
     function readDeleteGranularityFromKeydown(event: KeyboardEvent): "grapheme" | "word" | "hard-line" {
         if (event.metaKey) {
             return "hard-line";
@@ -999,38 +795,15 @@ export function createEditorInputController(options: EditorInputControllerOption
         return "grapheme";
     }
 
-    function isDiscreteEditorKeydown(event: KeyboardEvent): boolean {
-        if (isComposingText) {
-            return false;
+    function readDroppedText(dataTransfer: DataTransfer | null): string {
+        if (!dataTransfer) {
+            return "";
         }
-
-        if (readInlineFormatShortcut(event)) {
-            return true;
+        if (supportsRichSourceEditing()) {
+            return dataTransfer.getData("text/markdown") || dataTransfer.getData("text/plain");
         }
-
-        if (event.key === "Enter" || event.key === "Tab") {
-            return true;
-        }
-
-        if ((event.key === "Backspace" || event.key === "Delete") && !event.ctrlKey && !event.metaKey && !event.altKey) {
-            return true;
-        }
-
-        return false;
+        return dataTransfer.getData("text/plain");
     }
-
-    function flushTypingBatchAfterInputIfNeeded(): void {
-        if (!shouldFlushTypingBatchAfterInput) {
-            return;
-        }
-
-        shouldFlushTypingBatchAfterInput = false;
-        flushPendingUndoTransaction();
-    }
-}
-
-function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
-    return Boolean(value && typeof (value as Promise<T>).then === "function");
 }
 
 function readClipboardImage(dataTransfer: DataTransfer | null | undefined): File | null {
@@ -1062,14 +835,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     });
 }
 
-function escapeMarkdownImageAlt(value: string): string {
-    return value.replace(/\.[^/.\\]+$/, "").replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
-}
-
-function isTodoCheckboxActivation(event: KeyboardEvent): boolean {
-    return (
-        event.target instanceof HTMLInputElement &&
-        event.target.classList.contains("todo-checkbox") &&
-        (event.key === " " || event.key === "Enter")
-    );
+function isPlainTextKeydown(event: KeyboardEvent): boolean {
+    return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
 }

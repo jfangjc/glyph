@@ -1,11 +1,8 @@
-import {
-    findSourceBlockAtOffset,
-} from "./block-index";
+import { findSourceBlockAtOffset, readVisibleListPrefixLength, type SourceBlock } from "./types";
 import {
     dispatch,
     getEditorState,
 } from "./store";
-import type { SourceBlock } from "./types";
 import {
     findBlock,
     getBlockContent,
@@ -25,6 +22,7 @@ import {
 } from "../selection/rendered-content-dom";
 import { getElement } from "../../utils/dom";
 import { nextGraphemeBoundary, previousGraphemeBoundary } from "../../utils/text-boundaries";
+import type { ProjectionCapability } from "./types";
 
 type DomPoint = {
     node: Node;
@@ -52,6 +50,11 @@ type NativeSourceNavigationDirection = "forward" | "backward";
 
 let pendingNativeSourceNavigation: { direction: NativeSourceNavigationDirection; timestamp: number } | null = null;
 let verticalNavigationAffinity: { preferredColumn: number; revision: number } | null = null;
+let activeProjectionCapability: ProjectionCapability | undefined;
+
+export function configureProjectionCapability(capability: ProjectionCapability | undefined): void {
+    activeProjectionCapability = capability;
+}
 
 export function applySourceBlockProjectionMetadata(
     blockElement: HTMLElement,
@@ -90,6 +93,10 @@ export function applySourceBlockProjectionMetadata(
 }
 
 export function sourceOffsetToDomPoint(offset: number, options: SourceOffsetToDomPointOptions = {}): DomPoint {
+    const custom = activeProjectionCapability?.sourceOffsetToDomPoint?.(offset);
+    if (custom) {
+        return custom;
+    }
     const state = getEditorState();
     const clampedOffset = clampOffset(offset, state.doc.length);
     const sourceBlock = findSourceBlockAtOffset(state.blocks, clampedOffset);
@@ -246,6 +253,10 @@ function usesContentNavigationColumn(block: SourceBlock, line: { from: number; t
 // Projection-only DOM reader: translates a browser DOM point to a canonical
 // EditorState.doc UTF-16 offset. It must not be used to recover source text.
 export function domPointToSourceOffset(node: Node, offset: number): number {
+    const custom = activeProjectionCapability?.domPointToSourceOffset?.(node, offset);
+    if (custom !== null && custom !== undefined) {
+        return custom;
+    }
     const state = getEditorState();
     const source = findBlockSourceElement(node);
     if (source) {
@@ -276,6 +287,13 @@ export function domPointToSourceOffset(node: Node, offset: number): number {
 
     if (node === block) {
         return offset <= 0 ? readDatasetNumber(block.dataset.sourceFrom) ?? contentFrom : readDatasetNumber(block.dataset.sourceTo) ?? contentTo;
+    }
+
+    const atomicBoundaryOffset = sourceBlock
+        ? readAtomicBlockContentBoundaryOffset(block, content, sourceBlock, node, offset)
+        : null;
+    if (atomicBoundaryOffset !== null) {
+        return atomicBoundaryOffset;
     }
 
     const inactiveSourceTokenOffset = content === node || content.contains(node)
@@ -900,18 +918,6 @@ function isListBlock(block: SourceBlock): boolean {
     return block.type === "list" || block.type === "ordered-list" || block.type === "todo";
 }
 
-function readVisibleListPrefixLength(block: SourceBlock): number {
-    if (block.type === "ordered-list") {
-        return `${block.listNumber ?? "1"}. `.length;
-    }
-
-    if (block.type === "todo") {
-        return `${block.listMarker ?? "-"} [${block.checked ? "x" : " "}] `.length;
-    }
-
-    return `${block.listMarker ?? "-"} `.length;
-}
-
 function readSkippedSourceTokenSelection(
     selection: Selection,
     state: ReturnType<typeof getEditorState>,
@@ -1257,6 +1263,34 @@ function readBlockEdgeOffset(block: HTMLElement, node: Node, offset: number): nu
     }
 
     return content.textContent?.length ?? 0;
+}
+
+function readAtomicBlockContentBoundaryOffset(
+    block: HTMLElement,
+    content: HTMLElement,
+    sourceBlock: SourceBlock,
+    node: Node,
+    offset: number,
+): number | null {
+    if (node !== content) {
+        return null;
+    }
+
+    const source = getBlockSourceElement(content, "atomic");
+    if (!source) {
+        return null;
+    }
+
+    const preview = Array.from(content.children).find(
+        (child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains("format-block-preview"),
+    );
+    const representative = block.dataset.blockSourceActive === "true" || !preview ? source : preview;
+    const representativeIndex = Array.from(content.childNodes).indexOf(representative);
+    if (representativeIndex < 0) {
+        return null;
+    }
+
+    return offset <= representativeIndex ? sourceBlock.sourceFrom : sourceBlock.sourceTo;
 }
 
 function readDatasetNumber(value: string | undefined): number | null {

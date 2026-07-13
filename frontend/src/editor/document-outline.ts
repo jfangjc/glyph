@@ -1,7 +1,5 @@
-import { headingTypes, readBlockType } from "./blocks/model";
-import { getBlockText, getEditorBlocks } from "./blocks/view";
-import { documentState } from "../documents/document-state";
 import { getEditorState } from "./core/store";
+import { getEditorBlocks } from "./blocks/view";
 
 type OutlineEntry = {
     block: HTMLElement;
@@ -79,45 +77,23 @@ function syncDocumentOutline(): void {
 }
 
 function readOutlineEntries(): OutlineEntry[] {
-    if (documentState.activeFormatId === "markdown") {
-        const state = getEditorState();
-        return state.blocks.blocks
-            .map((sourceBlock): OutlineEntry | null => {
-                if (sourceBlock.type !== "heading-1" && sourceBlock.type !== "heading-2") {
-                    return null;
-                }
-
-                const text = state.doc.slice(sourceBlock.contentFrom, sourceBlock.contentTo).trim();
-                const block = document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(sourceBlock.id)}"]`);
-                if (!text || !block) {
-                    return null;
-                }
-
-                return {
-                    block,
-                    id: sourceBlock.id,
-                    level: sourceBlock.type === "heading-1" ? 1 : 2,
-                    text,
-                };
-            })
-            .filter((entry): entry is OutlineEntry => Boolean(entry));
-    }
-
-    return getEditorBlocks()
-        .map((block, index): OutlineEntry | null => {
-            const type = readBlockType(block.dataset.type);
-            if (!isOutlineHeadingBlock(block)) {
+    const state = getEditorState();
+    return state.blocks.blocks
+        .map((sourceBlock): OutlineEntry | null => {
+            if (sourceBlock.type !== "heading-1" && sourceBlock.type !== "heading-2") {
                 return null;
             }
 
-            const text = getBlockText(block).trim();
-            const id = block.dataset.outlineId ?? `outline-${Date.now().toString(36)}-${index}`;
-            block.dataset.outlineId = id;
+            const text = state.doc.slice(sourceBlock.contentFrom, sourceBlock.contentTo).trim();
+            const block = document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(sourceBlock.id)}"]`);
+            if (!text || !block) {
+                return null;
+            }
 
             return {
                 block,
-                id,
-                level: type === "heading-1" ? 1 : 2,
+                id: sourceBlock.id,
+                level: sourceBlock.type === "heading-1" ? 1 : 2,
                 text,
             };
         })
@@ -235,13 +211,8 @@ function isVisibleInContainer(elementRect: DOMRect, containerRect: DOMRect): boo
 }
 
 function isOutlineHeadingBlock(block: HTMLElement): boolean {
-    if (documentState.activeFormatId === "markdown") {
-        const type = block.dataset.type;
-        return (type === "heading-1" || type === "heading-2") && Boolean(block.dataset.blockId);
-    }
-
-    const type = readBlockType(block.dataset.type);
-    return (type === "heading-1" || type === "heading-2") && headingTypes.has(type) && Boolean(getBlockText(block).trim());
+    const type = block.dataset.type;
+    return (type === "heading-1" || type === "heading-2") && Boolean(block.dataset.blockId);
 }
 
 function setActiveOutlineId(nextActive: string | null, options: { force?: boolean; scrollActiveItem?: boolean } = {}): void {

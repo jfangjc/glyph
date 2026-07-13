@@ -11,7 +11,7 @@ import {
     getBlockText,
     getEditorBlocks,
 } from "../blocks/view";
-import { getElement } from "../../utils/dom";
+import { getElement, getPlainTextBoundaryOffset } from "../../utils/dom";
 import {
     findBlockSourceElement,
     focusBlockSourceAtOffset as focusBlockSourceElementAtOffset,
@@ -19,7 +19,7 @@ import {
     isEditableBlockSourceElement,
     readBlockSourcePosition,
 } from "../blocks/rendering";
-import type { DocumentSourceSelectionTarget } from "../../formats/types";
+import type { DocumentSourceSelectionTarget } from "../core/types";
 
 export type SelectedBlockRange = {
     blocks: HTMLElement[];
@@ -137,10 +137,6 @@ export function focusSourceSelectionTarget(target: DocumentSourceSelectionTarget
     focusPlainTextElement(target.source, target.sourceOffset);
 }
 
-export function isSelectionInsideEditableSource(): boolean {
-    return readCurrentSourceSelectionTarget() !== null;
-}
-
 function createBlockSourceSelectionTarget(
     source: HTMLElement,
     sourceOffset: number,
@@ -238,29 +234,6 @@ export function getSelectedBlockRange(): SelectedBlockRange | null {
         endOffset: getBoundaryOffset(endBlock, range.endContainer, range.endOffset, "end"),
         range: range.cloneRange(),
     };
-}
-
-export function getPlainTextBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
-    if (current === anchorNode) {
-        if (current.nodeType === Node.TEXT_NODE) {
-            return (current.textContent ?? "").slice(0, anchorOffset).length;
-        }
-
-        return Array.from(current.childNodes)
-            .slice(0, Math.max(0, anchorOffset))
-            .reduce((offset, child) => offset + (child.textContent ?? "").length, 0);
-    }
-
-    let offset = 0;
-    for (const child of Array.from(current.childNodes)) {
-        if (child === anchorNode || child.contains(anchorNode)) {
-            return offset + getPlainTextBoundaryOffset(child, anchorNode, anchorOffset);
-        }
-
-        offset += (child.textContent ?? "").length;
-    }
-
-    return offset;
 }
 
 export function isCaretAtBlockEdge(block: HTMLElement, edge: "start" | "end"): boolean {

@@ -18,9 +18,9 @@ type AppMenuControllerOptions = {
     openDocument: () => Promise<void>;
     openDirectory: () => Promise<void>;
     saveDocument: (promptForPath?: boolean) => Promise<void>;
-    ensureMarkdownExportSaved: () => Promise<boolean>;
+    ensureExportSaved: () => Promise<boolean>;
     toggleFileTree: () => void;
-    isMarkdownDocument: () => boolean;
+    canExport: () => boolean;
     executeEditorCommand: (command: EditorCommand) => Promise<void>;
 };
 
@@ -95,11 +95,11 @@ export function createAppMenuController(options: AppMenuControllerOptions): AppM
     }
 
     async function exportCurrentDocumentToPdf(): Promise<void> {
-        if (!options.isMarkdownDocument()) {
+        if (!options.canExport()) {
             return;
         }
 
-        const saved = await options.ensureMarkdownExportSaved();
+        const saved = await options.ensureExportSaved();
         if (!saved) {
             return;
         }
@@ -126,7 +126,7 @@ export function createAppMenuController(options: AppMenuControllerOptions): AppM
             return;
         }
 
-        exportButton.disabled = !options.isMarkdownDocument();
+        exportButton.disabled = !options.canExport();
     }
 
     async function waitForMarkdownExportView(): Promise<void> {

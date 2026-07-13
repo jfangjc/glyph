@@ -1,6 +1,5 @@
-import { type BlockType, type ParsedBlock, type ParsedDocument } from "../../editor/blocks/model";
-import { titleFromFileName } from "../file-names";
-import type { DocumentFileLike, DocumentReferenceMap } from "../types";
+import { type BlockType, type ParsedBlock } from "../../editor/blocks/model";
+import type { DocumentReferenceMap } from "../types";
 import { isMarkdownHtmlBlockStart, readMarkdownHtmlBlock } from "./html";
 import { normalizeReferenceLabel, parseMarkdownReferenceDefinition } from "./references";
 import { readMarkdownTable } from "./table";
@@ -31,18 +30,6 @@ type MarkdownBlockRange = {
     lineFrom: number;
     lineTo: number;
 };
-
-export function parseMarkdownDocument(documentFile: DocumentFileLike): ParsedDocument {
-    const lines = readMarkdownLines(documentFile.content, true);
-    const parsed = parseMarkdownLines(lines, 0);
-
-    return {
-        title: titleFromFileName(documentFile.name),
-        usesTitle: false,
-        blocks: parsed.blocks.length > 0 ? parsed.blocks : [{ type: "paragraph", text: "" }],
-        references: parsed.references,
-    };
-}
 
 export function parseMarkdownBlocksWithRanges(content: string): ParsedMarkdownBlockWithRange[] {
     const lines = readMarkdownLineRecords(content, true);

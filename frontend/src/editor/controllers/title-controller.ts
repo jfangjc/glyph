@@ -1,18 +1,14 @@
-import { syncDocumentWindowTitle } from "../../app/window-title";
 import { matchesShortcutCommand } from "../../app/keymap";
+import { syncDocumentWindowTitle } from "../../app/window-title";
 import type { DocumentFormat } from "../../formats/types";
+import { getElement } from "../../utils/dom";
 import {
-    beginDiscreteUndoTransaction,
-    beginTypingUndoTransaction,
-    commitUndoTransaction,
-    flushPendingUndoTransaction,
-} from "../history/undo-history";
-import {
-    isTypingBoundaryKeydown,
-    readBeforeInputUndoKind,
-    shouldEndTypingBatchAfterInput,
-} from "./input-transactions";
-import { redoHistoryChange, undoHistoryChange } from "./undo-controller";
+    dispatch,
+    flushSourceHistoryBatch,
+    getEditorState,
+    redoSourceHistory,
+    undoSourceHistory,
+} from "../core/store";
 
 export type TitleController = {
     handleTitleBeforeInput: (event: InputEvent) => void;
@@ -26,14 +22,14 @@ type TitleControllerOptions = {
     getActiveDocumentFormat: () => DocumentFormat;
     isComposingText: () => boolean;
     hasActiveFileWithUnsavedChanges: () => boolean;
-    markDocumentDirty: () => void;
     saveDocument: () => Promise<boolean>;
     syncActiveBlockIndicator: (block: HTMLElement | null) => void;
     syncBlockSourceReveal: (block: HTMLElement | null) => void;
 };
 
 export function createTitleController(options: TitleControllerOptions): TitleController {
-    let shouldFlushTypingBatchAfterInput = false;
+    let historyMode: "typing" | "discrete" = "typing";
+    let flushAfterInput = false;
 
     return {
         handleTitleBeforeInput,
@@ -44,78 +40,91 @@ export function createTitleController(options: TitleControllerOptions): TitleCon
     };
 
     function handleTitleBeforeInput(event: InputEvent): void {
-        if (!options.getActiveDocumentFormat().supportsTitle) {
+        if (!options.getActiveDocumentFormat().descriptor.editableTitle) {
             return;
         }
-
-        const undoKind = readBeforeInputUndoKind(event, options.isComposingText());
-        if (undoKind === "history-undo" || undoKind === "history-redo") {
+        if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
             event.preventDefault();
-            if (undoKind === "history-undo") {
-                undoHistoryChange();
-            } else {
-                redoHistoryChange();
-            }
+            restoreHistory(event.inputType === "historyUndo" ? "undo" : "redo");
             return;
         }
 
-        if (undoKind === "typing") {
-            beginTypingUndoTransaction();
-            shouldFlushTypingBatchAfterInput = shouldEndTypingBatchAfterInput(event);
-        } else if (undoKind === "discrete") {
-            beginDiscreteUndoTransaction();
-            shouldFlushTypingBatchAfterInput = false;
-        }
+        historyMode = isTypingInput(event, options.isComposingText()) ? "typing" : "discrete";
+        flushAfterInput = event.inputType === "insertText" && Boolean(event.data && /[\s.,;:!?()[\]{}"'`]/.test(event.data));
     }
 
     function handleTitleKeydown(event: KeyboardEvent): void {
         if (matchesShortcutCommand(event, "edit:undo", "title")) {
             event.preventDefault();
-            undoHistoryChange();
+            restoreHistory("undo");
             return;
         }
-
         if (matchesShortcutCommand(event, "edit:redo", "title")) {
             event.preventDefault();
-            redoHistoryChange();
+            restoreHistory("redo");
             return;
         }
-
-        if (isTypingBoundaryKeydown(event)) {
-            flushPendingUndoTransaction();
+        if (isNavigationKey(event)) {
+            flushSourceHistoryBatch();
         }
     }
 
     function handleTitleInput(): void {
-        if (!options.getActiveDocumentFormat().supportsTitle) {
+        if (!options.getActiveDocumentFormat().descriptor.editableTitle) {
             return;
         }
 
-        commitUndoTransaction();
-        flushTypingBatchAfterInputIfNeeded();
+        const title = getElement<HTMLInputElement>("document-title").value;
+        dispatch({
+            changes: [],
+            title,
+            annotations: {
+                userEvent: "input",
+                historyMode,
+            },
+        });
+        if (flushAfterInput || historyMode === "discrete") {
+            flushAfterInput = false;
+            flushSourceHistoryBatch();
+        }
         syncDocumentWindowTitle();
-        options.markDocumentDirty();
     }
 
     function handleTitleFocus(): void {
-        flushPendingUndoTransaction();
+        flushSourceHistoryBatch();
         options.syncActiveBlockIndicator(null);
         options.syncBlockSourceReveal(null);
     }
 
     function handleTitleBlur(): void {
-        flushPendingUndoTransaction();
+        flushSourceHistoryBatch();
         if (options.hasActiveFileWithUnsavedChanges()) {
             void options.saveDocument();
         }
     }
 
-    function flushTypingBatchAfterInputIfNeeded(): void {
-        if (!shouldFlushTypingBatchAfterInput) {
-            return;
+    function restoreHistory(direction: "undo" | "redo"): void {
+        if (direction === "undo") {
+            undoSourceHistory();
+        } else {
+            redoSourceHistory();
         }
-
-        shouldFlushTypingBatchAfterInput = false;
-        flushPendingUndoTransaction();
+        getElement<HTMLInputElement>("document-title").value = getEditorState().title;
+        syncDocumentWindowTitle();
     }
+}
+
+function isTypingInput(event: InputEvent, isComposing: boolean): boolean {
+    return isComposing || event.inputType === "insertText" || event.inputType.startsWith("delete");
+}
+
+function isNavigationKey(event: KeyboardEvent): boolean {
+    return !event.ctrlKey && !event.metaKey && !event.altKey && (
+        event.key.startsWith("Arrow") ||
+        event.key === "Home" ||
+        event.key === "End" ||
+        event.key === "PageUp" ||
+        event.key === "PageDown" ||
+        event.key === "Escape"
+    );
 }

@@ -18,6 +18,13 @@ type ParsedMarkdownTable = {
     rows: string[][];
 };
 
+export type MarkdownTableCellBoundary = {
+    lineIndex: number;
+    cellIndex: number;
+    start: number;
+    end: number;
+};
+
 export function createMarkdownTableFromHeader(headerLine: string): { text: string; firstBodyCellOffset: number } | null {
     if (!isPotentialTableRow(headerLine)) {
         return null;
@@ -79,7 +86,7 @@ export function readMarkdownTable(lines: string[], index: number): MarkdownTable
 }
 
 export function formatMarkdownTableSource(text: string): string {
-    const table = parseMarkdownTable(text, { allowShortDelimiters: true });
+    const table = parseMarkdownTable(text);
     if (!table) {
         return text;
     }
@@ -116,6 +123,47 @@ export function readMarkdownTableCellRange(
     const lineStart = lines.slice(0, lineIndex).join("\n").length + (lineIndex > 0 ? 1 : 0);
     const cells = readMarkdownTableRowCellRanges(lines[lineIndex], lineStart);
     return cells[cellIndex] ?? null;
+}
+
+export function readMarkdownTableCellFocusOffset(text: string, lineIndex: number, cellIndex: number): number | null {
+    const range = readMarkdownTableCellRange(text, lineIndex, cellIndex);
+    if (!range) {
+        return null;
+    }
+
+    const alignment = parseMarkdownTable(text)?.alignments[cellIndex] ?? null;
+    return lineIndex !== 1 && alignment === "right" ? range.end : range.start;
+}
+
+export function readMarkdownTableCellAtOffset(text: string, offset: number): MarkdownTableCellBoundary | null {
+    const lines = text.split("\n");
+    let lineStart = 0;
+
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+        const line = lines[lineIndex];
+        const lineEnd = lineStart + line.length;
+        if (offset >= lineStart && offset <= lineEnd) {
+            const cells = readMarkdownTableRowCellRanges(line, lineStart).map((range, cellIndex) => ({
+                lineIndex,
+                cellIndex,
+                ...range,
+            }));
+            return cells.find((cell) => offset <= cell.end) ?? cells[cells.length - 1] ?? null;
+        }
+
+        lineStart = lineEnd + 1;
+    }
+
+    return null;
+}
+
+export function readMarkdownTableColumnCount(text: string): number {
+    const header = text.split("\n")[0] ?? "";
+    return readMarkdownTableRowCellRanges(header, 0).length;
+}
+
+export function createEmptyMarkdownTableRow(columnCount: number): string {
+    return serializeTableRow(Array.from({ length: columnCount }, () => ""));
 }
 
 export function renderMarkdownBlock(
@@ -164,16 +212,13 @@ export function renderMarkdownBlock(
     return `<table class="markdown-table"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function parseMarkdownTable(
-    text: string,
-    options: { allowShortDelimiters?: boolean } = {},
-): ParsedMarkdownTable | null {
+function parseMarkdownTable(text: string): ParsedMarkdownTable | null {
     const lines = text.replace(/\r\n?/g, "\n").split("\n");
     if (lines.length < 2) {
         return null;
     }
 
-    const alignments = parseTableDelimiterRow(lines[1], options);
+    const alignments = parseTableDelimiterRow(lines[1]);
     if (!alignments) {
         return null;
     }
@@ -203,10 +248,7 @@ function renderTableCell(
     return `<${tag}${align} data-table-source-row="${rowIndex}" data-table-source-column="${columnIndex}">${renderInline(text.trim(), context)}</${tag}>`;
 }
 
-function parseTableDelimiterRow(
-    line: string,
-    options: { allowShortDelimiters?: boolean } = {},
-): TableAlignment[] | null {
+function parseTableDelimiterRow(line: string): TableAlignment[] | null {
     if (!isPotentialTableRow(line)) {
         return null;
     }
@@ -217,7 +259,7 @@ function parseTableDelimiterRow(
     }
 
     const alignments: TableAlignment[] = [];
-    const delimiterPattern = options.allowShortDelimiters ? /^:?-{1,}:?$/ : /^:?-{3,}:?$/;
+    const delimiterPattern = /^:?-{1,}:?$/;
     for (const cell of cells) {
         const trimmed = cell.trim();
         if (!delimiterPattern.test(trimmed)) {
@@ -246,7 +288,7 @@ function readAlignment(delimiter: string): TableAlignment {
         return "left";
     }
 
-    return "left";
+    return null;
 }
 
 function readDelimiterWidth(alignment: TableAlignment): number {
@@ -356,7 +398,7 @@ function createDelimiterCell(alignment: TableAlignment, width: number): string {
         return `:${"-".repeat(Math.max(3, width - 1))}`;
     }
 
-    return `:${"-".repeat(Math.max(3, width - 1))}`;
+    return "-".repeat(Math.max(3, width));
 }
 
 export function readMarkdownTableRowCellRanges(line: string, lineStart: number): Array<{ start: number; end: number }> {
@@ -386,7 +428,8 @@ export function readMarkdownTableRowCellRanges(line: string, lineStart: number):
         let end = index;
         if (rawCell.trim() === "") {
             start += rawCell.startsWith(" ") ? 1 : 0;
-            end = start;
+            end -= rawCell.endsWith(" ") ? 1 : 0;
+            end = Math.max(start, end);
         } else {
             while (start < end && line[start] === " ") {
                 start += 1;

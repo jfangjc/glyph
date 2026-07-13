@@ -12,19 +12,19 @@ import {
     focusPlainTextElement,
     getCaretOffset,
     getCaretPositionFromPoint,
-    getPlainTextBoundaryOffset,
     getTextPosition,
 } from "./selection/caret";
 import { getBlockSourceElement } from "./blocks/rendering";
-import { getElement } from "../utils/dom";
+import { getElement, getPlainTextBoundaryOffset } from "../utils/dom";
 import { clamp } from "../utils/text";
-import { readMarkdownTableCellRange } from "../formats/markdown/table";
+import type { ProjectionCapability } from "./core/types";
 
 type PointerBlockTarget = {
     block: HTMLElement;
     offset: number;
     sourcePosition?: { node: Node; offset: number };
-    tableCell?: { lineIndex: number; cellIndex: number; progress: number };
+    pointerElement?: Element;
+    clientX?: number;
 };
 
 type PointerDownSelection = {
@@ -35,6 +35,7 @@ type PointerDownSelection = {
 
 type PointerInteractionHooks = {
     onBlockActivated?: (block: HTMLElement | null) => void;
+    getProjectionCapability?: () => ProjectionCapability | undefined;
 };
 
 let hooks: PointerInteractionHooks = {};
@@ -203,12 +204,9 @@ function isWindowChromeEvent(event: MouseEvent): boolean {
 }
 
 function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
-    if (target.closest(".markdown-table-preview, .markdown-math-preview, .markdown-html-preview")) {
-        return false;
-    }
-
-    if (target.closest(".markdown-token-editing")) {
-        return true;
+    const formatPreference = hooks.getProjectionCapability?.()?.shouldUseNativePointer?.(target);
+    if (formatPreference !== null && formatPreference !== undefined) {
+        return formatPreference;
     }
 
     return Boolean(
@@ -226,24 +224,30 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
             return markerColumnTarget;
         }
 
-        const sourcePosition = readPointerBlockSourcePosition(directBlock, clientX, clientY);
+        const sourcePosition = readPointerBlockSourcePosition(directBlock, clientX, clientY)
+            ?? readPointerProjectedSourcePosition(directBlock, target, clientX);
         return {
             block: directBlock,
             offset: getPointerCaretOffset(directBlock, clientX, clientY),
             sourcePosition,
-            tableCell: readTableCellPointerTarget(target, clientX),
+            pointerElement: target,
+            clientX,
         };
     }
 
     const pointTarget = document.elementFromPoint(clientX, clientY);
     const pointBlock = pointTarget instanceof Element ? findBlock(pointTarget) : null;
     if (pointBlock) {
-        const sourcePosition = readPointerBlockSourcePosition(pointBlock, clientX, clientY);
+        const sourcePosition = readPointerBlockSourcePosition(pointBlock, clientX, clientY)
+            ?? (pointTarget instanceof Element
+                ? readPointerProjectedSourcePosition(pointBlock, pointTarget, clientX)
+                : undefined);
         return {
             block: pointBlock,
             offset: getPointerCaretOffset(pointBlock, clientX, clientY),
             sourcePosition,
-            tableCell: pointTarget instanceof Element ? readTableCellPointerTarget(pointTarget, clientX) : undefined,
+            pointerElement: pointTarget instanceof Element ? pointTarget : undefined,
+            clientX,
         };
     }
 
@@ -359,6 +363,30 @@ function readPointerBlockSourcePosition(
     }
 
     return undefined;
+}
+
+function readPointerProjectedSourcePosition(
+    block: HTMLElement,
+    target: Element,
+    clientX: number,
+): { node: Node; offset: number } | undefined {
+    if (block.dataset.blockSourceActive === "true") {
+        return undefined;
+    }
+
+    const source = getBlockSourceElement(getBlockContent(block), "atomic");
+    if (!source) {
+        return undefined;
+    }
+
+    const sourceOffset = hooks.getProjectionCapability?.()?.resolvePointerSourceOffset?.(
+        source.textContent ?? "",
+        target,
+        clientX,
+    );
+    return sourceOffset === null || sourceOffset === undefined
+        ? undefined
+        : getPlainTextSourcePosition(source, sourceOffset);
 }
 
 function readPointerPlainTextOffset(source: HTMLElement, clientX: number, clientY: number): number {
@@ -647,11 +675,6 @@ function focusPointerTargetBlock(pointerTarget: PointerBlockTarget): void {
 }
 
 function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
-    const type = readBlockType(pointerTarget.block.dataset.type);
-    if (type !== "table" && type !== "definition-list" && type !== "math" && type !== "html") {
-        return false;
-    }
-
     const source = getBlockSourceElement(getBlockContent(pointerTarget.block), "atomic");
     if (!source) {
         return false;
@@ -659,50 +682,26 @@ function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
 
     pointerTarget.block.dataset.blockSourceActive = "true";
     const sourceLength = source.textContent?.length ?? 0;
-    const tableCellOffset = type === "table"
-        ? readTableCellSourceOffset(source.textContent ?? "", pointerTarget.tableCell)
+    const resolvedOffset = pointerTarget.pointerElement && pointerTarget.clientX !== undefined
+        ? hooks.getProjectionCapability?.()?.resolvePointerSourceOffset?.(
+            source.textContent ?? "",
+            pointerTarget.pointerElement,
+            pointerTarget.clientX,
+        ) ?? null
         : null;
-    focusPlainTextElement(
-        source,
-        tableCellOffset ?? (pointerTarget.offset <= 0 ? 0 : sourceLength),
-    );
+    const sourceOffset = resolvedOffset ?? (pointerTarget.offset <= 0 ? 0 : sourceLength);
+    pointerTarget.sourcePosition = getPlainTextSourcePosition(source, sourceOffset);
+    focusPlainTextElement(source, sourceOffset);
     hooks.onBlockActivated?.(pointerTarget.block);
     return true;
 }
 
-function readTableCellPointerTarget(
-    target: Element,
-    clientX: number,
-): PointerBlockTarget["tableCell"] {
-    const cell = target.closest<HTMLElement>("[data-table-source-row][data-table-source-column]");
-    const lineIndex = cell ? Number(cell.dataset.tableSourceRow) : Number.NaN;
-    const cellIndex = cell ? Number(cell.dataset.tableSourceColumn) : Number.NaN;
-    if (!cell || !Number.isInteger(lineIndex) || !Number.isInteger(cellIndex)) {
-        return undefined;
-    }
-
-    const rect = cell.getBoundingClientRect();
+function getPlainTextSourcePosition(source: HTMLElement, offset: number): { node: Node; offset: number } {
+    const text = source.firstChild ?? source.appendChild(document.createTextNode(""));
     return {
-        lineIndex,
-        cellIndex,
-        progress: rect.width > 0 ? clamp((clientX - rect.left) / rect.width, 0, 1) : 0,
+        node: text,
+        offset: Math.min(Math.max(0, offset), text.textContent?.length ?? 0),
     };
-}
-
-function readTableCellSourceOffset(
-    source: string,
-    target: PointerBlockTarget["tableCell"],
-): number | null {
-    if (!target) {
-        return null;
-    }
-
-    const range = readMarkdownTableCellRange(source, target.lineIndex, target.cellIndex);
-    if (!range) {
-        return null;
-    }
-
-    return range.start + Math.round((range.end - range.start) * target.progress);
 }
 
 function requestGutterHover(event: MouseEvent): void {

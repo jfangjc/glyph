@@ -1,32 +1,6 @@
 import { getElement } from "../utils/dom";
-import { findSourceBlockAtOffset } from "./core/block-index";
-import {
-    dispatch,
-    getEditorState,
-} from "./core/store";
-import {
-    sourceOffsetToDomPoint,
-    syncDomSelectionFromState,
-    syncStateSelectionFromDom,
-} from "./core/projection";
-import {
-    findBlock,
-    getBlockContent,
-    getBlockIndex,
-    getBlockText,
-    getEditorBlocks,
-    setBlockText,
-} from "./blocks/view";
-import {
-    focusBlockAtOffset,
-    getCaretOffset,
-    getSelectedBlockRange,
-    getTextPosition,
-} from "./selection/caret";
-import {
-    beginDiscreteUndoTransaction,
-    commitUndoTransaction,
-} from "./history/undo-history";
+import { sourceOffsetToDomPoint, syncDomSelectionFromState, syncStateSelectionFromDom } from "./core/projection";
+import { dispatch, getEditorState } from "./core/store";
 
 export type FindReplaceController = {
     openFind: () => void;
@@ -35,21 +9,8 @@ export type FindReplaceController = {
     refresh: () => void;
 };
 
-type FindOptions = {
-    caseSensitive: boolean;
-    wholeWord: boolean;
-};
-
-type FindMatch = {
-    block: HTMLElement | null;
-    blockId?: string;
-    blockIndex: number;
-    startOffset: number;
-    endOffset: number;
-    from: number;
-    to: number;
-};
-
+type FindMatch = { from: number; to: number };
+type FindOptions = { caseSensitive: boolean; wholeWord: boolean };
 type FindReplaceElements = {
     panel: HTMLElement;
     findInput: HTMLInputElement;
@@ -64,839 +25,256 @@ type FindReplaceElements = {
     replaceAllButton: HTMLButtonElement;
     closeButton: HTMLButtonElement;
     highlightLayer: HTMLElement;
+    replaceRow: HTMLElement;
 };
 
-type SearchPoint = {
-    blockIndex: number;
-    offset: number;
-};
+const wordCharacterPattern = /[\p{L}\p{N}_]/u;
 
-type TextInputSelection = {
-    start: number | null;
-    end: number | null;
-    direction: "forward" | "backward" | "none";
-};
-
-type InstallFindReplaceOptions = {
+export function installFindReplaceController(options: {
     editor: HTMLElement;
     shell: HTMLElement;
-    onDirty: () => void;
-    isSourceFirstMarkdown: () => boolean;
-};
-
-const wholeWordCharacterPattern = /[\p{L}\p{N}_]/u;
-
-export function installFindReplaceController({
-    editor,
-    shell,
-    onDirty,
-    isSourceFirstMarkdown,
-}: InstallFindReplaceOptions): FindReplaceController {
-    const elements = readFindReplaceElements();
-    const replaceRow = getElement<HTMLElement>("replace-row");
+}): FindReplaceController {
+    const elements = readElements();
     let matches: FindMatch[] = [];
-    let activeMatchIndex = -1;
-    let lastQuery = "";
-    let options: FindOptions = { caseSensitive: false, wholeWord: false };
-    let lastSearchAnchor: SearchPoint | null = null;
+    let activeIndex = -1;
+    let findOptions: FindOptions = { caseSensitive: false, wholeWord: false };
     let highlightFrame = 0;
 
-    elements.findInput.addEventListener("input", () => {
-        scanFromCurrentAnchor();
+    elements.findInput.addEventListener("input", () => scan());
+    elements.findInput.addEventListener("keydown", handleFindKeydown);
+    elements.replaceInput.addEventListener("keydown", handleReplaceKeydown);
+    elements.previousButton.addEventListener("click", () => navigate(-1));
+    elements.nextButton.addEventListener("click", () => navigate(1));
+    elements.caseButton.addEventListener("click", () => {
+        findOptions.caseSensitive = !findOptions.caseSensitive;
+        scan();
     });
-    elements.findInput.addEventListener("keydown", handleFindInputKeydown);
-    elements.replaceInput.addEventListener("keydown", handleReplaceInputKeydown);
-    elements.previousButton.addEventListener("click", () => navigateMatches(-1));
-    elements.nextButton.addEventListener("click", () => navigateMatches(1));
-    elements.caseButton.addEventListener("click", () => toggleCaseSensitive());
-    elements.wholeWordButton.addEventListener("click", () => toggleWholeWord());
-    elements.replaceToggleButton.addEventListener("click", () => {
-        setReplaceExpanded(replaceRow.hidden === true);
-        if (!replaceRow.hidden) {
-            elements.replaceInput.focus();
-            elements.replaceInput.select();
-        }
+    elements.wholeWordButton.addEventListener("click", () => {
+        findOptions.wholeWord = !findOptions.wholeWord;
+        scan();
     });
-    elements.replaceButton.addEventListener("click", () => replaceCurrentMatch());
-    elements.replaceAllButton.addEventListener("click", () => replaceAllMatches());
-    elements.closeButton.addEventListener("click", () => close());
-    editor.addEventListener("input", () => refresh());
-    editor.addEventListener("change", () => refresh());
-    shell.addEventListener("scroll", () => scheduleHighlightRedraw());
-    editor.addEventListener("scroll", () => scheduleHighlightRedraw());
-    window.addEventListener("resize", () => scheduleHighlightRedraw());
-    document.addEventListener("keydown", handleDocumentKeydown, true);
+    elements.replaceToggleButton.addEventListener("click", () => setReplaceExpanded(elements.replaceRow.hidden === true));
+    elements.replaceButton.addEventListener("click", replaceCurrent);
+    elements.replaceAllButton.addEventListener("click", replaceAll);
+    elements.closeButton.addEventListener("click", close);
+    options.shell.addEventListener("scroll", scheduleHighlights);
+    options.editor.addEventListener("scroll", scheduleHighlights);
+    window.addEventListener("resize", scheduleHighlights);
 
     syncControls();
-
-    return {
-        openFind,
-        openReplace,
-        close,
-        refresh,
-    };
+    return { openFind, openReplace, close, refresh };
 
     function openFind(): void {
-        openPanel(false);
+        open(false);
     }
 
     function openReplace(): void {
-        openPanel(true);
+        open(true);
+    }
+
+    function open(replace: boolean): void {
+        syncStateSelectionFromDom();
+        seedQueryFromSelection();
+        elements.panel.hidden = false;
+        setReplaceExpanded(replace);
+        scan();
+        const input = replace ? elements.replaceInput : elements.findInput;
+        input.focus();
+        input.select();
     }
 
     function close(): void {
-        if (elements.panel.hidden) {
-            return;
-        }
-
-        const activeMatch = getActiveMatch();
         elements.panel.hidden = true;
-        clearHighlights();
-
-        if (activeMatch && selectMatch(activeMatch, { scroll: false })) {
-            return;
-        }
-
-        editor.focus();
+        elements.highlightLayer.replaceChildren();
+        options.editor.focus();
+        syncDomSelectionFromState();
     }
 
     function refresh(): void {
-        if (elements.panel.hidden) {
-            clearHighlights();
-            return;
+        if (!elements.panel.hidden) {
+            scan(false);
         }
-
-        const activeMatch = getActiveMatch();
-        scanMatches(activeMatch ? matchStartPoint(activeMatch) : lastSearchAnchor, true);
     }
 
-    function openPanel(expandReplace: boolean): void {
-        lastSearchAnchor = readCurrentEditorSelectionPoint() ?? readActiveMatchPoint() ?? lastSearchAnchor;
-        seedFindInput();
-        elements.panel.hidden = false;
-        setReplaceExpanded(expandReplace);
-        scanMatches(lastSearchAnchor, true);
-        elements.findInput.focus();
-        elements.findInput.select();
-    }
-
-    function handleFindInputKeydown(event: KeyboardEvent): void {
-        if (event.key !== "Enter") {
-            return;
-        }
-
-        event.preventDefault();
-        navigateMatches(event.shiftKey ? -1 : 1, elements.findInput);
-    }
-
-    function handleReplaceInputKeydown(event: KeyboardEvent): void {
-        if (event.key !== "Enter") {
-            return;
-        }
-
-        event.preventDefault();
-        if (event.ctrlKey || event.metaKey) {
-            replaceAllMatches();
+    function scan(chooseFromSelection = true): void {
+        matches = collectMatches(getEditorState().doc, elements.findInput.value, findOptions);
+        if (matches.length === 0) {
+            activeIndex = -1;
+        } else if (chooseFromSelection) {
+            const head = getEditorState().selection.head;
+            const next = matches.findIndex((match) => match.from >= head);
+            activeIndex = next >= 0 ? next : 0;
         } else {
-            replaceCurrentMatch();
+            activeIndex = Math.min(Math.max(0, activeIndex), matches.length - 1);
         }
-        restoreTextInputFocus(elements.replaceInput);
+        syncControls();
+        scheduleHighlights();
     }
 
-    function handleDocumentKeydown(event: KeyboardEvent): void {
-        if (elements.panel.hidden) {
-            return;
-        }
+    function navigate(delta: -1 | 1): void {
+        if (matches.length === 0) return;
+        activeIndex = (activeIndex + delta + matches.length) % matches.length;
+        focusMatch(matches[activeIndex]);
+        syncControls();
+        scheduleHighlights();
+    }
 
+    function focusMatch(match: FindMatch): void {
+        dispatch({
+            changes: [],
+            selection: { anchor: match.from, head: match.to },
+            annotations: { userEvent: "programmatic", addToHistory: false },
+        });
+        syncDomSelectionFromState();
+        const point = sourceOffsetToDomPoint(match.from);
+        const element = point.node instanceof Element ? point.node : point.node.parentElement;
+        element?.scrollIntoView({ block: "center" });
+    }
+
+    function replaceCurrent(): void {
+        const match = matches[activeIndex];
+        if (!match) return;
+        const insert = elements.replaceInput.value;
+        dispatch({
+            changes: [{ from: match.from, to: match.to, insert }],
+            selection: { anchor: match.from + insert.length, head: match.from + insert.length },
+            annotations: { userEvent: "input", historyMode: "discrete" },
+        });
+        scan();
+    }
+
+    function replaceAll(): void {
+        if (matches.length === 0) return;
+        const insert = elements.replaceInput.value;
+        const first = matches[0].from;
+        dispatch({
+            changes: matches.map((match) => ({ from: match.from, to: match.to, insert })),
+            selection: { anchor: first + insert.length, head: first + insert.length },
+            annotations: { userEvent: "input", historyMode: "discrete" },
+        });
+        scan();
+    }
+
+    function handleFindKeydown(event: KeyboardEvent): void {
         if (event.key === "Escape") {
             event.preventDefault();
-            event.stopPropagation();
             close();
-            return;
-        }
-
-        if (event.key === "Enter" && shouldRouteEditorEnterToFind(event)) {
+        } else if (event.key === "Enter") {
             event.preventDefault();
-            event.stopPropagation();
-            navigateMatches(event.shiftKey ? -1 : 1, elements.findInput);
+            navigate(event.shiftKey ? -1 : 1);
         }
     }
 
-    function toggleCaseSensitive(): void {
-        options = { ...options, caseSensitive: !options.caseSensitive };
-        elements.caseButton.setAttribute("aria-pressed", options.caseSensitive ? "true" : "false");
-        scanFromCurrentAnchor();
-    }
-
-    function toggleWholeWord(): void {
-        options = { ...options, wholeWord: !options.wholeWord };
-        elements.wholeWordButton.setAttribute("aria-pressed", options.wholeWord ? "true" : "false");
-        scanFromCurrentAnchor();
-    }
-
-    function scanFromCurrentAnchor(): void {
-        scanMatches(readCurrentEditorSelectionPoint() ?? readActiveMatchPoint() ?? lastSearchAnchor, false);
-    }
-
-    function scanMatches(targetPoint: SearchPoint | null, keepActiveWhenPossible: boolean): void {
-        const query = elements.findInput.value;
-        const previousMatch = getActiveMatch();
-
-        lastQuery = query;
-        matches = query ? (isSourceFirstMarkdown() ? collectSourceMatches(query, options) : collectMatches(query, options)) : [];
-
-        if (matches.length === 0) {
-            activeMatchIndex = -1;
-        } else if (keepActiveWhenPossible && previousMatch) {
-            activeMatchIndex = findSameMatchIndex(previousMatch);
-            if (activeMatchIndex < 0) {
-                activeMatchIndex = findMatchIndexAtOrAfter(targetPoint ?? matchStartPoint(previousMatch));
-            }
-        } else {
-            activeMatchIndex = findMatchIndexAtOrAfter(targetPoint);
+    function handleReplaceKeydown(event: KeyboardEvent): void {
+        if (event.key === "Escape") {
+            event.preventDefault();
+            close();
+        } else if (event.key === "Enter") {
+            event.preventDefault();
+            replaceCurrent();
         }
-
-        if (targetPoint) {
-            lastSearchAnchor = targetPoint;
-        }
-
-        syncControls();
-        scheduleHighlightRedraw();
-    }
-
-    function navigateMatches(direction: 1 | -1, restoreFocusTarget: HTMLInputElement | null = null): void {
-        const inputSelection = restoreFocusTarget ? readTextInputSelection(restoreFocusTarget) : null;
-
-        if (!lastQuery || matches.length === 0) {
-            scanFromCurrentAnchor();
-        }
-
-        if (matches.length === 0) {
-            if (restoreFocusTarget) {
-                restoreTextInputFocus(restoreFocusTarget, inputSelection);
-            }
-            return;
-        }
-
-        activeMatchIndex = activeMatchIndex < 0
-            ? (direction > 0 ? 0 : matches.length - 1)
-            : (activeMatchIndex + direction + matches.length) % matches.length;
-
-        syncControls();
-        const activeMatch = getActiveMatch();
-        if (activeMatch) {
-            lastSearchAnchor = matchStartPoint(activeMatch);
-            selectMatch(activeMatch, { scroll: true });
-        }
-
-        if (restoreFocusTarget) {
-            restoreTextInputFocus(restoreFocusTarget, inputSelection);
-        }
-    }
-
-    function replaceCurrentMatch(): void {
-        const match = readValidActiveMatch();
-        if (!match) {
-            return;
-        }
-
-        if (isSourceFirstMarkdown()) {
-            replaceCurrentSourceMatch(match);
-            return;
-        }
-
-        const replacement = elements.replaceInput.value;
-        if (!match.block) {
-            return;
-        }
-
-        const text = getBlockText(match.block);
-        const nextText = text.slice(0, match.startOffset) + replacement + text.slice(match.endOffset);
-        const nextPoint = {
-            blockIndex: match.blockIndex,
-            offset: match.startOffset + replacement.length,
-        };
-
-        if (nextText !== text) {
-            beginDiscreteUndoTransaction();
-            setBlockText(match.block, nextText);
-            focusBlockAtReplacementEnd(match.block, nextPoint.offset);
-            commitUndoTransaction();
-            onDirty();
-        } else {
-            focusBlockAtReplacementEnd(match.block, nextPoint.offset);
-        }
-
-        scanMatches(nextPoint, false);
-        const nextMatch = getActiveMatch();
-        if (nextMatch) {
-            selectMatch(nextMatch, { scroll: true });
-        }
-    }
-
-    function replaceAllMatches(): void {
-        if (!lastQuery) {
-            return;
-        }
-
-        matches = isSourceFirstMarkdown() ? collectSourceMatches(lastQuery, options) : collectMatches(lastQuery, options);
-        if (matches.length === 0) {
-            activeMatchIndex = -1;
-            syncControls();
-            scheduleHighlightRedraw();
-            return;
-        }
-
-        if (isSourceFirstMarkdown()) {
-            replaceAllSourceMatches();
-            return;
-        }
-
-        const replacement = elements.replaceInput.value;
-        const matchesByBlock = groupMatchesByBlock(matches);
-        let changed = false;
-
-        beginDiscreteUndoTransaction();
-        for (const [block, blockMatches] of Array.from(matchesByBlock.entries())) {
-            let text = getBlockText(block);
-            for (const match of blockMatches.slice().reverse()) {
-                text = text.slice(0, match.startOffset) + replacement + text.slice(match.endOffset);
-            }
-
-            if (text !== getBlockText(block)) {
-                setBlockText(block, text);
-                changed = true;
-            }
-        }
-        commitUndoTransaction();
-
-        if (changed) {
-            onDirty();
-        }
-
-        scanMatches(null, false);
-        elements.replaceInput.focus();
-        elements.replaceInput.select();
-    }
-
-    function replaceCurrentSourceMatch(match: FindMatch): void {
-        const replacement = elements.replaceInput.value;
-        const nextPoint = {
-            blockIndex: match.blockIndex,
-            offset: match.from + replacement.length,
-        };
-
-        if (getEditorState().doc.slice(match.from, match.to) !== replacement) {
-            dispatch({
-                changes: [{ from: match.from, to: match.to, insert: replacement }],
-                selection: { anchor: nextPoint.offset, head: nextPoint.offset },
-                annotations: { userEvent: "format" },
-            });
-            onDirty();
-        } else {
-            dispatch({
-                changes: [],
-                selection: { anchor: nextPoint.offset, head: nextPoint.offset },
-                annotations: { userEvent: "programmatic", addToHistory: false },
-            });
-            syncDomSelectionFromState();
-        }
-
-        scanMatches(nextPoint, false);
-        const nextMatch = getActiveMatch();
-        if (nextMatch) {
-            selectMatch(nextMatch, { scroll: true });
-        }
-    }
-
-    function replaceAllSourceMatches(): void {
-        const replacement = elements.replaceInput.value;
-        const sourceMatches = collectSourceMatches(lastQuery, options);
-        if (sourceMatches.length === 0) {
-            activeMatchIndex = -1;
-            syncControls();
-            scheduleHighlightRedraw();
-            return;
-        }
-
-        dispatch({
-            changes: sourceMatches.map((match) => ({ from: match.from, to: match.to, insert: replacement })),
-            selection: { anchor: sourceMatches[0].from + replacement.length, head: sourceMatches[0].from + replacement.length },
-            annotations: { userEvent: "format" },
-        });
-        onDirty();
-        scanMatches(null, false);
-        elements.replaceInput.focus();
-        elements.replaceInput.select();
-    }
-
-    function readValidActiveMatch(): FindMatch | null {
-        let match = getActiveMatch();
-        if (match && isMatchStillValid(match, lastQuery, options)) {
-            return match;
-        }
-
-        scanMatches(match ? matchStartPoint(match) : lastSearchAnchor, false);
-        match = getActiveMatch();
-        return match && isMatchStillValid(match, lastQuery, options) ? match : null;
-    }
-
-    function selectMatch(match: FindMatch, selectOptions: { scroll: boolean }): boolean {
-        const range = createRangeForMatch(match);
-        const selection = document.getSelection();
-        if (!range || !selection) {
-            return false;
-        }
-
-        editor.focus();
-        selection.removeAllRanges();
-        selection.addRange(range);
-
-        if (selectOptions.scroll) {
-            const block = match.block ?? (match.blockId ? document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(match.blockId)}"]`) : null);
-            block?.scrollIntoView({ block: "center", inline: "nearest" });
-        }
-
-        scheduleHighlightRedraw();
-        window.requestAnimationFrame(() => scheduleHighlightRedraw());
-        return true;
-    }
-
-    function syncControls(): void {
-        const hasMatches = matches.length > 0;
-
-        elements.counter.textContent = hasMatches ? `${activeMatchIndex + 1} / ${matches.length}` : "0 / 0";
-        elements.previousButton.disabled = !hasMatches;
-        elements.nextButton.disabled = !hasMatches;
-        elements.replaceButton.disabled = !hasMatches;
-        elements.replaceAllButton.disabled = !hasMatches;
-        elements.caseButton.setAttribute("aria-pressed", options.caseSensitive ? "true" : "false");
-        elements.wholeWordButton.setAttribute("aria-pressed", options.wholeWord ? "true" : "false");
     }
 
     function setReplaceExpanded(expanded: boolean): void {
-        replaceRow.hidden = !expanded;
-        elements.panel.dataset.replaceExpanded = expanded ? "true" : "false";
-        elements.replaceToggleButton.setAttribute("aria-expanded", expanded ? "true" : "false");
-        elements.replaceToggleButton.setAttribute("aria-label", expanded ? "Hide replace" : "Show replace");
+        elements.replaceRow.hidden = !expanded;
+        elements.panel.dataset.replaceExpanded = String(expanded);
+        elements.replaceToggleButton.setAttribute("aria-expanded", String(expanded));
     }
 
-    function scheduleHighlightRedraw(): void {
-        if (elements.panel.hidden) {
-            clearHighlights();
-            return;
-        }
+    function syncControls(): void {
+        elements.counter.textContent = matches.length === 0 ? "0 / 0" : `${activeIndex + 1} / ${matches.length}`;
+        elements.caseButton.setAttribute("aria-pressed", String(findOptions.caseSensitive));
+        elements.wholeWordButton.setAttribute("aria-pressed", String(findOptions.wholeWord));
+        const disabled = matches.length === 0;
+        elements.previousButton.disabled = disabled;
+        elements.nextButton.disabled = disabled;
+        elements.replaceButton.disabled = disabled;
+        elements.replaceAllButton.disabled = disabled;
+    }
 
-        if (highlightFrame) {
-            return;
-        }
-
+    function scheduleHighlights(): void {
+        if (highlightFrame) return;
         highlightFrame = window.requestAnimationFrame(() => {
             highlightFrame = 0;
-            renderHighlights();
+            drawHighlights();
         });
     }
 
-    function renderHighlights(): void {
+    function drawHighlights(): void {
         elements.highlightLayer.replaceChildren();
-        if (!lastQuery || matches.length === 0) {
-            return;
-        }
-
-        const fragments: HTMLElement[] = [];
-        for (let index = 0; index < matches.length; index += 1) {
-            const range = createRangeForMatch(matches[index]);
-            if (!range) {
-                continue;
+        if (elements.panel.hidden) return;
+        const highlights: HTMLElement[] = [];
+        matches.forEach((match, index) => {
+            const start = sourceOffsetToDomPoint(match.from, { activateSourceTokens: false });
+            const end = sourceOffsetToDomPoint(match.to, { activateSourceTokens: false });
+            const range = document.createRange();
+            try {
+                range.setStart(start.node, start.offset);
+                range.setEnd(end.node, end.offset);
+            } catch {
+                return;
             }
-
             for (const rect of Array.from(range.getClientRects())) {
-                if ((rect.width <= 0 && rect.height <= 0) || isRectOutsideViewport(rect)) {
-                    continue;
-                }
-
-                fragments.push(createHighlightRect(rect, index === activeMatchIndex));
+                if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) continue;
+                const highlight = document.createElement("div");
+                highlight.className = "find-highlight-rect";
+                highlight.style.left = `${rect.left}px`;
+                highlight.style.top = `${rect.top}px`;
+                highlight.style.width = `${Math.max(1, rect.width)}px`;
+                highlight.style.height = `${Math.max(1, rect.height)}px`;
+                if (index === activeIndex) highlight.dataset.active = "true";
+                highlights.push(highlight);
             }
-        }
-
-        elements.highlightLayer.replaceChildren(...fragments);
+        });
+        elements.highlightLayer.append(...highlights);
     }
 
-    function clearHighlights(): void {
-        if (highlightFrame) {
-            window.cancelAnimationFrame(highlightFrame);
-            highlightFrame = 0;
-        }
-        elements.highlightLayer.replaceChildren();
-    }
-
-    function findSameMatchIndex(match: FindMatch): number {
-        if (isSourceFirstMarkdown()) {
-            return matches.findIndex((candidate) => candidate.from === match.from && candidate.to === match.to);
-        }
-
-        return matches.findIndex(
-            (candidate) =>
-                candidate.block === match.block &&
-                candidate.startOffset === match.startOffset &&
-                candidate.endOffset === match.endOffset,
-        );
-    }
-
-    function findMatchIndexAtOrAfter(point: SearchPoint | null): number {
-        if (matches.length === 0) {
-            return -1;
-        }
-
-        if (!point) {
-            return 0;
-        }
-
-        if (isSourceFirstMarkdown()) {
-            const sourceIndex = matches.findIndex((match) => match.from >= point.offset);
-            return sourceIndex >= 0 ? sourceIndex : 0;
-        }
-
-        const index = matches.findIndex(
-            (match) => match.blockIndex > point.blockIndex ||
-                (match.blockIndex === point.blockIndex && match.startOffset >= point.offset),
-        );
-
-        return index >= 0 ? index : 0;
-    }
-
-    function getActiveMatch(): FindMatch | null {
-        return activeMatchIndex >= 0 ? matches[activeMatchIndex] ?? null : null;
-    }
-
-    function readActiveMatchPoint(): SearchPoint | null {
-        const activeMatch = getActiveMatch();
-        return activeMatch ? matchStartPoint(activeMatch) : null;
-    }
-
-    function shouldRouteEditorEnterToFind(event: KeyboardEvent): boolean {
-        const target = event.target;
-        if (!(target instanceof Node) || target === elements.findInput || target === elements.replaceInput) {
-            return false;
-        }
-
-        if (!editor.contains(target) || event.ctrlKey || event.metaKey || event.altKey) {
-            return false;
-        }
-
-        const activeMatch = getActiveMatch();
-        const selectedRange = getSelectedBlockRange();
-        if (isSourceFirstMarkdown()) {
-            const state = getEditorState();
-            const start = Math.min(state.selection.anchor, state.selection.head);
-            const end = Math.max(state.selection.anchor, state.selection.head);
-            return Boolean(activeMatch && start === activeMatch.from && end === activeMatch.to);
-        }
-
-        return Boolean(
-            activeMatch &&
-                selectedRange &&
-                selectedRange.startBlock === activeMatch.block &&
-                selectedRange.endBlock === activeMatch.block &&
-                selectedRange.startOffset === activeMatch.startOffset &&
-                selectedRange.endOffset === activeMatch.endOffset,
-        );
-    }
-
-    function readCurrentEditorSelectionPoint(): SearchPoint | null {
-        if (!isSourceFirstMarkdown()) {
-            return readEditorSelectionPoint();
-        }
-
-        syncStateSelectionFromDom();
+    function seedQueryFromSelection(): void {
         const state = getEditorState();
-        const block = findSourceBlockAtOffset(state.blocks, state.selection.head);
-
-        return {
-            blockIndex: block ? state.blocks.blocks.indexOf(block) : 0,
-            offset: state.selection.head,
-        };
-    }
-
-    function seedFindInput(): void {
-        if (!isSourceFirstMarkdown()) {
-            seedFindInputFromSelection();
-            return;
+        const from = Math.min(state.selection.anchor, state.selection.head);
+        const to = Math.max(state.selection.anchor, state.selection.head);
+        if (from !== to) {
+            const selected = state.doc.slice(from, to);
+            if (!selected.includes("\n")) elements.findInput.value = selected;
         }
-
-        syncStateSelectionFromDom();
-        const state = getEditorState();
-        const start = Math.min(state.selection.anchor, state.selection.head);
-        const end = Math.max(state.selection.anchor, state.selection.head);
-        const selectedText = state.doc.slice(start, end);
-        if (!selectedText || selectedText.includes("\n")) {
-            return;
-        }
-
-        elements.findInput.value = selectedText;
     }
 }
 
-function collectMatches(query: string, options: FindOptions): FindMatch[] {
-    const blocks = getEditorBlocks();
-    const needle = options.caseSensitive ? query : query.toLowerCase();
-    const nextMatches: FindMatch[] = [];
-
-    if (!needle) {
-        return nextMatches;
+function collectMatches(source: string, query: string, options: FindOptions): FindMatch[] {
+    if (!query) return [];
+    const haystack = options.caseSensitive ? source : source.toLocaleLowerCase();
+    const needle = options.caseSensitive ? query : query.toLocaleLowerCase();
+    const matches: FindMatch[] = [];
+    let from = 0;
+    while (from <= haystack.length - needle.length) {
+        const index = haystack.indexOf(needle, from);
+        if (index < 0) break;
+        const to = index + needle.length;
+        if (!options.wholeWord || isWholeWord(source, index, to)) matches.push({ from: index, to });
+        from = Math.max(to, index + 1);
     }
-
-    for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
-        const block = blocks[blockIndex];
-        const text = getBlockText(block);
-        const haystack = options.caseSensitive ? text : text.toLowerCase();
-        let start = haystack.indexOf(needle);
-
-        while (start >= 0) {
-            const end = start + query.length;
-            if (!options.wholeWord || isWholeWordMatch(text, start, end)) {
-                nextMatches.push({
-                    block,
-                    blockIndex,
-                    startOffset: start,
-                    endOffset: end,
-                    from: start,
-                    to: end,
-                });
-            }
-
-            start = haystack.indexOf(needle, Math.max(start + query.length, start + 1));
-        }
-    }
-
-    return nextMatches;
+    return matches;
 }
 
-function collectSourceMatches(query: string, options: FindOptions): FindMatch[] {
-    const state = getEditorState();
-    const needle = options.caseSensitive ? query : query.toLowerCase();
-    const haystack = options.caseSensitive ? state.doc : state.doc.toLowerCase();
-    const nextMatches: FindMatch[] = [];
-    let start = haystack.indexOf(needle);
-
-    while (start >= 0) {
-        const end = start + query.length;
-        if (!options.wholeWord || isWholeWordMatch(state.doc, start, end)) {
-            const block = findSourceBlockAtOffset(state.blocks, start);
-            nextMatches.push({
-                block: null,
-                blockId: block?.id,
-                blockIndex: block ? state.blocks.blocks.indexOf(block) : 0,
-                startOffset: block ? start - block.contentFrom : start,
-                endOffset: block ? end - block.contentFrom : end,
-                from: start,
-                to: end,
-            });
-        }
-
-        start = haystack.indexOf(needle, Math.max(start + query.length, start + 1));
-    }
-
-    return nextMatches;
+function isWholeWord(source: string, from: number, to: number): boolean {
+    return !wordCharacterPattern.test(source[from - 1] ?? "") && !wordCharacterPattern.test(source[to] ?? "");
 }
 
-function readFindReplaceElements(): FindReplaceElements {
+function readElements(): FindReplaceElements {
     return {
-        panel: getElement<HTMLElement>("find-replace-panel"),
-        findInput: getElement<HTMLInputElement>("find-query"),
-        replaceInput: getElement<HTMLInputElement>("replace-query"),
-        counter: getElement<HTMLElement>("find-counter"),
-        previousButton: getElement<HTMLButtonElement>("find-previous"),
-        nextButton: getElement<HTMLButtonElement>("find-next"),
-        caseButton: getElement<HTMLButtonElement>("find-case-sensitive"),
-        wholeWordButton: getElement<HTMLButtonElement>("find-whole-word"),
-        replaceToggleButton: getElement<HTMLButtonElement>("find-replace-toggle"),
-        replaceButton: getElement<HTMLButtonElement>("replace-current"),
-        replaceAllButton: getElement<HTMLButtonElement>("replace-all"),
-        closeButton: getElement<HTMLButtonElement>("find-close"),
-        highlightLayer: getElement<HTMLElement>("find-highlight-layer"),
+        panel: getElement("find-replace-panel"),
+        findInput: getElement("find-query"),
+        replaceInput: getElement("replace-query"),
+        counter: getElement("find-counter"),
+        previousButton: getElement("find-previous"),
+        nextButton: getElement("find-next"),
+        caseButton: getElement("find-case-sensitive"),
+        wholeWordButton: getElement("find-whole-word"),
+        replaceToggleButton: getElement("find-replace-toggle"),
+        replaceButton: getElement("replace-current"),
+        replaceAllButton: getElement("replace-all"),
+        closeButton: getElement("find-close"),
+        highlightLayer: getElement("find-highlight-layer"),
+        replaceRow: getElement("replace-row"),
     };
-}
-
-function seedFindInputFromSelection(): void {
-    const selectedRange = getSelectedBlockRange();
-    if (!selectedRange || selectedRange.startBlock !== selectedRange.endBlock) {
-        return;
-    }
-
-    const selectedText = getBlockText(selectedRange.startBlock).slice(selectedRange.startOffset, selectedRange.endOffset);
-    if (!selectedText || selectedText.includes("\n")) {
-        return;
-    }
-
-    getElement<HTMLInputElement>("find-query").value = selectedText;
-}
-
-function readEditorSelectionPoint(): SearchPoint | null {
-    const selection = document.getSelection();
-    const focusNode = selection?.focusNode;
-    const block = findBlock(focusNode ?? null);
-    if (!selection || !focusNode || !block) {
-        return null;
-    }
-
-    return {
-        blockIndex: getBlockIndex(block),
-        offset: getCaretOffset(getBlockContent(block), focusNode, selection.focusOffset),
-    };
-}
-
-function readTextInputSelection(input: HTMLInputElement): TextInputSelection {
-    return {
-        start: input.selectionStart,
-        end: input.selectionEnd,
-        direction: input.selectionDirection ?? "none",
-    };
-}
-
-function restoreTextInputFocus(input: HTMLInputElement, selection: TextInputSelection | null = readTextInputSelection(input)): void {
-    input.focus();
-    if (selection && selection.start !== null && selection.end !== null) {
-        input.setSelectionRange(selection.start, selection.end, selection.direction);
-    }
-}
-
-function createRangeForMatch(match: FindMatch): Range | null {
-    if (match.block === null) {
-        const start = sourceOffsetToDomPoint(match.from);
-        const end = sourceOffsetToDomPoint(match.to);
-        const range = document.createRange();
-
-        try {
-            range.setStart(start.node, start.offset);
-            range.setEnd(end.node, end.offset);
-        } catch {
-            return null;
-        }
-
-        return range;
-    }
-
-    if (!match.block.isConnected) {
-        return null;
-    }
-
-    const content = getBlockContent(match.block);
-    const start = getTextPosition(content, match.startOffset);
-    const end = getTextPosition(content, match.endOffset);
-    const range = document.createRange();
-
-    try {
-        range.setStart(start.node, start.offset);
-        range.setEnd(end.node, end.offset);
-    } catch {
-        return null;
-    }
-
-    return range;
-}
-
-function isMatchStillValid(match: FindMatch, query: string, options: FindOptions): boolean {
-    if (match.block === null) {
-        const text = getEditorState().doc;
-        if (!query || match.to > text.length) {
-            return false;
-        }
-
-        const actual = text.slice(match.from, match.to);
-        const matchesQuery = options.caseSensitive
-            ? actual === query
-            : actual.toLowerCase() === query.toLowerCase();
-
-        return matchesQuery && (!options.wholeWord || isWholeWordMatch(text, match.from, match.to));
-    }
-
-    if (!query || !match.block.isConnected) {
-        return false;
-    }
-
-    const text = getBlockText(match.block);
-    if (match.endOffset > text.length) {
-        return false;
-    }
-
-    const actual = text.slice(match.startOffset, match.endOffset);
-    const matchesQuery = options.caseSensitive
-        ? actual === query
-        : actual.toLowerCase() === query.toLowerCase();
-
-    return matchesQuery && (!options.wholeWord || isWholeWordMatch(text, match.startOffset, match.endOffset));
-}
-
-function groupMatchesByBlock(matches: FindMatch[]): Map<HTMLElement, FindMatch[]> {
-    const grouped = new Map<HTMLElement, FindMatch[]>();
-    for (const match of matches) {
-        if (!match.block) {
-            continue;
-        }
-
-        const blockMatches = grouped.get(match.block) ?? [];
-        blockMatches.push(match);
-        grouped.set(match.block, blockMatches);
-    }
-
-    return grouped;
-}
-
-function focusBlockAtReplacementEnd(block: HTMLElement, offset: number): void {
-    focusBlockAtOffset(block, Math.min(offset, getBlockText(block).length), { scroll: "none" });
-}
-
-function matchStartPoint(match: FindMatch): SearchPoint {
-    if (match.block === null) {
-        return {
-            blockIndex: match.blockIndex,
-            offset: match.from,
-        };
-    }
-
-    return {
-        blockIndex: match.blockIndex,
-        offset: match.startOffset,
-    };
-}
-
-function createHighlightRect(rect: DOMRect, active: boolean): HTMLElement {
-    const highlight = document.createElement("div");
-    highlight.className = "find-highlight-rect";
-    highlight.style.left = `${rect.left}px`;
-    highlight.style.top = `${rect.top}px`;
-    highlight.style.width = `${Math.max(1, rect.width)}px`;
-    highlight.style.height = `${Math.max(1, rect.height)}px`;
-    if (active) {
-        highlight.dataset.active = "true";
-    }
-
-    return highlight;
-}
-
-function isRectOutsideViewport(rect: DOMRect): boolean {
-    return rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth;
-}
-
-function isWholeWordMatch(text: string, startOffset: number, endOffset: number): boolean {
-    return !isWordCharacter(readPreviousCharacter(text, startOffset)) &&
-        !isWordCharacter(readNextCharacter(text, endOffset));
-}
-
-function isWordCharacter(character: string): boolean {
-    return character !== "" && wholeWordCharacterPattern.test(character);
-}
-
-function readPreviousCharacter(text: string, offset: number): string {
-    if (offset <= 0) {
-        return "";
-    }
-
-    const characters = Array.from(text.slice(0, offset));
-    return characters[characters.length - 1] ?? "";
-}
-
-function readNextCharacter(text: string, offset: number): string {
-    return Array.from(text.slice(offset))[0] ?? "";
 }

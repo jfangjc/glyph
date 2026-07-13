@@ -1,30 +1,32 @@
 import type { DocumentFile } from "../bridge/types";
+import { syncDocumentWindowTitle } from "../app/window-title";
 import {
     clearSourceHistory,
+    configureBlockIndexBuilder,
     getEditorState,
-    getMarkdownSource,
-    replaceDocumentSource,
+    getDocumentSource,
+    measureEditorPerformance,
+    readPerformanceNow,
+    replaceDocumentState,
     subscribeEditorState,
 } from "../editor/core/store";
-import { syncDomSelectionFromState } from "../editor/core/projection";
+import { configureProjectionCapability, syncDomSelectionFromState } from "../editor/core/projection";
 import { readEditorDom } from "../editor/editor-dom";
-import { clearEditorHistory } from "../editor/history/undo-history";
 import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
+import { titleFromFileName } from "../formats/file-names";
 import type { DocumentFormat } from "../formats/types";
 import {
     applyDocumentRenderContext,
     loadDocumentRenderContext,
     readParsedBlocksFromSourceState,
-    replaceEditorBlocks,
     replaceEditorBlocksFromSourceState,
-    scheduleDocumentReferenceSync,
-    serializeDocumentBlocks,
     syncBlockViewContext as syncRenderBlockViewContext,
     syncDocumentFooter,
     syncDocumentReferences,
 } from "./document-render-context";
 import { syncDocumentPreview } from "./document-preview";
-import { documentState, markDocumentDirty, notifyDocumentStateChanged } from "./document-state";
+import { documentState, notifyDocumentStateChanged } from "./document-state";
+import { areSamePath, resolveEditedActiveFilePath } from "./save-paths";
 
 let sourceStateIntegrationInstalled = false;
 
@@ -38,71 +40,67 @@ export function installSourceStateDocumentIntegration(): void {
     }
 
     sourceStateIntegrationInstalled = true;
+    const initialFormat = getActiveDocumentFormat();
+    configureBlockIndexBuilder(initialFormat.index.build);
+    configureProjectionCapability(initialFormat.projection);
     subscribeEditorState((next, previous, transaction) => {
-        if (documentState.activeFormatId !== "markdown" || next.doc === previous.doc) {
-            return;
+        if (next.title !== previous.title) {
+            readEditorDom().title.value = next.title;
+            syncDocumentWindowTitle();
         }
-
-        syncMarkdownProjectionFromState(next, previous, transaction);
-        documentState.hasUnsavedChanges = next.doc !== documentState.lastSavedContent;
-        notifyDocumentStateChanged();
+        if (next.doc !== previous.doc) {
+            syncDocumentProjectionFromState(next, previous, transaction);
+        }
+        if (next.doc !== previous.doc || next.title !== previous.title) {
+            syncEditorDirtyState();
+        }
     });
 }
 
 export function loadDocument(documentFile: DocumentFile): void {
     const format = getDocumentFormatForPath(documentFile.path || documentFile.name);
-    if (format.id === "markdown") {
-        loadMarkdownDocument(documentFile, format);
-        return;
-    }
-
-    const parsedDocument = format.parseDocument(documentFile);
     const { title } = readEditorDom();
+    const documentTitle = titleFromFileName(documentFile.name);
 
     documentState.activeFilePath = documentFile.path;
-    documentState.activeFormatId = format.id;
-    documentState.usesTitle = format.supportsTitle && parsedDocument.usesTitle;
-    loadDocumentRenderContext(format, parsedDocument.blocks, parsedDocument.references ?? {});
+    documentState.activeFormatId = format.descriptor.id;
+    documentState.usesTitle = false;
     syncDocumentFormatUi();
     syncBlockViewContext();
-    title.value = parsedDocument.title;
-    replaceEditorBlocks(parsedDocument.blocks);
+    title.value = documentTitle;
+    configureBlockIndexBuilder(format.index.build);
+    configureProjectionCapability(format.projection);
+    replaceDocumentState(documentFile.content, documentTitle);
+    const parsedBlocks = readParsedBlocksFromSourceState(getEditorState());
+    loadDocumentRenderContext(format, parsedBlocks, format.render.readReferences?.(parsedBlocks) ?? {});
+    syncDocumentProjectionFromState(getEditorState());
     syncDocumentReferences(format, documentState.activeFilePath);
     applyDocumentRenderContext(format);
     syncDocumentFooter(format);
-    clearEditorHistory();
-    documentState.lastSavedContent = serializeDocument();
+    clearSourceHistory();
+    documentState.lastSavedContent = getDocumentSource();
     documentState.hasUnsavedChanges = false;
     notifyDocumentStateChanged();
 }
 
 export function serializeDocument(): string {
-    if (documentState.activeFormatId === "markdown") {
-        return getMarkdownSource();
-    }
-
-    const { title } = readEditorDom();
-    const format = getActiveDocumentFormat();
-
-    return format.serializeDocument(
-        format.supportsTitle ? title.value : "",
-        format.supportsTitle && documentState.usesTitle,
-        serializeDocumentBlocks(format, documentState.activeFilePath),
-    );
-}
-
-export function markEditorDirty(): void {
-    if (documentState.activeFormatId === "markdown") {
-        syncEditorDirtyState();
-        return;
-    }
-
-    scheduleDocumentReferenceSync(getActiveDocumentFormat, () => documentState.activeFilePath);
-    markDocumentDirty();
+    return getDocumentSource();
 }
 
 export function syncEditorDirtyState(): void {
-    documentState.hasUnsavedChanges = serializeDocument() !== documentState.lastSavedContent;
+    const state = getEditorState();
+    const format = getActiveDocumentFormat();
+    const editedPath = documentState.activeFilePath && format.descriptor.editableTitle
+        ? resolveEditedActiveFilePath(
+            documentState.activeFilePath,
+            state.title,
+            format.descriptor.defaultExtension,
+        )
+        : documentState.activeFilePath;
+    const titleChanged = Boolean(
+        documentState.activeFilePath && editedPath && !areSamePath(documentState.activeFilePath, editedPath),
+    );
+    documentState.hasUnsavedChanges = state.doc !== documentState.lastSavedContent || titleChanged;
     notifyDocumentStateChanged();
 }
 
@@ -114,9 +112,9 @@ export function syncDocumentFormatUi(): void {
     const { shell, surface, title } = readEditorDom();
     const format = getActiveDocumentFormat();
 
-    title.hidden = !format.supportsTitle;
-    surface.dataset.documentFormat = format.id;
-    shell.dataset.documentFormat = format.id;
+    title.hidden = !format.descriptor.editableTitle;
+    surface.dataset.documentFormat = format.descriptor.id;
+    shell.dataset.documentFormat = format.descriptor.id;
 
     syncDocumentPreview(format, {
         activeFilePath: documentState.activeFilePath,
@@ -125,40 +123,18 @@ export function syncDocumentFormatUi(): void {
     syncDocumentFooter(format);
 }
 
-function loadMarkdownDocument(documentFile: DocumentFile, format: DocumentFormat): void {
-    const parsedDocument = format.parseDocument(documentFile);
-    const { title } = readEditorDom();
-
-    documentState.activeFilePath = documentFile.path;
-    documentState.activeFormatId = format.id;
-    documentState.usesTitle = format.supportsTitle && parsedDocument.usesTitle;
-    title.value = parsedDocument.title;
-
-    replaceDocumentSource(documentFile.content, { anchor: 0, head: 0 }, {
-        userEvent: "programmatic",
-        addToHistory: false,
-    });
-    syncMarkdownProjectionFromState(getEditorState());
-    clearSourceHistory();
-    clearEditorHistory();
-    documentState.lastSavedContent = getMarkdownSource();
-    documentState.hasUnsavedChanges = false;
-    syncDocumentFormatUi();
-    notifyDocumentStateChanged();
-}
-
-function syncMarkdownProjectionFromState(
+function syncDocumentProjectionFromState(
     state: ReturnType<typeof getEditorState>,
     previous?: ReturnType<typeof getEditorState>,
     transaction?: Parameters<Parameters<typeof subscribeEditorState>[0]>[2],
 ): void {
     const projectionStartedAt = readPerformanceNow();
     const format = getActiveDocumentFormat();
-    const refreshRenderContext = shouldRefreshMarkdownRenderContext(state, previous, transaction);
+    const refreshRenderContext = shouldRefreshDocumentRenderContext(state, previous, transaction);
     const renderContextStartedAt = readPerformanceNow();
     const blocks = refreshRenderContext ? readParsedBlocksFromSourceState(state) : null;
     const renderContextChanged = blocks
-        ? loadDocumentRenderContext(format, blocks, format.readReferences?.(blocks) ?? {})
+        ? loadDocumentRenderContext(format, blocks, format.render.readReferences?.(blocks) ?? {})
         : false;
     measureEditorPerformance("glyph:render-context", renderContextStartedAt);
     if (renderContextChanged) {
@@ -179,21 +155,7 @@ function syncMarkdownProjectionFromState(
     measureEditorPerformance("glyph:projection", projectionStartedAt);
 }
 
-function readPerformanceNow(): number {
-    return typeof performance === "undefined" ? 0 : performance.now();
-}
-
-function measureEditorPerformance(name: string, startedAt: number): void {
-    if (!import.meta.env.DEV || typeof performance === "undefined") {
-        return;
-    }
-    performance.measure(name, { start: startedAt, end: performance.now() });
-    if (performance.getEntriesByName(name).length > 100) {
-        performance.clearMeasures(name);
-    }
-}
-
-function shouldRefreshMarkdownRenderContext(
+function shouldRefreshDocumentRenderContext(
     state: ReturnType<typeof getEditorState>,
     previous: ReturnType<typeof getEditorState> | undefined,
     transaction: Parameters<Parameters<typeof subscribeEditorState>[0]>[2] | undefined,
