@@ -88,7 +88,6 @@ export type ProjectionCapability = {
     sourceOffsetToDomPoint?: (offset: number) => { node: Node; offset: number } | null;
     domPointToSourceOffset?: (node: Node, offset: number) => number | null;
     shouldUseNativePointer?: (target: Element) => boolean | null;
-    resolvePointerSourceOffset?: (source: string, target: Element, clientX: number) => number | null;
     reconcileInteractiveSource?: () => void;
 };
 

@@ -18,7 +18,7 @@ import {
     renderExtendedMarkdownBlock,
     renderMarkdownDocumentFooter,
 } from "./render-context";
-import { readMarkdownTableCellRange, renderMarkdownBlock } from "./table";
+import { renderMarkdownBlock } from "./table";
 import {
     createMarkdownClipboardPayload,
     htmlToMarkdown,
@@ -67,32 +67,17 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
         },
         projection: {
             shouldUseNativePointer: (target) => {
-                if (target.closest(".markdown-table-preview, .markdown-math-preview, .markdown-html-preview")) {
+                if (target.closest(".markdown-token-editing")) {
+                    return true;
+                }
+                if (target.closest(".format-block-preview, .markdown-image-token, .markdown-math-token")) {
                     return false;
                 }
-                return target.closest(".markdown-token-editing") ? true : null;
+                return null;
             },
-            resolvePointerSourceOffset: resolveMarkdownPointerSourceOffset,
         },
         export: { kind: "pdf" },
     };
-}
-
-function resolveMarkdownPointerSourceOffset(source: string, target: Element, clientX: number): number | null {
-    const cell = target.closest<HTMLElement>("[data-table-source-row][data-table-source-column]");
-    const lineIndex = cell ? Number(cell.dataset.tableSourceRow) : Number.NaN;
-    const cellIndex = cell ? Number(cell.dataset.tableSourceColumn) : Number.NaN;
-    if (!cell || !Number.isInteger(lineIndex) || !Number.isInteger(cellIndex)) {
-        return null;
-    }
-
-    const range = readMarkdownTableCellRange(source, lineIndex, cellIndex);
-    if (!range) {
-        return null;
-    }
-    const rect = cell.getBoundingClientRect();
-    const progress = rect.width > 0 ? Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) : 0;
-    return range.start + Math.round((range.end - range.start) * progress);
 }
 
 function escapeImageAlt(value: string): string {

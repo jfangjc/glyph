@@ -180,12 +180,12 @@ export function setBlockText(block: HTMLElement, text: string): void {
         if (
             cache.previewHtml === previewHtml &&
             cache.previewRevision === renderRevision &&
-            !content.querySelector(".format-block-source")
+            canReusePreviewContent(block, content, text, classNameForPreview(type), source)
         ) {
             return;
         }
 
-        renderPreviewBlockContent(content, text, blockHtml, `markdown-${type}-preview`, source);
+        renderPreviewBlockContent(content, text, blockHtml, classNameForPreview(type), source);
         cache.previewHtml = previewHtml;
         cache.previewRevision = renderRevision;
         renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
@@ -209,7 +209,11 @@ export function setBlockText(block: HTMLElement, text: string): void {
     const html = renderBlockInnerHtml(block, type, text, source);
 
     const cache = getRenderCache(content);
-    if (cache.inlineHtml === html && cache.inlineRevision === renderRevision && content.innerHTML === html) {
+    if (
+        cache.inlineHtml === html &&
+        cache.inlineRevision === renderRevision &&
+        canReuseInlineContent(content, text, source)
+    ) {
         return;
     }
 
@@ -421,9 +425,54 @@ function clearInlineAndPreviewCache(content: HTMLElement): void {
 }
 
 function replaceRenderedHtml(content: HTMLElement, html: string): void {
+    const preservedTokens = readPreservedRenderedTokens(content);
     const preserved = readPreservedRenderedElements(content);
     content.innerHTML = html;
+    restorePreservedRenderedTokens(content, preservedTokens);
     restorePreservedRenderedElements(content, preserved);
+}
+
+function readPreservedRenderedTokens(content: HTMLElement): Map<string, HTMLElement[]> {
+    const preserved = new Map<string, HTMLElement[]>();
+    const tokens = content.querySelectorAll<HTMLElement>(
+        ".markdown-token[data-source-raw]:not(.markdown-token-editing)",
+    );
+
+    for (const token of Array.from(tokens)) {
+        if (token.parentElement?.closest(".markdown-token")) {
+            continue;
+        }
+
+        const signature = token.outerHTML;
+        const matches = preserved.get(signature) ?? [];
+        matches.push(token);
+        preserved.set(signature, matches);
+    }
+
+    return preserved;
+}
+
+function restorePreservedRenderedTokens(
+    content: HTMLElement,
+    preserved: Map<string, HTMLElement[]>,
+): void {
+    if (preserved.size === 0) {
+        return;
+    }
+
+    const tokens = content.querySelectorAll<HTMLElement>(
+        ".markdown-token[data-source-raw]:not(.markdown-token-editing)",
+    );
+    for (const token of Array.from(tokens)) {
+        if (!content.contains(token) || token.parentElement?.closest(".markdown-token")) {
+            continue;
+        }
+
+        const replacement = preserved.get(token.outerHTML)?.shift();
+        if (replacement) {
+            token.replaceWith(replacement);
+        }
+    }
 }
 
 function readPreservedRenderedElements(content: HTMLElement): Map<string, HTMLElement[]> {
@@ -450,13 +499,82 @@ function restorePreservedRenderedElements(content: HTMLElement, preserved: Map<s
 
     for (const element of Array.from(content.querySelectorAll<HTMLElement>("[data-render-preserve-key]"))) {
         const key = element.dataset.renderPreserveKey;
-        const replacement = key ? preserved.get(key)?.shift() : null;
+        const replacements = key ? preserved.get(key) : null;
+        if (replacements?.includes(element) && content.contains(element)) {
+            continue;
+        }
+
+        let replacement = replacements?.shift() ?? null;
+        while (replacement && content.contains(replacement)) {
+            replacement = replacements?.shift() ?? null;
+        }
         if (!replacement || replacement.tagName !== element.tagName || replacement.className !== element.className) {
             continue;
         }
 
         element.replaceWith(replacement);
     }
+}
+
+function canReusePreviewContent(
+    block: HTMLElement,
+    content: HTMLElement,
+    text: string,
+    previewClassName: string,
+    source: BlockSource,
+): boolean {
+    if (
+        block.dataset.blockSourceActive === "true" ||
+        content.querySelector("[data-block-source-draft='true']")
+    ) {
+        return false;
+    }
+
+    const sourceElement = getBlockSourceElement(content, "atomic");
+    const preview = content.querySelector<HTMLElement>(".format-block-preview");
+    const expectedSource = source.atomic ?? text;
+    return Boolean(
+        sourceElement &&
+        sourceElement.textContent === expectedSource &&
+        sourceElement.dataset.blockSourceEditable === String(source.atomicEditable ?? true) &&
+        preview &&
+        preview.classList.contains(previewClassName),
+    );
+}
+
+function canReuseInlineContent(content: HTMLElement, text: string, source: BlockSource): boolean {
+    if (
+        content.querySelector(".markdown-token-editing, [data-block-source-draft='true']") ||
+        getRenderedContentText(content) !== text ||
+        !blockSourceElementMatches(content, "prefix", source.prefix, source.prefixEditable) ||
+        !blockSourceElementMatches(content, "suffix", source.suffix, source.suffixEditable)
+    ) {
+        return false;
+    }
+
+    return true;
+}
+
+function blockSourceElementMatches(
+    content: HTMLElement,
+    position: "prefix" | "suffix",
+    value: string | undefined,
+    editable: boolean | undefined,
+): boolean {
+    const source = getBlockSourceElement(content, position);
+    if (!value) {
+        return source === null;
+    }
+
+    return Boolean(
+        source &&
+        source.textContent === value &&
+        source.dataset.blockSourceEditable === String(editable ?? true),
+    );
+}
+
+function classNameForPreview(type: BlockType): string {
+    return `markdown-${type}-preview`;
 }
 
 function serializeBlockSource(source: BlockSource): string {

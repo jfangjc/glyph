@@ -18,6 +18,7 @@ import { getBlockSourceElement } from "./blocks/rendering";
 import { getElement, getPlainTextBoundaryOffset } from "../utils/dom";
 import { clamp } from "../utils/text";
 import type { ProjectionCapability } from "./core/types";
+import { activateSourceToken } from "./core/projection";
 
 type PointerBlockTarget = {
     block: HTMLElement;
@@ -25,6 +26,7 @@ type PointerBlockTarget = {
     sourcePosition?: { node: Node; offset: number };
     pointerElement?: Element;
     clientX?: number;
+    clientY?: number;
 };
 
 type PointerDownSelection = {
@@ -224,30 +226,28 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
             return markerColumnTarget;
         }
 
-        const sourcePosition = readPointerBlockSourcePosition(directBlock, clientX, clientY)
-            ?? readPointerProjectedSourcePosition(directBlock, target, clientX);
+        const sourcePosition = readPointerBlockSourcePosition(directBlock, clientX, clientY);
         return {
             block: directBlock,
             offset: getPointerCaretOffset(directBlock, clientX, clientY),
             sourcePosition,
             pointerElement: target,
             clientX,
+            clientY,
         };
     }
 
     const pointTarget = document.elementFromPoint(clientX, clientY);
     const pointBlock = pointTarget instanceof Element ? findBlock(pointTarget) : null;
     if (pointBlock) {
-        const sourcePosition = readPointerBlockSourcePosition(pointBlock, clientX, clientY)
-            ?? (pointTarget instanceof Element
-                ? readPointerProjectedSourcePosition(pointBlock, pointTarget, clientX)
-                : undefined);
+        const sourcePosition = readPointerBlockSourcePosition(pointBlock, clientX, clientY);
         return {
             block: pointBlock,
             offset: getPointerCaretOffset(pointBlock, clientX, clientY),
             sourcePosition,
             pointerElement: pointTarget instanceof Element ? pointTarget : undefined,
             clientX,
+            clientY,
         };
     }
 
@@ -272,6 +272,8 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
                 block,
                 offset: getPointerCaretOffset(block, clientX, clientY),
                 sourcePosition,
+                clientX,
+                clientY,
             };
         }
 
@@ -363,30 +365,6 @@ function readPointerBlockSourcePosition(
     }
 
     return undefined;
-}
-
-function readPointerProjectedSourcePosition(
-    block: HTMLElement,
-    target: Element,
-    clientX: number,
-): { node: Node; offset: number } | undefined {
-    if (block.dataset.blockSourceActive === "true") {
-        return undefined;
-    }
-
-    const source = getBlockSourceElement(getBlockContent(block), "atomic");
-    if (!source) {
-        return undefined;
-    }
-
-    const sourceOffset = hooks.getProjectionCapability?.()?.resolvePointerSourceOffset?.(
-        source.textContent ?? "",
-        target,
-        clientX,
-    );
-    return sourceOffset === null || sourceOffset === undefined
-        ? undefined
-        : getPlainTextSourcePosition(source, sourceOffset);
 }
 
 function readPointerPlainTextOffset(source: HTMLElement, clientX: number, clientY: number): number {
@@ -667,11 +645,33 @@ function focusPointerTargetBlock(pointerTarget: PointerBlockTarget): void {
         return;
     }
 
+    if (focusVisualInlinePreviewSource(pointerTarget)) {
+        return;
+    }
+
     if (focusAtomicPreviewSource(pointerTarget)) {
         return;
     }
 
     focusBlockAtOffset(pointerTarget.block, pointerTarget.offset, { scroll: "minimal" });
+}
+
+function focusVisualInlinePreviewSource(pointerTarget: PointerBlockTarget): boolean {
+    const token = pointerTarget.pointerElement?.closest<HTMLElement>(".markdown-token[data-source-raw]");
+    if (
+        !token ||
+        pointerTarget.clientX === undefined ||
+        pointerTarget.clientY === undefined ||
+        !activateSourceToken(token)
+    ) {
+        return false;
+    }
+
+    const sourceOffset = readPointerPlainTextOffset(token, pointerTarget.clientX, pointerTarget.clientY);
+    pointerTarget.sourcePosition = getPlainTextSourcePosition(token, sourceOffset);
+    focusPlainTextElement(token, sourceOffset);
+    hooks.onBlockActivated?.(pointerTarget.block);
+    return true;
 }
 
 function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
@@ -682,14 +682,9 @@ function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
 
     pointerTarget.block.dataset.blockSourceActive = "true";
     const sourceLength = source.textContent?.length ?? 0;
-    const resolvedOffset = pointerTarget.pointerElement && pointerTarget.clientX !== undefined
-        ? hooks.getProjectionCapability?.()?.resolvePointerSourceOffset?.(
-            source.textContent ?? "",
-            pointerTarget.pointerElement,
-            pointerTarget.clientX,
-        ) ?? null
-        : null;
-    const sourceOffset = resolvedOffset ?? (pointerTarget.offset <= 0 ? 0 : sourceLength);
+    const sourceOffset = pointerTarget.clientX !== undefined && pointerTarget.clientY !== undefined
+        ? readPointerPlainTextOffset(source, pointerTarget.clientX, pointerTarget.clientY)
+        : pointerTarget.offset <= 0 ? 0 : sourceLength;
     pointerTarget.sourcePosition = getPlainTextSourcePosition(source, sourceOffset);
     focusPlainTextElement(source, sourceOffset);
     hooks.onBlockActivated?.(pointerTarget.block);

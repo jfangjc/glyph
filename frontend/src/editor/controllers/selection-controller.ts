@@ -5,7 +5,10 @@ import {
     getBlockIndex,
 } from "../blocks/view";
 import { readBlockType, type BlockType } from "../blocks/model";
-import { syncStateSelectionFromDom } from "../core/projection";
+import {
+    syncInlineSourceRevealFromDomSelection,
+    syncStateSelectionFromDom,
+} from "../core/projection";
 import {
     syncDocumentOutlineToSelection,
 } from "../document-outline";
@@ -49,6 +52,11 @@ export function createSelectionController(options: SelectionControllerOptions): 
             return;
         }
 
+        if (!options.isComposingText() && syncInlineSourceRevealFromDomSelection()) {
+            lastSelectionSignature = "";
+            return;
+        }
+
         if (selectionState.signature === lastSelectionSignature) {
             return;
         }
@@ -69,7 +77,7 @@ export function createSelectionController(options: SelectionControllerOptions): 
             return;
         }
 
-        options.hooks.syncBlockSourceRevealBlocks(selectionState.selectedBlocks.filter(shouldRevealBlockSourceForRange));
+        options.hooks.syncBlockSourceReveal(null);
     }
 }
 
@@ -177,10 +185,6 @@ function readCollapsedBlockSourceRevealTarget(selectionState: DocumentEditorSele
     }
 
     return isFocusedOnBlockPrefixSource(selectionState, block) ? block : null;
-}
-
-function shouldRevealBlockSourceForRange(block: HTMLElement): boolean {
-    return !isListSourcePrefixOnlyType(readBlockType(block.dataset.type));
 }
 
 function isFocusedOnBlockPrefixSource(

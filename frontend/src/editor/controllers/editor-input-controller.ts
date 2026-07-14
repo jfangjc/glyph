@@ -31,6 +31,7 @@ import {
     undoSourceHistory,
 } from "../core/store";
 import {
+    clearInlineSourceReveal,
     domPointToSourceOffset,
     moveSourceSelectionVertically,
     resetVerticalNavigationAffinity,
@@ -285,6 +286,9 @@ export function createEditorInputController(options: EditorInputControllerOption
     function deactivate(): void {
         flushSourceHistoryBatch();
         resetVerticalNavigationAffinity();
+        clearInlineSourceReveal();
+        options.hooks.syncBlockSourceReveal(null);
+        options.hooks.syncActiveBlockIndicator(null);
     }
 
     function handleEditorMouseDown(event: MouseEvent): void {
