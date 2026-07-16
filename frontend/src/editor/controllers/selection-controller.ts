@@ -4,9 +4,8 @@ import {
     getBlockContent,
     getBlockIndex,
 } from "../blocks/view";
-import { readBlockType, type BlockType } from "../blocks/model";
 import {
-    syncInlineSourceRevealFromDomSelection,
+    syncInlineSourceRevealFromSelection,
     syncStateSelectionFromDom,
 } from "../core/projection";
 import {
@@ -38,23 +37,21 @@ export function createSelectionController(options: SelectionControllerOptions): 
     };
 
     function handleEditorSelectionChange(): void {
-        const selectionState = readSelectionState();
+        let selectionState = readSelectionState();
         if (normalizeSourceSelection(selectionState)) {
             lastSelectionSignature = "";
             return;
         }
 
-        if (
-            !options.isComposingText() &&
-            syncStateSelectionFromDom()
-        ) {
-            lastSelectionSignature = "";
-            return;
+        if (!options.isComposingText()) {
+            syncStateSelectionFromDom();
+            selectionState = readSelectionState();
         }
 
-        if (!options.isComposingText() && syncInlineSourceRevealFromDomSelection()) {
+        const inlineRevealReconciled = !options.isComposingText() && syncInlineSourceRevealFromSelection();
+        if (inlineRevealReconciled) {
             lastSelectionSignature = "";
-            return;
+            selectionState = readSelectionState();
         }
 
         if (selectionState.signature === lastSelectionSignature) {
@@ -77,7 +74,7 @@ export function createSelectionController(options: SelectionControllerOptions): 
             return;
         }
 
-        options.hooks.syncBlockSourceReveal(null);
+        options.hooks.syncBlockSourceRevealBlocks(selectionState.selectedBlocks);
     }
 }
 
@@ -174,36 +171,7 @@ function normalizeSourceSelection(selectionState: DocumentEditorSelectionState):
 }
 
 function readCollapsedBlockSourceRevealTarget(selectionState: DocumentEditorSelectionState): HTMLElement | null {
-    const block = selectionState.focusBlock;
-    if (!block) {
-        return null;
-    }
-
-    const type = readBlockType(block.dataset.type);
-    if (!isListSourcePrefixOnlyType(type)) {
-        return block;
-    }
-
-    return isFocusedOnBlockPrefixSource(selectionState, block) ? block : null;
-}
-
-function isFocusedOnBlockPrefixSource(
-    selectionState: DocumentEditorSelectionState,
-    block: HTMLElement,
-): boolean {
-    const sourceTarget = selectionState.sourceTarget;
-    const focusNode = selectionState.focusNode;
-    return Boolean(
-        sourceTarget?.kind === "block-source" &&
-        sourceTarget.block === block &&
-        sourceTarget.sourcePosition === "prefix" &&
-        focusNode &&
-        (focusNode === sourceTarget.source || sourceTarget.source.contains(focusNode)),
-    );
-}
-
-function isListSourcePrefixOnlyType(type: BlockType): boolean {
-    return type === "list" || type === "ordered-list" || type === "todo";
+    return selectionState.focusBlock;
 }
 
 function readSelectionBoundaryOffset(block: HTMLElement | null, node: Node | null, offset: number): number {

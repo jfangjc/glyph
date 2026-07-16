@@ -321,14 +321,13 @@ export function syncDomSelectionFromState(): void {
 
     reconcileActiveSourceTokensFromState(state);
 
-    const selectionIsCollapsed = state.selection.anchor === state.selection.head;
     const anchor = sourceOffsetToDomPoint(state.selection.anchor, {
-        activateBlockSource: selectionIsCollapsed,
-        activateSourceTokens: selectionIsCollapsed,
+        activateBlockSource: true,
+        activateSourceTokens: true,
     });
     const head = sourceOffsetToDomPoint(state.selection.head, {
-        activateBlockSource: selectionIsCollapsed,
-        activateSourceTokens: selectionIsCollapsed,
+        activateBlockSource: true,
+        activateSourceTokens: true,
     });
     const editor = getElement<HTMLElement>("editor");
     const range = document.createRange();
@@ -431,6 +430,8 @@ function domSelectionMatchesSnapshot(selection: Selection, snapshot: DomSelectio
 
 function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditorState>): void {
     const collapsed = state.selection.anchor === state.selection.head;
+    const selectionFrom = Math.min(state.selection.anchor, state.selection.head);
+    const selectionTo = Math.max(state.selection.anchor, state.selection.head);
     const activeTokens = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"));
     const blocksToRender = new Set<HTMLElement>();
 
@@ -445,11 +446,11 @@ function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditor
         const tokenFrom = contentFrom !== null && tokenRange ? contentFrom + tokenRange.from : null;
         const tokenTo = contentFrom !== null && tokenRange ? contentFrom + tokenRange.to : null;
         const selectionInsideToken = Boolean(
-            collapsed &&
             tokenFrom !== null &&
             tokenTo !== null &&
-            state.selection.head > tokenFrom &&
-            state.selection.head < tokenTo,
+            (collapsed
+                ? state.selection.head > tokenFrom && state.selection.head < tokenTo
+                : selectionFrom < tokenTo && selectionTo > tokenFrom),
         );
         if (!selectionInsideToken) {
             blocksToRender.add(block);
@@ -467,6 +468,68 @@ function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditor
 export function syncInlineSourceRevealFromDomSelection(): boolean {
     const blocks = readActiveSourceTokenBlocksOutsideDomSelection();
     if (!rerenderActiveSourceTokenBlocks(blocks)) {
+        return false;
+    }
+
+    syncDomSelectionFromState();
+    return true;
+}
+
+/**
+ * Keep raw Markdown visible for every inline token touched by a non-collapsed
+ * source selection. Tokens outside the selection are restored to their
+ * rendered previews, including when they share a block with a selected token.
+ */
+export function syncInlineSourceRevealFromSelection(): boolean {
+    const state = getEditorState();
+    if (state.selection.anchor === state.selection.head) {
+        return syncInlineSourceRevealFromDomSelection();
+    }
+
+    const selectionFrom = Math.min(state.selection.anchor, state.selection.head);
+    const selectionTo = Math.max(state.selection.anchor, state.selection.head);
+    const activeTokens = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"));
+    const blocksToRender = new Set<HTMLElement>();
+
+    for (const token of activeTokens) {
+        const block = findBlock(token);
+        const content = block ? getBlockContent(block) : null;
+        const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
+        const tokenRange = content ? readSourceTokenRange(content, token) : null;
+        const tokenFrom = contentFrom !== null && tokenRange ? contentFrom + tokenRange.from : null;
+        const tokenTo = contentFrom !== null && tokenRange ? contentFrom + tokenRange.to : null;
+        const selected = tokenFrom !== null && tokenTo !== null && selectionFrom < tokenTo && selectionTo > tokenFrom;
+        if (!selected && block) {
+            blocksToRender.add(block);
+        }
+    }
+
+    const rerendered = rerenderActiveSourceTokenBlocks(Array.from(blocksToRender));
+    let activated = false;
+
+    for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-source-raw]"))) {
+        const block = findBlock(token);
+        const content = block ? getBlockContent(block) : null;
+        const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
+        const tokenRange = content ? readSourceTokenRange(content, token) : null;
+        if (contentFrom === null || !tokenRange) {
+            continue;
+        }
+
+        const tokenFrom = contentFrom + tokenRange.from;
+        const tokenTo = contentFrom + tokenRange.to;
+        if (!(selectionFrom < tokenTo && selectionTo > tokenFrom)) {
+            continue;
+        }
+
+        const rawSource = readRawSourceTokenText(token);
+        if (rawSource !== null) {
+            activateRawSourceTokenAtOffset(token, rawSource, 0);
+            activated = true;
+        }
+    }
+
+    if (!rerendered && !activated) {
         return false;
     }
 
@@ -1247,6 +1310,26 @@ export function activateSourceToken(token: HTMLElement, offset = 0): boolean {
 }
 
 function clearActiveSourceTokensOutsideSelection(): void {
+    const state = getEditorState();
+    if (state.selection.anchor !== state.selection.head) {
+        const selectionFrom = Math.min(state.selection.anchor, state.selection.head);
+        const selectionTo = Math.max(state.selection.anchor, state.selection.head);
+        const blocksToRender = new Set<HTMLElement>();
+        for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
+            const block = findBlock(token);
+            const content = block ? getBlockContent(block) : null;
+            const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
+            const tokenRange = content ? readSourceTokenRange(content, token) : null;
+            const tokenFrom = contentFrom !== null && tokenRange ? contentFrom + tokenRange.from : null;
+            const tokenTo = contentFrom !== null && tokenRange ? contentFrom + tokenRange.to : null;
+            if (block && (tokenFrom === null || tokenTo === null || !(selectionFrom < tokenTo && selectionTo > tokenFrom))) {
+                blocksToRender.add(block);
+            }
+        }
+        rerenderActiveSourceTokenBlocks(Array.from(blocksToRender));
+        return;
+    }
+
     rerenderActiveSourceTokenBlocks(readActiveSourceTokenBlocksOutsideDomSelection());
 }
 

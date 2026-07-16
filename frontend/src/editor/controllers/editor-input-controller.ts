@@ -530,6 +530,29 @@ export function createEditorInputController(options: EditorInputControllerOption
             return () => createInsertTextTransaction(getEditorState(), event.data ?? "");
         }
 
+        // Chromium emits these before the corresponding clipboard/drag event.
+        // Those handlers own source serialization and transactions, so suppress
+        // the browser DOM mutation here without reporting an unsupported action.
+        if (
+            event.inputType === "deleteByCut" ||
+            event.inputType === "deleteByDrag" ||
+            event.inputType === "insertFromPaste" ||
+            event.inputType === "insertFromDrop"
+        ) {
+            return () => null;
+        }
+
+        // Some replacement sources provide their text through dataTransfer
+        // rather than InputEvent.data. Preserve the source-first path for
+        // those replacements and safely cancel non-text replacements.
+        if (event.inputType === "insertReplacementText") {
+            const replacement = event.dataTransfer?.getData("text/plain");
+            if (replacement !== undefined && replacement !== null) {
+                return () => createInsertTextTransaction(getEditorState(), replacement);
+            }
+            return () => null;
+        }
+
         if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
             return () => {
                 const state = getEditorState();

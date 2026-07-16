@@ -462,14 +462,12 @@ function isPointInPrefixLineStartBand(
     }
 
     const contentRect = getBlockContent(block).getBoundingClientRect();
-    const leftBoundary = Math.min(sourceRect.left, contentRect.left);
     const rightBoundary = sourceRect.right + 4;
     const verticalSlop = 0.5;
     const topBoundary = Math.max(Math.min(contentRect.top, sourceRect.top), sourceRect.top - verticalSlop);
     const bottomBoundary = Math.min(Math.max(contentRect.bottom, sourceRect.bottom), sourceRect.bottom + verticalSlop);
 
     return (
-        clientX >= leftBoundary &&
         clientX <= rightBoundary &&
         clientY >= topBoundary &&
         clientY <= bottomBoundary
