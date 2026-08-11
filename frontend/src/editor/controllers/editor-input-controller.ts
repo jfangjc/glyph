@@ -1,12 +1,18 @@
-import { getSuggestedFileName } from "../../app/window-title";
+import { documentState } from "../../documents/document-state";
 import { Clipboard } from "@wailsio/runtime";
-import { savePastedImage } from "../../bridge/documents";
+import {
+    isSupportedPastedImage,
+    persistImageFiles,
+    stagePendingImages,
+} from "../../formats/markdown/pending-images";
 import {
     matchesShortcutCommand,
     readInlineFormatShortcut,
 } from "../../app/keymap";
 import type {
     ClipboardPayload,
+    ClipboardReadResult,
+    ClipboardSelectionContext,
     DocumentFormat,
 } from "../../formats/types";
 import type { DocumentEditorHooks } from "../core/types";
@@ -20,7 +26,6 @@ import {
     createDeleteTransaction,
     createInsertTextTransaction,
     createPasteTransaction,
-    readSelectedSourceText,
 } from "../core/commands";
 import {
     createSelectionBookmark,
@@ -41,12 +46,21 @@ import {
 import { reportEditorError } from "../editor-status";
 import { handleEditorMouseDown as handleEditorMouseDownCommand } from "../pointer-interactions";
 import { getCaretPositionFromPoint } from "../selection/caret";
+import {
+    nextGraphemeBoundary,
+    nextLineBoundary,
+    nextWordBoundary,
+    previousGraphemeBoundary,
+    previousLineBoundary,
+    previousWordBoundary,
+} from "../../utils/text-boundaries";
 
 const supportedPastedImageMimeTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+const maxRichClipboardHtmlLength = 5 * 1024 * 1024;
 
 export type EditorInputController = {
     deactivate: () => void;
-    handleEditorMouseDown: (event: MouseEvent) => void;
+    handleEditorMouseDown: (event: PointerEvent) => void;
     handleEditorChange: (event: Event) => void;
     handleEditorKeydown: (event: KeyboardEvent) => void;
     handleEditorBeforeInput: (event: InputEvent) => void;
@@ -56,11 +70,13 @@ export type EditorInputController = {
     handleEditorPaste: (event: ClipboardEvent) => void;
     handleEditorCopy: (event: ClipboardEvent) => void;
     handleEditorCut: (event: ClipboardEvent) => void;
+    handleEditorDragStart: (event: DragEvent) => void;
+    handleEditorDragEnd: () => void;
     handleEditorDragOver: (event: DragEvent) => void;
     handleEditorDrop: (event: DragEvent) => void;
     handleEditorClick: (event: MouseEvent) => void;
     isComposingText: () => boolean;
-    executeCommand: (command: EditorCommand) => Promise<void>;
+    executeCommand: (command: EditorCommand, focusOwner?: Element | null) => Promise<void>;
 };
 
 export type EditorCommand =
@@ -77,12 +93,20 @@ type EditorInputControllerOptions = {
     hooks: DocumentEditorHooks;
     getActiveDocumentFormat: () => DocumentFormat;
     getActiveFilePath: () => string | null;
-    ensureDocumentSaved: (options: { promptForPath: boolean; suggestedFileName: string }) => Promise<boolean>;
 };
 
 export function createEditorInputController(options: EditorInputControllerOptions): EditorInputController {
     let isComposingText = false;
     let preCompositionSourceSelection = getEditorState().selection;
+    let compositionLease: { sessionId: number; revision: number } | null = null;
+    let clipboardOperationId = 0;
+    let internalDrag: {
+        sessionId: number;
+        revision: number;
+        from: number;
+        to: number;
+        source: string;
+    } | null = null;
 
     return {
         deactivate,
@@ -96,6 +120,8 @@ export function createEditorInputController(options: EditorInputControllerOption
         handleEditorPaste,
         handleEditorCopy,
         handleEditorCut,
+        handleEditorDragStart,
+        handleEditorDragEnd,
         handleEditorDragOver,
         handleEditorDrop,
         handleEditorClick,
@@ -103,13 +129,17 @@ export function createEditorInputController(options: EditorInputControllerOption
         executeCommand,
     };
 
-    async function executeCommand(command: EditorCommand): Promise<void> {
-        const activeTextInput = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement
-            ? document.activeElement
+    async function executeCommand(command: EditorCommand, focusOwner?: Element | null): Promise<void> {
+        const commandFocusOwner = focusOwner ?? document.activeElement;
+        const activeTextInput = commandFocusOwner instanceof HTMLInputElement || commandFocusOwner instanceof HTMLTextAreaElement
+            ? commandFocusOwner
             : null;
 
         if (command === "undo" || command === "redo") {
-            if (!activeTextInput) {
+            if (activeTextInput) {
+                activeTextInput.focus({ preventScroll: true });
+                document.execCommand(command);
+            } else {
                 if (command === "undo") undoSourceHistory();
                 else redoSourceHistory();
             }
@@ -152,13 +182,24 @@ export function createEditorInputController(options: EditorInputControllerOption
             syncSourceSelectionForCommand();
             const bookmark = createSelectionBookmark();
             try {
-                const text = supportsRichSourceEditing()
+                const result = supportsRichSourceEditing()
                     ? await readNativeRichClipboard()
-                    : await readNativePlainClipboard();
+                    : { kind: "plain", value: await readNativePlainClipboard() } as ClipboardReadResult;
                 const selection = bookmark.read();
-                if (text && selection) {
+                if ("warning" in result && result.warning) {
+                    reportEditorError(result.warning);
+                }
+                if (result.kind === "images") {
+                    if (selection) {
+                        await pasteSourceImages(result.files, bookmark);
+                        return;
+                    }
+                } else if (result.value && selection) {
                     const state = getEditorState();
-                    dispatch(createPasteTransaction({ ...state, selection }, text));
+                    dispatch(createPasteTransaction(
+                        { ...state, selection },
+                        prepareVirtualEofInsertion(result.value, selection),
+                    ));
                 }
             } catch (error) {
                 console.error("Failed to read clipboard:", error);
@@ -171,21 +212,41 @@ export function createEditorInputController(options: EditorInputControllerOption
 
         syncSourceSelectionForCommand();
         const state = getEditorState();
-        const selectedText = readSelectedSourceText(state);
-        if (selectedText === null) {
+        const clipboardSelection = readClipboardSelection(state);
+        if (!clipboardSelection) {
             return;
         }
-        const bookmark = createSelectionBookmark(state.selection);
+        const selectedText = state.doc.slice(clipboardSelection.anchor, clipboardSelection.head);
+        const bookmark = createSelectionBookmark(clipboardSelection);
+        const clipboardLease = {
+            sessionId: documentState.sessionId,
+            operationId: ++clipboardOperationId,
+            revision: state.revision,
+            selectedText,
+            focusOwner: document.activeElement,
+        };
         try {
-            await writeNativeClipboard(createClipboardPayload(selectedText), supportsRichSourceEditing());
+            await writeNativeClipboard(createClipboardPayload(), supportsRichSourceEditing());
             if (command === "cut") {
                 const selection = bookmark.read();
-                if (selection) {
+                if (
+                    selection &&
+                    clipboardLease.sessionId === documentState.sessionId &&
+                    clipboardLease.operationId === clipboardOperationId
+                ) {
                     const current = getEditorState();
-                    const transaction = createCutTransaction({ ...current, selection });
-                    if (transaction) {
-                        dispatch(transaction);
+                    const from = Math.min(selection.anchor, selection.head);
+                    const to = Math.max(selection.anchor, selection.head);
+                    if (current.doc.slice(from, to) === clipboardLease.selectedText) {
+                        const transaction = createCutTransaction({ ...current, selection });
+                        if (transaction) {
+                            dispatch(transaction);
+                        }
+                    } else {
+                        reportEditorError("The selection changed, so Cut was completed as Copy.");
                     }
+                } else {
+                    reportEditorError("The document changed, so Cut was completed as Copy.");
                 }
             }
         } catch (error) {
@@ -249,23 +310,43 @@ export function createEditorInputController(options: EditorInputControllerOption
         await Clipboard.SetText(payload.markdown);
     }
 
-    async function readNativeRichClipboard(): Promise<string> {
+    async function readNativeRichClipboard(): Promise<ClipboardReadResult> {
         if (navigator.clipboard?.read) {
             try {
                 const items = await navigator.clipboard.read();
+                const item = items[0];
+                if (item) {
+                    const imageTypes = item.types.filter((type) => supportedPastedImageMimeTypes.has(type.toLowerCase()));
+                    if (imageTypes.length > 0 && !item.types.some((type) => type.startsWith("text/"))) {
+                        const files = await Promise.all(imageTypes.map(async (type, index) => {
+                            const blob = await item.getType(type);
+                            return new File([blob], `clipboard-image-${index + 1}.${extensionForImageMimeType(type)}`, { type });
+                        }));
+                        return { kind: "images", files };
+                    }
+                }
                 for (const type of ["text/markdown", "text/html", "text/plain"] as const) {
-                    const item = items.find((candidate) => candidate.types.includes(type));
-                    if (!item) continue;
+                    if (!item?.types.includes(type)) continue;
                     const value = await (await item.getType(type)).text();
-                    return type === "text/html"
-                        ? options.getActiveDocumentFormat().clipboard?.convertHtml?.(value) ?? value
-                        : value.replace(/\r\n?/g, "\n");
+                    if (type === "text/html" && value.length > maxRichClipboardHtmlLength) {
+                        return {
+                            kind: "plain",
+                            value: new DOMParser().parseFromString(value, "text/html").body.textContent?.replace(/\r\n?/g, "\n") ?? "",
+                            warning: "Rich clipboard content exceeded 5 MB and was pasted as plain text.",
+                        };
+                    }
+                    return {
+                        kind: type === "text/markdown" ? "markdown" : type === "text/html" ? "html" : "plain",
+                        value: type === "text/html"
+                            ? options.getActiveDocumentFormat().clipboard?.convertHtml?.(value) ?? value
+                            : value.replace(/\r\n?/g, "\n"),
+                    };
                 }
             } catch {
                 // Wails clipboard is the permission-safe desktop fallback.
             }
         }
-        return (await Clipboard.Text()).replace(/\r\n?/g, "\n");
+        return { kind: "plain", value: (await Clipboard.Text()).replace(/\r\n?/g, "\n") };
     }
 
     async function readNativePlainClipboard(): Promise<string> {
@@ -291,7 +372,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         options.hooks.syncActiveBlockIndicator(null);
     }
 
-    function handleEditorMouseDown(event: MouseEvent): void {
+    function handleEditorMouseDown(event: PointerEvent): void {
         resetVerticalNavigationAffinity();
         flushSourceHistoryBatch();
         handleEditorMouseDownCommand(event);
@@ -332,6 +413,16 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorBeforeInput(event: InputEvent): void {
+        if (isComposingText && event.inputType.includes("Composition")) {
+            const targetRange = event.getTargetRanges?.()[0];
+            if (targetRange) {
+                preCompositionSourceSelection = {
+                    anchor: domPointToSourceOffset(targetRange.startContainer, targetRange.startOffset),
+                    head: domPointToSourceOffset(targetRange.endContainer, targetRange.endOffset),
+                };
+            }
+            return;
+        }
         const undoKind = event.inputType === "historyUndo"
             ? "history-undo"
             : event.inputType === "historyRedo" ? "history-redo" : null;
@@ -352,16 +443,29 @@ export function createEditorInputController(options: EditorInputControllerOption
         isComposingText = true;
         syncStateSelectionFromDom();
         preCompositionSourceSelection = getEditorState().selection;
+        compositionLease = {
+            sessionId: documentState.sessionId,
+            revision: getEditorState().revision,
+        };
     }
 
     function handleEditorCompositionEnd(event: CompositionEvent): void {
         isComposingText = false;
         const insert = event.data ?? "";
+        const lease = compositionLease;
+        compositionLease = null;
+        if (!lease || lease.sessionId !== documentState.sessionId || lease.revision !== getEditorState().revision) {
+            syncDomSelectionFromState({ focus: "preserve" });
+            return;
+        }
         if (insert) {
             const state = getEditorState();
-            dispatch(createInsertTextTransaction({ ...state, selection: preCompositionSourceSelection }, insert));
+            dispatch(createInsertTextTransaction(
+                { ...state, selection: preCompositionSourceSelection },
+                prepareVirtualEofInsertion(insert, preCompositionSourceSelection),
+            ));
         } else {
-            syncDomSelectionFromState();
+            syncDomSelectionFromState({ focus: "editor" });
         }
     }
 
@@ -385,9 +489,39 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorDragOver(event: DragEvent): void {
-        if (event.dataTransfer?.types.includes("text/plain") || readClipboardImage(event.dataTransfer)) {
+        if (event.dataTransfer?.types.includes("text/plain") || readClipboardImages(event.dataTransfer).length > 0) {
             event.preventDefault();
+            if (event.dataTransfer && internalDrag) {
+                event.dataTransfer.dropEffect = event.ctrlKey || event.altKey ? "copy" : "move";
+            }
         }
+    }
+
+    function handleEditorDragStart(event: DragEvent): void {
+        syncStateSelectionFromDom();
+        const state = getEditorState();
+        const from = Math.min(state.selection.anchor, state.selection.head);
+        const to = Math.max(state.selection.anchor, state.selection.head);
+        if (!event.dataTransfer || from === to) {
+            internalDrag = null;
+            return;
+        }
+
+        const source = state.doc.slice(from, to);
+        internalDrag = {
+            sessionId: documentState.sessionId,
+            revision: state.revision,
+            from,
+            to,
+            source,
+        };
+        event.dataTransfer.effectAllowed = "copyMove";
+        event.dataTransfer.setData("text/markdown", source);
+        event.dataTransfer.setData("text/plain", source);
+    }
+
+    function handleEditorDragEnd(): void {
+        internalDrag = null;
     }
 
     function handleEditorDrop(event: DragEvent): void {
@@ -400,8 +534,20 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function handleEditorClick(event: MouseEvent): void {
         const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
-        if (link && (event.ctrlKey || event.metaKey)) {
-            window.open(link.href, "_blank", "noopener,noreferrer");
+        if (!link) {
+            return;
+        }
+        event.preventDefault();
+        if (!(event.ctrlKey || event.metaKey)) {
+            return;
+        }
+        const href = link.dataset.href ?? link.getAttribute("href") ?? "";
+        if (href.startsWith("#")) {
+            document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: "center" });
+            return;
+        }
+        if (/^https?:|^mailto:/i.test(href)) {
+            window.open(href, "_blank", "noopener,noreferrer");
         }
     }
 
@@ -484,9 +630,16 @@ export function createEditorInputController(options: EditorInputControllerOption
             return true;
         }
 
-        if (isPlainVerticalNavigationKey(event)) {
+        if (handleSourceHorizontalNavigation(event)) {
+            return true;
+        }
+
+        if (isSourceVerticalNavigationKey(event)) {
             syncStateSelectionFromDom();
-            if (moveSourceSelectionVertically(event.key === "ArrowUp" ? "up" : "down")) {
+            if (moveSourceSelectionVertically(
+                event.key === "ArrowUp" ? "up" : "down",
+                { extend: event.shiftKey },
+            )) {
                 event.preventDefault();
                 return true;
             }
@@ -494,6 +647,47 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         return false;
+    }
+
+    function handleSourceHorizontalNavigation(event: KeyboardEvent): boolean {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || event.metaKey && !["Home", "End"].includes(event.key)) {
+            return false;
+        }
+
+        event.preventDefault();
+        syncStateSelectionFromDom();
+        const state = getEditorState();
+        const backward = event.key === "ArrowLeft" || event.key === "Home";
+        let target: number;
+
+        if (!event.shiftKey && state.selection.anchor !== state.selection.head && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+            target = backward
+                ? Math.min(state.selection.anchor, state.selection.head)
+                : Math.max(state.selection.anchor, state.selection.head);
+        } else if (event.key === "Home") {
+            target = event.ctrlKey || event.metaKey ? 0 : previousLineBoundary(state.doc, state.selection.head);
+        } else if (event.key === "End") {
+            target = event.ctrlKey || event.metaKey ? state.doc.length : nextLineBoundary(state.doc, state.selection.head);
+        } else if (event.ctrlKey || event.altKey) {
+            target = backward
+                ? previousWordBoundary(state.doc, state.selection.head)
+                : nextWordBoundary(state.doc, state.selection.head);
+        } else {
+            target = backward
+                ? previousGraphemeBoundary(state.doc, state.selection.head)
+                : nextGraphemeBoundary(state.doc, state.selection.head);
+        }
+
+        dispatch({
+            changes: [],
+            selection: {
+                anchor: event.shiftKey ? state.selection.anchor : target,
+                head: target,
+            },
+            annotations: { userEvent: "programmatic", addToHistory: false },
+        });
+        syncDomSelectionFromState({ focus: "editor" });
+        return true;
     }
 
     function handleSourceBeforeInput(event: InputEvent): boolean {
@@ -527,7 +721,13 @@ export function createEditorInputController(options: EditorInputControllerOption
             (event.inputType === "insertText" || event.inputType === "insertReplacementText") &&
             event.data !== null
         ) {
-            return () => createInsertTextTransaction(getEditorState(), event.data ?? "");
+            return () => {
+                const state = getEditorState();
+                return createInsertTextTransaction(
+                    state,
+                    prepareVirtualEofInsertion(event.data ?? "", state.selection),
+                );
+            };
         }
 
         // Chromium emits these before the corresponding clipboard/drag event.
@@ -618,7 +818,11 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function handleSourceCopy(event: ClipboardEvent): boolean {
         syncSourceSelectionForCommand();
-        const selectedText = readSelectedSourceText(getEditorState());
+        const state = getEditorState();
+        const clipboardSelection = readClipboardSelection(state);
+        const selectedText = clipboardSelection
+            ? state.doc.slice(clipboardSelection.anchor, clipboardSelection.head)
+            : null;
         if (selectedText === null || !event.clipboardData) {
             return preventUnmappedSourceClipboardDefault(event);
         }
@@ -632,8 +836,14 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function handleSourceCut(event: ClipboardEvent): boolean {
         syncSourceSelectionForCommand();
-        const selectedText = readSelectedSourceText(getEditorState());
-        const transaction = createCutTransaction(getEditorState());
+        const state = getEditorState();
+        const clipboardSelection = readClipboardSelection(state);
+        const selectedText = clipboardSelection
+            ? state.doc.slice(clipboardSelection.anchor, clipboardSelection.head)
+            : null;
+        const transaction = clipboardSelection
+            ? createCutTransaction({ ...state, selection: clipboardSelection })
+            : null;
         if (selectedText === null || !transaction || !event.clipboardData) {
             return preventUnmappedSourceClipboardDefault(event);
         }
@@ -669,84 +879,178 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleSourcePaste(event: ClipboardEvent): boolean {
-        const insert = supportsRichSourceEditing()
-            ? options.getActiveDocumentFormat().clipboard?.read?.(event.clipboardData) ?? ""
-            : event.clipboardData?.getData("text/plain").replace(/\r\n?/g, "\n") ?? "";
-        if (!insert) {
-            const image = supportsRichSourceEditing() ? readClipboardImage(event.clipboardData) : null;
-            if (!image) {
-                return false;
-            }
-
+        const result = supportsRichSourceEditing()
+            ? options.getActiveDocumentFormat().clipboard?.read?.(event.clipboardData) ?? null
+            : event.clipboardData?.types.includes("text/plain")
+                ? { kind: "plain", value: event.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n") } as ClipboardReadResult
+                : null;
+        const images = supportsRichSourceEditing() ? readClipboardImages(event.clipboardData) : [];
+        if (result) {
             event.preventDefault();
-            syncStateSelectionFromDom();
-            void pasteSourceImage(image, createSelectionBookmark());
+            if ("warning" in result && result.warning) {
+                reportEditorError(result.warning);
+            }
+            if (result.kind === "images") {
+                syncStateSelectionFromDom();
+                void pasteSourceImages(result.files, createSelectionBookmark());
+            } else if (result.kind === "html" && containsDataImage(result.value)) {
+                syncStateSelectionFromDom();
+                void pasteHtmlWithDataImages(result.value, createSelectionBookmark());
+            } else if (result.value !== "") {
+                pasteSourceText(result.value);
+            }
             return true;
         }
 
+        if (images.length === 0) {
+            return false;
+        }
         event.preventDefault();
-        pasteSourceText(insert);
+        syncStateSelectionFromDom();
+        void pasteSourceImages(images, createSelectionBookmark());
         return true;
+    }
+
+    async function pasteHtmlWithDataImages(
+        markdown: string,
+        bookmark: ReturnType<typeof createSelectionBookmark>,
+    ): Promise<void> {
+        const sessionId = documentState.sessionId;
+        try {
+            const converted = convertDataImagesToFiles(markdown);
+            const staged = stagePendingImages(converted.files);
+            let source = markdown;
+            for (let index = 0; index < converted.urls.length; index += 1) {
+                const replacement = staged.sources[index]?.source ?? "";
+                source = source.split(converted.urls[index]).join(replacement);
+            }
+            if (staged.rejected.length > 0) {
+                reportEditorError(staged.rejected[0]);
+            }
+
+            const selection = bookmark.read();
+            if (selection && sessionId === documentState.sessionId && source !== "") {
+                const state = getEditorState();
+                dispatch(createPasteTransaction(
+                    { ...state, selection },
+                    prepareVirtualEofInsertion(source, selection),
+                ));
+            }
+        } catch (error) {
+            console.error("Failed to import pasted data images:", error);
+            reportEditorError("One or more pasted images could not be imported.");
+        } finally {
+            bookmark.dispose();
+        }
     }
 
     function handleSourceDrop(event: DragEvent): boolean {
         const text = readDroppedText(event.dataTransfer);
-        const image = supportsRichSourceEditing() ? readClipboardImage(event.dataTransfer) : null;
-        if (!text && !image) {
+        const images = supportsRichSourceEditing() ? readClipboardImages(event.dataTransfer) : [];
+        if (!text && images.length === 0) {
             return false;
         }
 
         event.preventDefault();
         syncSourceSelectionFromDropPoint(event);
         if (text) {
-            dispatch(createPasteTransaction(getEditorState(), text));
-        } else if (image) {
-            void pasteSourceImage(image, createSelectionBookmark());
+            const state = getEditorState();
+            const target = state.selection.head;
+            const drag = internalDrag;
+            const move = drag &&
+                drag.sessionId === documentState.sessionId &&
+                drag.revision <= state.revision &&
+                drag.source === text &&
+                event.dataTransfer?.dropEffect === "move";
+            if (move && drag) {
+                applyInternalDragMove(drag, target);
+            } else {
+                dispatch(createPasteTransaction(state, text));
+            }
+            internalDrag = null;
+        } else {
+            void pasteSourceImages(images, createSelectionBookmark());
         }
 
         return true;
     }
 
-    async function pasteSourceImage(
-        image: File,
+    function applyInternalDragMove(
+        drag: NonNullable<typeof internalDrag>,
+        target: number,
+    ): void {
+        const state = getEditorState();
+        if (
+            (target >= drag.from && target <= drag.to) ||
+            state.doc.slice(drag.from, drag.to) !== drag.source
+        ) {
+            return;
+        }
+
+        const sourceLength = drag.to - drag.from;
+        const finalFrom = target > drag.to ? target - sourceLength : target;
+        dispatch({
+            changes: [
+                { from: drag.from, to: drag.to, insert: "" },
+                { from: target, to: target, insert: drag.source },
+            ],
+            selection: { anchor: finalFrom, head: finalFrom + drag.source.length },
+            annotations: { userEvent: "input", historyMode: "discrete" },
+        });
+    }
+
+    async function pasteSourceImages(
+        images: File[],
         bookmark: ReturnType<typeof createSelectionBookmark>,
     ): Promise<void> {
+        const lease = {
+            sessionId: documentState.sessionId,
+            formatId: options.getActiveDocumentFormat().descriptor.id,
+            path: options.getActiveFilePath(),
+            focusOwner: document.activeElement,
+        };
         try {
-            let activeFilePath = options.getActiveFilePath();
-            if (!activeFilePath) {
-                const saved = await options.ensureDocumentSaved({
-                    promptForPath: true,
-                    suggestedFileName: getSuggestedFileName(),
-                });
-                if (!saved) {
+            const selection = bookmark.read();
+            if (!selection || lease.formatId !== "markdown" || images.length === 0) {
+                return;
+            }
+
+            let sources: string[] = [];
+            if (!lease.path) {
+                const staged = stagePendingImages(images);
+                sources = staged.sources.map(({ source, file }) => (
+                    options.getActiveDocumentFormat().editing?.createPastedImageSource?.(source, file.name) ?? ""
+                )).filter(Boolean);
+                if (staged.rejected.length > 0) {
+                    reportEditorError(staged.rejected[0]);
+                }
+            } else {
+                const persisted = await persistImageFiles(lease.path, images, lease.sessionId);
+                if (
+                    lease.sessionId !== documentState.sessionId ||
+                    lease.formatId !== options.getActiveDocumentFormat().descriptor.id ||
+                    lease.path !== options.getActiveFilePath()
+                ) {
+                    reportEditorError("Image paste was cancelled because the document changed.");
                     return;
                 }
-
-                activeFilePath = options.getActiveFilePath();
+                sources = persisted.map(({ relativePath, file }) => (
+                    options.getActiveDocumentFormat().editing?.createPastedImageSource?.(relativePath, file.name) ?? ""
+                )).filter(Boolean);
             }
 
-            if (!activeFilePath) {
-                return;
-            }
-
-            const dataUrl = await readFileAsDataUrl(image);
-            const pastedImage = await savePastedImage(activeFilePath, dataUrl, image.name, image.type);
-            const selection = bookmark.read();
-            if (!selection) {
-                return;
-            }
-
-            const state = getEditorState();
-            const source = options.getActiveDocumentFormat().editing?.createPastedImageSource?.(
-                pastedImage.relativePath,
-                image.name,
-            );
-            if (source) {
-                dispatch(createPasteTransaction({ ...state, selection }, source));
+            const mappedSelection = bookmark.read();
+            if (sources.length > 0 && mappedSelection && lease.sessionId === documentState.sessionId) {
+                const state = getEditorState();
+                const source = prepareVirtualEofInsertion(sources.join("\n\n"), mappedSelection);
+                dispatch(createPasteTransaction({ ...state, selection: mappedSelection }, source));
+                if (lease.focusOwner && document.activeElement === lease.focusOwner) {
+                    syncDomSelectionFromState({ focus: "editor" });
+                }
             }
         } catch (error) {
             console.error("Failed to paste image:", error);
-            reportEditorError("Could not save the pasted image.");
+            reportEditorError(error instanceof Error ? error.message : "Could not save the pasted image.");
         } finally {
             bookmark.dispose();
         }
@@ -754,7 +1058,29 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function pasteSourceText(text: string): void {
         syncStateSelectionFromDom();
-        dispatch(createPasteTransaction(getEditorState(), text));
+        const state = getEditorState();
+        dispatch(createPasteTransaction(state, prepareVirtualEofInsertion(text, state.selection)));
+    }
+
+    function prepareVirtualEofInsertion(
+        text: string,
+        selection: ReturnType<typeof getEditorState>["selection"],
+    ): string {
+        const editor = document.getElementById("editor");
+        const state = getEditorState();
+        if (
+            editor?.dataset.virtualEofCaret !== "true" ||
+            selection.anchor !== selection.head ||
+            selection.head !== state.doc.length
+        ) {
+            return text;
+        }
+
+        editor.dataset.virtualEofCaret = "false";
+        if (state.doc === "" || state.doc.endsWith("\n\n")) {
+            return text;
+        }
+        return `${state.doc.endsWith("\n") ? "\n" : "\n\n"}${text}`;
     }
 
     function syncSourceSelectionFromDropPoint(event: DragEvent): void {
@@ -777,16 +1103,21 @@ export function createEditorInputController(options: EditorInputControllerOption
         return Boolean(format.clipboard?.richHtml && format.clipboard.mimeTypes.includes("text/markdown"));
     }
 
-    function writeSourceClipboard(clipboard: DataTransfer, text: string): boolean {
+    function writeSourceClipboard(clipboard: DataTransfer, _text: string): boolean {
         try {
             if (supportsRichSourceEditing()) {
                 const write = options.getActiveDocumentFormat().clipboard?.write;
                 if (!write) {
                     return false;
                 }
-                write(clipboard, text);
+                write(clipboard, createClipboardPayload());
             } else {
-                clipboard.setData("text/plain", text);
+                const state = getEditorState();
+                const selection = readClipboardSelection(state);
+                clipboard.setData(
+                    "text/plain",
+                    selection ? state.doc.slice(selection.anchor, selection.head) : "",
+                );
             }
             return true;
         } catch (error) {
@@ -795,21 +1126,53 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
     }
 
-    function isPlainVerticalNavigationKey(event: KeyboardEvent): boolean {
+    function isSourceVerticalNavigationKey(event: KeyboardEvent): boolean {
         return (
             (event.key === "ArrowUp" || event.key === "ArrowDown") &&
             !event.altKey &&
             !event.ctrlKey &&
-            !event.metaKey &&
-            !event.shiftKey
+            !event.metaKey
         );
     }
 
-    function createClipboardPayload(text: string): ClipboardPayload {
+    function createClipboardPayload(): ClipboardPayload {
+        const context = createClipboardSelectionContext();
         return supportsRichSourceEditing()
-            ? options.getActiveDocumentFormat().clipboard?.createPayload?.(text)
-                ?? { markdown: text, plainText: text, html: escapeClipboardText(text) }
-            : { markdown: text, plainText: text, html: escapeClipboardText(text) };
+            ? options.getActiveDocumentFormat().clipboard?.createPayload?.(context)
+                ?? createPlainClipboardPayload(context.state.doc.slice(context.from, context.to))
+            : createPlainClipboardPayload(context.state.doc.slice(context.from, context.to));
+    }
+
+    function createClipboardSelectionContext(): ClipboardSelectionContext {
+        const state = getEditorState();
+        const selection = readClipboardSelection(state) ?? state.selection;
+        const from = Math.min(selection.anchor, selection.head);
+        const to = Math.max(selection.anchor, selection.head);
+        return {
+            state,
+            from,
+            to,
+            blocks: state.blocks.blocks.filter((block) => from < block.sourceTo && to > block.sourceFrom),
+            activeFilePath: options.getActiveFilePath(),
+        };
+    }
+
+    function readClipboardSelection(state: ReturnType<typeof getEditorState>): { anchor: number; head: number } | null {
+        const from = Math.min(state.selection.anchor, state.selection.head);
+        const to = Math.max(state.selection.anchor, state.selection.head);
+        if (from === to) {
+            return null;
+        }
+        const resolved = supportsRichSourceEditing()
+            ? options.getActiveDocumentFormat().clipboard?.resolveSelectionRange?.(state)
+            : null;
+        return resolved
+            ? { anchor: resolved.from, head: resolved.to }
+            : { anchor: from, head: to };
+    }
+
+    function createPlainClipboardPayload(text: string): ClipboardPayload {
+        return { markdown: text, plainText: text, html: escapeClipboardText(text) };
     }
 
     function readDeleteGranularityFromKeydown(event: KeyboardEvent): "grapheme" | "word" | "hard-line" {
@@ -833,33 +1196,49 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 }
 
-function readClipboardImage(dataTransfer: DataTransfer | null | undefined): File | null {
+function readClipboardImages(dataTransfer: DataTransfer | null | undefined): File[] {
     if (!dataTransfer) {
-        return null;
+        return [];
     }
 
-    for (const item of Array.from(dataTransfer.items)) {
-        if (item.kind === "file" && supportedPastedImageMimeTypes.has(item.type.toLowerCase())) {
-            return item.getAsFile();
-        }
-    }
-
-    return Array.from(dataTransfer.files).find((file) => supportedPastedImageMimeTypes.has(file.type.toLowerCase())) ?? null;
+    const fromItems = Array.from(dataTransfer.items)
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file && isSupportedPastedImage(file)));
+    return fromItems.length > 0
+        ? fromItems
+        : Array.from(dataTransfer.files).filter(isSupportedPastedImage);
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.addEventListener("load", () => {
-            if (typeof reader.result === "string") {
-                resolve(reader.result);
-            } else {
-                reject(new Error("Unable to read image data"));
-            }
-        });
-        reader.addEventListener("error", () => reject(reader.error ?? new Error("Unable to read image data")));
-        reader.readAsDataURL(file);
+function extensionForImageMimeType(mimeType: string): string {
+    if (mimeType === "image/jpeg") return "jpg";
+    if (mimeType === "image/gif") return "gif";
+    if (mimeType === "image/webp") return "webp";
+    return "png";
+}
+
+function containsDataImage(value: string): boolean {
+    return /data:image\/(?:gif|jpe?g|png|webp);base64,/i.test(value);
+}
+
+function convertDataImagesToFiles(markdown: string): { urls: string[]; files: File[] } {
+    const urls = Array.from(new Set(
+        markdown.match(/data:image\/(?:gif|jpe?g|png|webp);base64,[A-Za-z0-9+/=]+/gi) ?? [],
+    ));
+    const files = urls.map((url, index) => {
+        const match = url.match(/^data:(image\/(?:gif|jpe?g|png|webp));base64,(.+)$/i);
+        if (!match) {
+            throw new Error("Unsupported image data URL.");
+        }
+        const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
+        const mimeType = match[1].toLowerCase().replace("image/jpg", "image/jpeg");
+        return new File(
+            [bytes],
+            `pasted-image-${index + 1}.${extensionForImageMimeType(mimeType)}`,
+            { type: mimeType },
+        );
     });
+    return { urls, files };
 }
 
 function isPlainTextKeydown(event: KeyboardEvent): boolean {

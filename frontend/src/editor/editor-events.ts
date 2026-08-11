@@ -5,20 +5,22 @@ type EditorEventTargets = {
 };
 
 type EditorEventHandlers = {
-    onSurfaceMouseDown: (event: MouseEvent) => void;
-    onSurfaceMouseMove: (event: MouseEvent) => void;
-    onSurfaceMouseLeave: (event: MouseEvent) => void;
+    onSurfaceMouseDown: (event: PointerEvent) => void;
+    onSurfaceMouseMove: (event: PointerEvent) => void;
+    onSurfaceMouseLeave: (event: PointerEvent) => void;
     onSurfaceMouseOver: (event: MouseEvent) => void;
     onSurfaceMouseOut: (event: MouseEvent) => void;
-    onDocumentMouseMove: (event: MouseEvent) => void;
-    onDocumentMouseUp: (event: MouseEvent) => void;
+    onDocumentMouseMove: (event: PointerEvent) => void;
+    onDocumentMouseUp: (event: PointerEvent) => void;
     onEditorKeydown: (event: KeyboardEvent) => void;
-    onEditorMouseDown: (event: MouseEvent) => void;
+    onEditorMouseDown: (event: PointerEvent) => void;
     onEditorBeforeInput: (event: InputEvent) => void;
     onEditorInput: (event: Event) => void;
     onEditorCopy: (event: ClipboardEvent) => void;
     onEditorCut: (event: ClipboardEvent) => void;
     onEditorPaste: (event: ClipboardEvent) => void;
+    onEditorDragStart: (event: DragEvent) => void;
+    onEditorDragEnd: (event: DragEvent) => void;
     onEditorDragOver: (event: DragEvent) => void;
     onEditorDrop: (event: DragEvent) => void;
     onEditorChange: (event: Event) => void;
@@ -43,20 +45,23 @@ export function installEditorEventListeners(
     handlers: EditorEventHandlers,
     documentStateChangedEvent: string,
 ): void {
-    targets.surface.addEventListener("mousedown", handlers.onSurfaceMouseDown);
-    targets.surface.addEventListener("mousemove", handlers.onSurfaceMouseMove);
-    targets.surface.addEventListener("mouseleave", handlers.onSurfaceMouseLeave);
+    targets.surface.addEventListener("pointerdown", handlers.onSurfaceMouseDown);
+    targets.surface.addEventListener("pointermove", handlers.onSurfaceMouseMove);
+    targets.surface.addEventListener("pointerleave", handlers.onSurfaceMouseLeave);
     targets.surface.addEventListener("mouseover", handlers.onSurfaceMouseOver);
     targets.surface.addEventListener("mouseout", handlers.onSurfaceMouseOut);
-    document.addEventListener("mousemove", handlers.onDocumentMouseMove);
-    document.addEventListener("mouseup", handlers.onDocumentMouseUp);
+    document.addEventListener("pointermove", handlers.onDocumentMouseMove);
+    document.addEventListener("pointerup", handlers.onDocumentMouseUp);
+    document.addEventListener("pointercancel", handlers.onDocumentMouseUp);
     targets.editor.addEventListener("keydown", handlers.onEditorKeydown);
-    targets.editor.addEventListener("mousedown", handlers.onEditorMouseDown);
+    targets.editor.addEventListener("pointerdown", handlers.onEditorMouseDown);
     targets.editor.addEventListener("beforeinput", handlers.onEditorBeforeInput);
     targets.editor.addEventListener("input", handlers.onEditorInput);
     targets.editor.addEventListener("copy", handlers.onEditorCopy);
     targets.editor.addEventListener("cut", handlers.onEditorCut);
     targets.editor.addEventListener("paste", handlers.onEditorPaste);
+    targets.editor.addEventListener("dragstart", handlers.onEditorDragStart);
+    targets.editor.addEventListener("dragend", handlers.onEditorDragEnd);
     targets.editor.addEventListener("dragover", handlers.onEditorDragOver);
     targets.editor.addEventListener("drop", handlers.onEditorDrop);
     targets.editor.addEventListener("change", handlers.onEditorChange);

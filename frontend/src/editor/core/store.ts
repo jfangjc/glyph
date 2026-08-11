@@ -28,7 +28,6 @@ const typingBatchDelayMs = 1200;
 
 let editorState = freezeEditorState({
     doc: "",
-    title: "Untitled",
     selection: { anchor: 0, head: 0 },
     blocks: { blocks: [] },
     revision: 0,
@@ -61,14 +60,12 @@ export function configureBlockIndexBuilder(builder: BlockIndexBuilder): void {
 
 export function replaceDocumentState(
     source: string,
-    title: string,
     selection: SelectionRange = { anchor: 0, head: 0 },
 ): void {
     disposeAllSelectionBookmarks();
     flushSourceHistoryBatch();
     dispatch({
         changes: [{ from: 0, to: editorState.doc.length, insert: source }],
-        title,
         selection,
         annotations: { userEvent: "programmatic", addToHistory: false },
     });
@@ -97,6 +94,24 @@ export function clearSourceHistory(): void {
     pendingTypingUserEvent = null;
     undoStack = [];
     redoStack = [];
+}
+
+export function rewriteSourceHistory(
+    replacements: Array<{ source: string; replacement: string }>,
+): void {
+    if (replacements.length === 0) {
+        return;
+    }
+
+    const rewriteEntry = (entry: HistoryEntry): HistoryEntry => ({
+        before: rewriteSnapshot(entry.before, replacements),
+        after: rewriteSnapshot(entry.after, replacements),
+    });
+    undoStack = undoStack.map(rewriteEntry);
+    redoStack = redoStack.map(rewriteEntry);
+    if (pendingTypingHistory) {
+        pendingTypingHistory = rewriteEntry(pendingTypingHistory);
+    }
 }
 
 export function flushSourceHistoryBatch(): void {
@@ -176,7 +191,6 @@ function applyDispatch(transaction: Transaction): void {
     measureEditorPerformance("glyph:block-index", blockIndexStartedAt);
     const next = freezeEditorState({
         doc: applied.doc,
-        title: transaction.title ?? previous.title,
         selection: nextSelection,
         blocks,
         revision: previous.revision + 1,
@@ -184,7 +198,7 @@ function applyDispatch(transaction: Transaction): void {
 
     mapSelectionBookmarks(applied.changes);
 
-    if (shouldRecordHistory(normalizedTransaction, nextDocChanged || next.title !== previous.title)) {
+    if (shouldRecordHistory(normalizedTransaction, nextDocChanged)) {
         recordHistoryEntry({
             before: createSnapshot(previous),
             after: createSnapshot(next),
@@ -215,10 +229,29 @@ export function measureEditorPerformance(name: string, startedAt: number): void 
 function restoreSnapshot(snapshot: EditorSnapshot): void {
     dispatch({
         changes: [{ from: 0, to: editorState.doc.length, insert: snapshot.doc }],
-        title: snapshot.title,
         selection: snapshot.selection,
         annotations: { userEvent: "history", addToHistory: false },
     });
+}
+
+function rewriteSnapshot(
+    snapshot: EditorSnapshot,
+    replacements: Array<{ source: string; replacement: string }>,
+): EditorSnapshot {
+    const changes: Array<{ from: number; to: number; insert: string }> = [];
+    for (const { source, replacement } of replacements) {
+        let from = snapshot.doc.indexOf(source);
+        while (from >= 0) {
+            changes.push({ from, to: from + source.length, insert: replacement });
+            from = snapshot.doc.indexOf(source, from + source.length);
+        }
+    }
+    if (changes.length === 0) {
+        return snapshot;
+    }
+
+    const rewritten = applyTransactionToDoc(snapshot.doc, snapshot.selection, { changes });
+    return { doc: rewritten.doc, selection: rewritten.selection };
 }
 
 function shouldRecordHistory(transaction: Transaction, stateChanged: boolean): boolean {
@@ -308,7 +341,12 @@ function disposeAllSelectionBookmarks(): void {
 }
 
 function selectionsEqual(left: SelectionRange, right: SelectionRange): boolean {
-    return left.anchor === right.anchor && left.head === right.head;
+    return (
+        left.anchor === right.anchor &&
+        left.head === right.head &&
+        left.anchorAffinity === right.anchorAffinity &&
+        left.headAffinity === right.headAffinity
+    );
 }
 
 function notifySubscribers(next: EditorState, previous: EditorState, transaction: Transaction): void {
@@ -334,7 +372,6 @@ function flushQueuedTransactions(): void {
 function createSnapshot(state: EditorState): EditorSnapshot {
     return {
         doc: state.doc,
-        title: state.title,
         selection: state.selection,
     };
 }

@@ -9,9 +9,14 @@ import {
     isRichTextBlockType,
     readEditorBlock,
     readBlockCodeFence,
+    readBlockCodeFenceClosed,
+    readBlockHeadingId,
+    readBlockHeadingIdExplicit,
     readBlockIndent,
     readBlockListMarker,
     readBlockListNumber,
+    readBlockListDelimiter,
+    readBlockTodoMarker,
     readBlockQuoteLevel,
     readBlockRuleMarker,
     setBlockText,
@@ -97,9 +102,10 @@ export function replaceEditorBlocksFromSourceState(state: EditorState, previous?
         const element = current && readBlockType(current.dataset.type) === block.type
             ? sourceChanged && projectedBlockNeedsUpdate(current, block) ? updateProjectedBlock(current, block) : current
             : createBlock(block.type, block.text, block);
-        if (sourceChanged || !current) {
-            applySourceBlockProjectionMetadata(element, sourceBlock, state.doc);
-        }
+        // IDs are intentionally reused across reparses, including for visually
+        // identical empty blocks. Their absolute source ranges can still move,
+        // so projection metadata must never be treated as render-cache data.
+        applySourceBlockProjectionMetadata(element, sourceBlock, state.doc);
         return element;
     });
 
@@ -118,12 +124,17 @@ function sourceBlocksEquivalent(
         block.indent === previousBlock.indent &&
         block.checked === previousBlock.checked &&
         block.codeFence === previousBlock.codeFence &&
+        block.codeFenceClosed === previousBlock.codeFenceClosed &&
         block.codeInfo === previousBlock.codeInfo &&
         block.listMarker === previousBlock.listMarker &&
         block.listNumber === previousBlock.listNumber &&
+        block.listDelimiter === previousBlock.listDelimiter &&
+        block.todoMarker === previousBlock.todoMarker &&
         block.quoteLevel === previousBlock.quoteLevel &&
         block.ruleMarker === previousBlock.ruleMarker &&
-        block.mathSource === previousBlock.mathSource
+        block.mathSource === previousBlock.mathSource &&
+        block.headingId === previousBlock.headingId &&
+        block.headingIdExplicit === previousBlock.headingIdExplicit
     );
 }
 
@@ -134,26 +145,36 @@ function projectedBlockNeedsUpdate(element: HTMLElement, block: ParsedBlock): bo
         readBlockIndent(element) !== (block.indent ?? 0) ||
         readBlockListMarker(element) !== block.listMarker ||
         readBlockListNumber(element) !== block.listNumber ||
+        readBlockListDelimiter(element) !== block.listDelimiter ||
+        readBlockTodoMarker(element) !== block.todoMarker ||
         readBlockQuoteLevel(element) !== block.quoteLevel ||
         readBlockCodeFence(element) !== block.codeFence ||
+        readBlockCodeFenceClosed(element) !== block.codeFenceClosed ||
         (element.dataset.codeInfo ?? "") !== (block.codeInfo ?? "") ||
         readBlockRuleMarker(element) !== block.ruleMarker ||
         (type === "todo" && getTodoCheckbox(element).checked !== Boolean(block.checked)) ||
-        (type === "math" && element.dataset.mathSource !== block.mathSource)
+        (type === "math" && element.dataset.mathSource !== block.mathSource) ||
+        readBlockHeadingId(element) !== block.headingId ||
+        readBlockHeadingIdExplicit(element) !== Boolean(block.headingIdExplicit)
     );
 }
 
 function updateProjectedBlock(element: HTMLElement, block: ParsedBlock): HTMLElement {
+    const canUpdateCodeContent = block.type === "code" && codeSourceStructureMatches(element, block);
     applyBlockProperties(element, block);
     const content = element.querySelector<HTMLElement>(".block-content");
-    if (block.type === "code" && content && updateCodeBlockBodyContent(content, block.text)) {
+    if (canUpdateCodeContent && content && updateCodeBlockBodyContent(content, block.text)) {
         return element;
     }
 
-    if (getBlockText(element) !== block.text) {
-        setBlockText(element, block.text);
-    }
+    // Block markers, suffixes, and preview source are derived from properties
+    // as well as body text. Re-render even when the visible body is unchanged.
+    setBlockText(element, block.text);
     return element;
+}
+
+function codeSourceStructureMatches(element: HTMLElement, block: ParsedBlock): boolean {
+    return readBlockCodeFenceClosed(element) === block.codeFenceClosed;
 }
 
 function reconcileEditorBlocks(editor: HTMLElement, currentBlocks: HTMLElement[], nextBlocks: HTMLElement[]): void {
@@ -207,9 +228,12 @@ function readParsedBlockFromSourceState(state: EditorState, block: SourceBlock):
         indent: block.indent,
         checked: block.checked,
         codeFence: block.codeFence,
+        codeFenceClosed: block.codeFenceClosed,
         codeInfo: block.codeInfo,
         listMarker: block.listMarker,
         listNumber: block.listNumber,
+        listDelimiter: block.listDelimiter,
+        todoMarker: block.todoMarker,
         quoteLevel: block.quoteLevel,
         ruleMarker: block.ruleMarker,
         mathSource: block.mathSource,

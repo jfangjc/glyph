@@ -11,6 +11,7 @@ const textFileFilters: Dialogs.FileFilter[] = getDocumentFileFilters().map((filt
 
 const saveChangesButton = "Yes";
 const discardChangesButton = "No";
+const cancelChangesButton = "Cancel";
 
 export async function chooseDocumentToOpen(): Promise<string | null> {
     const selection = await Dialogs.OpenFile({
@@ -66,7 +67,8 @@ export async function chooseUnsavedDocumentDecision(): Promise<UnsavedDocumentDe
         Message: "Save changes before continuing?",
         Buttons: [
             { Label: saveChangesButton, IsDefault: true },
-            { Label: discardChangesButton, IsCancel: true },
+            { Label: discardChangesButton },
+            { Label: cancelChangesButton, IsCancel: true },
         ],
     });
     const normalizedSelection = selection.trim().toLowerCase();

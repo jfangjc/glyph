@@ -1,4 +1,4 @@
-import { caretSpacerCharacter } from "../selection/rendered-content-dom";
+import { caretSpacerHtml } from "../selection/rendered-content-dom";
 import { escapeHtml } from "../../utils/text";
 import { getPlainTextBoundaryOffset } from "../../utils/dom";
 
@@ -38,9 +38,8 @@ export function updateCodeBlockBodyContent(content: HTMLElement, text: string): 
         return false;
     }
 
-    const renderedText = renderCodeBlockBodyText(text);
-    if (body.textContent !== renderedText) {
-        body.textContent = renderedText;
+    if (body.dataset.sourceText !== text) {
+        setPlainTextBodyContent(body, text, text === "" || text.endsWith("\n"));
     }
     return true;
 }
@@ -172,29 +171,33 @@ function appendCodeBlockBodyElement(content: HTMLElement, text: string): void {
     const body = document.createElement("span");
     body.className = "markdown-code-block-body";
     body.spellcheck = false;
-    body.append(document.createTextNode(renderCodeBlockBodyText(text)));
+    setPlainTextBodyContent(body, text, text === "" || text.endsWith("\n"));
     content.append(body);
 }
 
 function appendPlainTextBodyElement(content: HTMLElement, text: string, highlightedHtml: string | null): void {
     if (highlightedHtml === null) {
-        content.append(document.createTextNode(renderPlainTextContentText(text)));
+        content.append(document.createTextNode(text));
+        if (text.endsWith("\n")) {
+            content.insertAdjacentHTML("beforeend", caretSpacerHtml);
+        }
         return;
     }
 
     const body = document.createElement("span");
     body.className = "source-highlighted-text";
     body.spellcheck = false;
-    body.innerHTML = text.endsWith("\n") ? `${highlightedHtml}${caretSpacerCharacter}` : highlightedHtml;
+    body.dataset.sourceText = text;
+    body.innerHTML = text.endsWith("\n") ? `${highlightedHtml}${caretSpacerHtml}` : highlightedHtml;
     content.append(body);
 }
 
-function renderCodeBlockBodyText(text: string): string {
-    return text === "" || text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
-}
-
-function renderPlainTextContentText(text: string): string {
-    return text.endsWith("\n") ? `${text}${caretSpacerCharacter}` : text;
+function setPlainTextBodyContent(body: HTMLElement, text: string, needsSpacer: boolean): void {
+    body.dataset.sourceText = text;
+    body.replaceChildren(document.createTextNode(text));
+    if (needsSpacer) {
+        body.insertAdjacentHTML("beforeend", caretSpacerHtml);
+    }
 }
 
 function getBlockSourceClassName(position: BlockSourcePosition): string {

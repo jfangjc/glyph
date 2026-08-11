@@ -26,21 +26,17 @@ export type ParsedBlock = {
     indent?: number;
     checked?: boolean;
     codeFence?: string;
+    codeFenceClosed?: boolean;
     codeInfo?: string;
     listMarker?: string;
     listNumber?: string;
+    listDelimiter?: "." | ")";
+    todoMarker?: "[ ]" | "[x]" | "[X]";
     quoteLevel?: number;
     ruleMarker?: string;
     mathSource?: string;
     headingId?: string;
     headingIdExplicit?: boolean;
-};
-
-export type ParsedDocument = {
-    title: string;
-    usesTitle: boolean;
-    blocks: ParsedBlock[];
-    references?: Record<string, { destination: string; title?: string }>;
 };
 
 export const blockLabels: Record<BlockType, string> = {

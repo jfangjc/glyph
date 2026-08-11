@@ -19,6 +19,7 @@ import {
 } from "../documents/document-state";
 import {
     getActiveDocumentFormat,
+    commitSavedDocument,
     installSourceStateDocumentIntegration,
     loadDocument,
     serializeDocument,
@@ -88,14 +89,13 @@ export function installEditorController(): void {
         hooks: editorHooks,
         getActiveDocumentFormat,
         getActiveFilePath: () => documentState.activeFilePath,
-        ensureDocumentSaved: saveCurrentDocument,
     });
     const titleController = createTitleController({
         getActiveDocumentFormat,
         isComposingText: inputController.isComposingText,
         hasActiveFileWithUnsavedChanges: () =>
             Boolean(documentState.activeFilePath && documentState.hasUnsavedChanges),
-        saveDocument: () => saveCurrentDocument(),
+        saveDocument: () => saveCurrentDocument({ promptForPath: !documentState.activeFilePath }),
         syncActiveBlockIndicator,
         syncBlockSourceReveal,
     });
@@ -134,6 +134,8 @@ export function installEditorController(): void {
             onEditorCopy: inputController.handleEditorCopy,
             onEditorCut: inputController.handleEditorCut,
             onEditorPaste: inputController.handleEditorPaste,
+            onEditorDragStart: inputController.handleEditorDragStart,
+            onEditorDragEnd: inputController.handleEditorDragEnd,
             onEditorDragOver: inputController.handleEditorDragOver,
             onEditorDrop: inputController.handleEditorDrop,
             onEditorChange: inputController.handleEditorChange,
@@ -194,7 +196,14 @@ export function installEditorController(): void {
         hasBlockSource: (type) => Boolean(getActiveDocumentFormat().render.hasBlockSource?.(type)),
     });
     installSourceStateDocumentIntegration();
-    bindDocumentActions({ loadDocument, serializeDocument });
+    if (documentState.sessionId === 0) {
+        loadDocument({
+            path: "",
+            name: "Untitled.md",
+            content: "",
+        });
+    }
+    bindDocumentActions({ loadDocument, serializeDocument, commitSavedDocument });
     installOpenDocumentRequests();
     installWindowCloseRequests(getSuggestedFileName);
     void restoreLastOpenDirectory();

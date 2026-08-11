@@ -1,4 +1,5 @@
-import { getEditorState } from "./core/store";
+import { dispatch, getEditorState } from "./core/store";
+import { syncDomSelectionFromState } from "./core/projection";
 import { getEditorBlocks } from "./blocks/view";
 
 type OutlineEntry = {
@@ -45,7 +46,7 @@ export function syncDocumentOutlineToSelection(): void {
 }
 
 export function syncDocumentOutlineToBlock(block: HTMLElement | null): void {
-    void block;
+    setActiveOutlineId(block?.dataset.blockId ?? null, { scrollActiveItem: false });
 }
 
 function scheduleOutlineSync(): void {
@@ -112,6 +113,16 @@ function renderOutlineEntry(entry: OutlineEntry): HTMLLIElement {
     button.title = entry.text;
     button.addEventListener("click", () => {
         entry.block.scrollIntoView({ block: "start", behavior: readOutlineScrollBehavior() });
+        const state = getEditorState();
+        const sourceBlock = state.blocks.blocks.find((block) => block.id === entry.id);
+        if (sourceBlock) {
+            dispatch({
+                changes: [],
+                selection: { anchor: sourceBlock.contentFrom, head: sourceBlock.contentFrom },
+                annotations: { userEvent: "programmatic", addToHistory: false },
+            });
+            syncDomSelectionFromState({ focus: "editor" });
+        }
     });
 
     const marker = document.createElement("span");
@@ -178,17 +189,17 @@ function updateActiveOutlineItem(options: { scrollActiveItem?: boolean } = {}): 
         return isOutlineHeadingBlock(block);
     });
     const containerRect = scrollContainer.getBoundingClientRect();
-    let nextActive = headings[0]?.dataset.outlineId ?? null;
+    let nextActive = headings[0]?.dataset.blockId ?? null;
 
     for (const heading of headings) {
         const headingRect = heading.getBoundingClientRect();
         if (isVisibleInContainer(headingRect, containerRect)) {
-            nextActive = heading.dataset.outlineId ?? nextActive;
+            nextActive = heading.dataset.blockId ?? nextActive;
             break;
         }
 
         if (headingRect.top < containerRect.top) {
-            nextActive = heading.dataset.outlineId ?? nextActive;
+            nextActive = heading.dataset.blockId ?? nextActive;
         }
     }
 

@@ -1,4 +1,5 @@
-export const caretSpacerCharacter = String.fromCharCode(8203);
+export const caretSpacerHtml =
+    '<span data-caret-spacer="true" data-source-ignore="true" aria-hidden="true">\u200B</span>';
 
 export function getRenderedContentText(node: Node): string {
     if (shouldIgnoreRenderedContentNode(node)) {
@@ -67,7 +68,7 @@ export function findRenderedContentTextPosition(root: HTMLElement, offset: numbe
 }
 
 export function stripCaretSpacers(text: string): string {
-    return text.split(caretSpacerCharacter).join("");
+    return text;
 }
 
 function findRenderedContentTextPositionInNode(
@@ -136,10 +137,6 @@ function getDomTextOffsetForRenderedContentOffset(text: string, offset: number):
             return index;
         }
 
-        if (text[index] === caretSpacerCharacter) {
-            continue;
-        }
-
         renderedOffset += 1;
     }
 
@@ -155,5 +152,8 @@ function readRenderedContentRawText(node: Node): string | null {
 }
 
 function shouldIgnoreRenderedContentNode(node: Node): boolean {
-    return node instanceof HTMLElement && node.dataset.sourceIgnore === "true";
+    return node instanceof HTMLElement && (
+        node.dataset.sourceIgnore === "true" ||
+        node.dataset.caretSpacer === "true"
+    );
 }

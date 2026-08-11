@@ -4,23 +4,21 @@ import { renderInlineMarkdown } from "./inline";
 import { renderMarkdownBlock } from "./table";
 import { renderExtendedMarkdownBlock, readMarkdownRenderContext } from "./render-context";
 import type { ParsedBlock } from "../../editor/blocks/model";
+import type {
+    ClipboardPayload,
+    ClipboardReadResult,
+    ClipboardSelectionContext,
+} from "../types";
 
-export type ClipboardPayload = {
-    markdown: string;
-    plainText: string;
-    html: string;
-};
+const maxClipboardHtmlLength = 5 * 1024 * 1024;
 
-export type ClipboardInsert = {
-    kind: "markdown" | "html" | "plain";
-    markdown: string;
-};
-
-export function createMarkdownClipboardPayload(markdown: string): ClipboardPayload {
+export function createMarkdownClipboardPayload(context: ClipboardSelectionContext): ClipboardPayload {
+    const markdown = context.state.doc.slice(context.from, context.to);
+    const html = renderClipboardHtml(context);
     return {
         markdown,
-        plainText: markdown,
-        html: renderClipboardHtml(markdown),
+        plainText: readRenderedClipboardText(html, markdown),
+        html,
     };
 }
 
@@ -30,23 +28,30 @@ export function writeMarkdownClipboardPayload(clipboard: DataTransfer, payload: 
     clipboard.setData("text/html", payload.html);
 }
 
-export function readMarkdownClipboardInsert(clipboard: DataTransfer | null | undefined): ClipboardInsert | null {
+export function readMarkdownClipboardInsert(clipboard: DataTransfer | null | undefined): ClipboardReadResult | null {
     if (!clipboard) {
         return null;
     }
 
-    const markdown = clipboard.getData("text/markdown");
-    if (markdown) {
-        return { kind: "markdown", markdown: normalizeLines(markdown) };
+    if (clipboard.types.includes("text/markdown")) {
+        return { kind: "markdown", value: normalizeLines(clipboard.getData("text/markdown")) };
     }
 
-    const html = clipboard.getData("text/html");
-    if (html) {
-        return { kind: "html", markdown: htmlToMarkdown(html) };
+    if (clipboard.types.includes("text/html")) {
+        const html = clipboard.getData("text/html");
+        if (html.length > maxClipboardHtmlLength) {
+            return {
+                kind: "plain",
+                value: normalizeLines(new DOMParser().parseFromString(html, "text/html").body.textContent ?? ""),
+                warning: "Rich clipboard content exceeded 5 MB and was pasted as plain text.",
+            };
+        }
+        return { kind: "html", value: htmlToMarkdown(html) };
     }
 
-    const plain = clipboard.getData("text/plain");
-    return plain ? { kind: "plain", markdown: normalizeLines(plain) } : null;
+    return clipboard.types.includes("text/plain")
+        ? { kind: "plain", value: normalizeLines(clipboard.getData("text/plain")) }
+        : null;
 }
 
 export function htmlToMarkdown(html: string): string {
@@ -62,8 +67,18 @@ export function htmlToMarkdown(html: string): string {
         .trim();
 }
 
-function renderClipboardHtml(markdown: string): string {
-    const parsed = parseMarkdownFragment(markdown);
+function renderClipboardHtml(selection: ClipboardSelectionContext): string {
+    const selectedBlocks = selection.blocks.map((block): ParsedBlock => {
+        const from = Math.max(selection.from, block.contentFrom);
+        const to = Math.min(selection.to, block.contentTo);
+        return {
+            ...block,
+            text: from < to ? selection.state.doc.slice(from, to) : "",
+        };
+    }).filter((block) => block.text !== "" || block.type === "rule");
+    const parsed = selectedBlocks.length > 0
+        ? { blocks: selectedBlocks }
+        : parseMarkdownFragment(selection.state.doc.slice(selection.from, selection.to));
     const context = readMarkdownRenderContext(parsed.blocks);
     const html: string[] = [];
     for (let index = 0; index < parsed.blocks.length; index += 1) {
@@ -99,6 +114,66 @@ function renderClipboardHtml(markdown: string): string {
         }
     }
     return html.join("");
+}
+
+function readRenderedClipboardText(html: string, markdown: string): string {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const text = readVisibleClipboardNodeText(template.content).replace(/\n$/, "");
+    if (text && text !== markdown) {
+        return text;
+    }
+    return markdown
+        .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/(\*\*|__|~~|==|\*|_|`+|~|\^)/g, "")
+        .replace(/^ {0,3}(?:[-+*]|\d+[.)]|>)[ \t]+/gm, "")
+        .replace(/\\([\\`*_[\]{}()#+\-.!|$~=^:])/g, "$1");
+}
+
+function readVisibleClipboardNodeText(node: Node): string {
+    if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent ?? "";
+    }
+    if (node instanceof HTMLBRElement) {
+        return "\n";
+    }
+    if (node instanceof HTMLImageElement) {
+        return node.alt;
+    }
+    if (node instanceof HTMLInputElement) {
+        return "";
+    }
+
+    if (node instanceof Element && node.classList.contains("katex")) {
+        return node.querySelector("annotation[encoding='application/x-tex']")?.textContent ?? "";
+    }
+
+    if (node instanceof HTMLTableRowElement) {
+        return `${Array.from(node.cells).map((cell) => (
+            Array.from(cell.childNodes).map(readVisibleClipboardNodeText).join("")
+        )).join("\t")}\n`;
+    }
+
+    if (node instanceof HTMLLIElement) {
+        const nestedLists = Array.from(node.children).filter((child) => (
+            child instanceof HTMLUListElement || child instanceof HTMLOListElement
+        ));
+        const nestedSet = new Set<Node>(nestedLists);
+        let itemText = Array.from(node.childNodes)
+            .filter((child) => !nestedSet.has(child))
+            .map(readVisibleClipboardNodeText)
+            .join("");
+        if (node.firstElementChild instanceof HTMLInputElement && node.firstElementChild.type === "checkbox") {
+            itemText = itemText.replace(/^ /, "");
+        }
+        return `${itemText}\n${nestedLists.map(readVisibleClipboardNodeText).join("")}`;
+    }
+
+    const text = Array.from(node.childNodes).map(readVisibleClipboardNodeText).join("");
+    return node instanceof Element && /^(?:p|div|h[1-6]|blockquote|pre|li)$/.test(node.tagName.toLowerCase())
+        ? `${text}\n`
+        : text;
 }
 
 type ClipboardListItem = {
@@ -190,10 +265,10 @@ function cleanRenderedInline(html: string): string {
                 element.removeAttribute(attribute.name);
             }
         }
-        if (element instanceof HTMLAnchorElement && !isSafeUrl(element.href)) {
+        if (element instanceof HTMLAnchorElement && !isSafeLinkUrl(element.getAttribute("href") ?? "")) {
             element.removeAttribute("href");
         }
-        if (element instanceof HTMLImageElement && !isSafeUrl(element.src)) {
+        if (element instanceof HTMLImageElement && !isSafeImageUrl(element.getAttribute("src") ?? "")) {
             element.removeAttribute("src");
         }
     }
@@ -202,7 +277,9 @@ function cleanRenderedInline(html: string): string {
 
 function createImageElement(source: string, alt: string): HTMLImageElement {
     const image = document.createElement("img");
-    image.src = isSafeUrl(source) ? source : "";
+    if (isSafeImageUrl(source)) {
+        image.setAttribute("src", source);
+    }
     image.alt = alt;
     return image;
 }
@@ -252,25 +329,25 @@ function convertInlineNode(node: Node): string {
     }
     const tag = node.tagName.toLowerCase();
     const content = convertInlineChildren(node);
-    if (tag === "br") return "\n";
+    if (tag === "br") return "  \n";
     if (tag === "strong" || tag === "b") return content ? `**${content}**` : "";
     if (tag === "em" || tag === "i") return content ? `*${content}*` : "";
     if (tag === "del" || tag === "s" || tag === "strike") return content ? `~~${content}~~` : "";
-    if (tag === "code") return content ? `\`${content.replace(/`/g, "\\`")}\`` : "";
+    if (tag === "code") return serializeInlineCode(node.textContent ?? "");
     if (tag === "a") {
         const href = node.getAttribute("href") ?? "";
-        return href && isSafeUrl(href) ? `[${content}](${escapeMarkdownDestination(href)})` : content;
+        return href && isSafeLinkUrl(href) ? `[${content}](${escapeMarkdownDestination(href)})` : content;
     }
     if (tag === "img") {
         const source = node.getAttribute("src") ?? "";
         const alt = escapeMarkdownText(node.getAttribute("alt") ?? "");
-        return source && isSafeUrl(source) ? `![${alt}](${escapeMarkdownDestination(source)})` : alt;
+        return source && isSafeImageUrl(source) ? `![${alt}](${escapeMarkdownDestination(source)})` : alt;
     }
     return content;
 }
 
 function convertInlineChildren(element: Element): string {
-    return Array.from(element.childNodes).map(convertInlineNode).join("").trim();
+    return Array.from(element.childNodes).map(convertInlineNode).join("");
 }
 
 function convertList(list: Element, depth: number): string {
@@ -299,16 +376,25 @@ function convertTable(table: Element): string {
 }
 
 function normalizeInlineText(text: string): string {
-    return text.replace(/[\t\n\f\r ]+/g, " ");
+    return text
+        .replace(/[\t\n\f\r ]+/g, " ")
+        .replace(/\\/g, "\\\\")
+        .replace(/([`*_[\]<>])/g, "\\$1");
 }
 
 function normalizeLines(text: string): string {
     return text.replace(/\r\n?/g, "\n");
 }
 
-function isSafeUrl(value: string): boolean {
+function isSafeLinkUrl(value: string): boolean {
     const normalized = value.trim().replace(/[\u0000-\u001f\u007f\s]+/g, "");
-    return !/^(?:javascript|vbscript):/i.test(normalized) && (!/^data:/i.test(normalized) || /^data:image\/(?:gif|jpe?g|png|webp);/i.test(normalized));
+    return /^(?:https?:|mailto:|#)/i.test(normalized);
+}
+
+function isSafeImageUrl(value: string): boolean {
+    const normalized = value.trim().replace(/[\u0000-\u001f\u007f\s]+/g, "");
+    return /^(?:https?:|glyph-pending-image:)/i.test(normalized) ||
+        /^data:image\/(?:gif|jpe?g|png|webp);base64,/i.test(normalized);
 }
 
 function escapeMarkdownDestination(value: string): string {
@@ -317,6 +403,16 @@ function escapeMarkdownDestination(value: string): string {
 
 function escapeMarkdownText(value: string): string {
     return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+}
+
+function serializeInlineCode(value: string): string {
+    if (value === "") {
+        return "";
+    }
+    const longestRun = Math.max(0, ...Array.from(value.matchAll(/`+/g), (match) => match[0].length));
+    const fence = "`".repeat(longestRun + 1);
+    const needsPadding = value.startsWith("`") || value.endsWith("`") || value.startsWith(" ") || value.endsWith(" ");
+    return needsPadding ? `${fence} ${value} ${fence}` : `${fence}${value}${fence}`;
 }
 
 function isBlockElement(tag: string): boolean {

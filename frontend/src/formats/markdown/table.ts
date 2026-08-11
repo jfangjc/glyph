@@ -190,7 +190,7 @@ export function renderMarkdownBlock(
     }
 
     const header = table.header
-        .map((cell, index) => renderTableCell("th", cell, table.alignments[index], 0, index, context, renderInline))
+        .map((cell, index) => renderTableCell("th", cell, table.alignments[index], 0, index, text, context, renderInline))
         .join("");
     const rows = table.rows
         .map((row, rowIndex) => {
@@ -201,6 +201,7 @@ export function renderMarkdownBlock(
                     alignment,
                     rowIndex + 2,
                     index,
+                    text,
                     context,
                     renderInline,
                 ))
@@ -241,11 +242,14 @@ function renderTableCell(
     alignment: TableAlignment,
     rowIndex: number,
     columnIndex: number,
+    source: string,
     context: DocumentRenderContext,
     renderInline: (text: string, context: DocumentRenderContext) => string,
 ): string {
     const align = alignment ? ` style="text-align: ${alignment}"` : "";
-    return `<${tag}${align} data-table-source-row="${rowIndex}" data-table-source-column="${columnIndex}">${renderInline(text.trim(), context)}</${tag}>`;
+    const sourceOffset = readMarkdownTableCellFocusOffset(source, rowIndex, columnIndex);
+    const offset = sourceOffset === null ? "" : ` data-atomic-source-offset="${sourceOffset}"`;
+    return `<${tag}${align} data-table-source-row="${rowIndex}" data-table-source-column="${columnIndex}"${offset}>${renderInline(text.trim(), context)}</${tag}>`;
 }
 
 function parseTableDelimiterRow(line: string): TableAlignment[] | null {

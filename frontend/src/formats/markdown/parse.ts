@@ -279,11 +279,11 @@ function readMarkdownBlockRanges(lines: MarkdownLineRecord[]): MarkdownBlockRang
             continue;
         }
 
-        const hardBreakParagraph = readHardBreakParagraph(lineTexts, index);
-        if (hardBreakParagraph) {
-            const endIndex = index + hardBreakParagraph.consumedLines - 1;
+        const paragraph = readParagraph(lineTexts, index);
+        if (paragraph) {
+            const endIndex = index + paragraph.consumedLines - 1;
             ranges.push(createMarkdownBlockRange(lines, index, endIndex));
-            parsedBlocksBeforeCurrent.push(hardBreakParagraph.block);
+            parsedBlocksBeforeCurrent.push(paragraph.block);
             index = endIndex;
             continue;
         }
@@ -432,7 +432,14 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
                 candidateIndex > index && isClosingCodeFence(candidate, fence.marker)
             ));
             if (closingFenceIndex < 0) {
-                blocks.push({ type: "paragraph", text: line });
+                blocks.push({
+                    type: "code",
+                    text: lines.slice(index + 1).join("\n"),
+                    codeFence: fence.marker,
+                    codeFenceClosed: false,
+                    codeInfo: fence.info,
+                });
+                index = lines.length;
                 continue;
             }
 
@@ -444,7 +451,13 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
                 index += 1;
             }
 
-            blocks.push({ type: "code", text: codeLines.join("\n"), codeFence: fence.marker, codeInfo: fence.info });
+            blocks.push({
+                type: "code",
+                text: codeLines.join("\n"),
+                codeFence: fence.marker,
+                codeFenceClosed: true,
+                codeInfo: fence.info,
+            });
             continue;
         }
 
@@ -512,10 +525,10 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
             continue;
         }
 
-        const hardBreakParagraph = readHardBreakParagraph(lines, index);
-        if (hardBreakParagraph) {
-            blocks.push(hardBreakParagraph.block);
-            index += hardBreakParagraph.consumedLines - 1;
+        const paragraph = readParagraph(lines, index);
+        if (paragraph) {
+            blocks.push(paragraph.block);
+            index += paragraph.consumedLines - 1;
             continue;
         }
 
@@ -528,7 +541,6 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
         blocks.push(parseMarkdownLine(line));
     }
 
-    normalizeOrderedListNumbers(blocks);
     return { blocks, references };
 }
 
@@ -575,16 +587,18 @@ function parseMarkdownLine(line: string): ParsedBlock {
             checked: todoMatch[3].toLowerCase() === "x",
             indent: readMarkdownIndent(todoMatch[1]),
             listMarker: todoMatch[2],
+            todoMarker: `[${todoMatch[3]}]` as "[ ]" | "[x]" | "[X]",
         };
     }
 
-    const orderedListMatch = line.match(/^([ \t]*)(\d{1,9})\.\s+(.*)$/);
+    const orderedListMatch = line.match(/^([ \t]*)(\d{1,9})([.)])\s+(.*)$/);
     if (orderedListMatch) {
         return {
             type: "ordered-list",
-            text: orderedListMatch[3],
+            text: orderedListMatch[4],
             indent: readMarkdownIndent(orderedListMatch[1]),
             listNumber: orderedListMatch[2],
+            listDelimiter: orderedListMatch[3] as "." | ")",
         };
     }
 
@@ -604,33 +618,6 @@ function parseMarkdownLine(line: string): ParsedBlock {
     }
 
     return { type: "paragraph", text: line };
-}
-
-function normalizeOrderedListNumbers(blocks: ParsedBlock[]): void {
-    const nextByIndent = new Map<number, number>();
-
-    for (const block of blocks) {
-        if (block.type !== "ordered-list") {
-            nextByIndent.clear();
-            continue;
-        }
-
-        const indent = block.indent ?? 0;
-        for (const trackedIndent of Array.from(nextByIndent.keys())) {
-            if (trackedIndent > indent) {
-                nextByIndent.delete(trackedIndent);
-            }
-        }
-
-        const nextNumber = nextByIndent.get(indent) ?? readOrderedListStart(block.listNumber);
-        block.listNumber = String(nextNumber);
-        nextByIndent.set(indent, nextNumber + 1);
-    }
-}
-
-function readOrderedListStart(value: string | undefined): number {
-    const number = Number(value ?? "1");
-    return Number.isFinite(number) ? number : 1;
 }
 
 function readHeadingTextAndId(value: string): { text: string; id?: string } {
@@ -730,9 +717,9 @@ function readMathBlock(lines: string[], index: number): { block: ParsedBlock; co
     };
 }
 
-function readHardBreakParagraph(lines: string[], index: number): { block: ParsedBlock; consumedLines: number } | null {
+function readParagraph(lines: string[], index: number): { block: ParsedBlock; consumedLines: number } | null {
     const firstLine = lines[index];
-    if (!hasHardLineBreak(firstLine) || !isPlainParagraphLine(firstLine)) {
+    if (!isPlainParagraphLine(firstLine)) {
         return null;
     }
 
@@ -741,8 +728,7 @@ function readHardBreakParagraph(lines: string[], index: number): { block: Parsed
 
     while (
         cursor < lines.length &&
-        isPlainParagraphLine(lines[cursor]) &&
-        hasHardLineBreak(paragraphLines[paragraphLines.length - 1])
+        isPlainParagraphLine(lines[cursor])
     ) {
         paragraphLines.push(lines[cursor]);
         cursor += 1;
@@ -752,10 +738,6 @@ function readHardBreakParagraph(lines: string[], index: number): { block: Parsed
         block: { type: "paragraph", text: paragraphLines.join("\n") },
         consumedLines: paragraphLines.length,
     };
-}
-
-function hasHardLineBreak(line: string | undefined): boolean {
-    return Boolean(line?.match(/(?: {2,}|\\)$/));
 }
 
 function readSetextHeading(lines: string[], index: number): { block: ParsedBlock } | null {

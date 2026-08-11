@@ -5,6 +5,7 @@ import {
     createIndentCodeTransaction,
     createIndentListTransaction,
     createInlineFormatTransaction,
+    readSelectedSourceRange,
     createTableTabTransaction,
 } from "./commands";
 import type { DocumentFormat, DocumentFormatDescriptor } from "../types";
@@ -59,14 +60,17 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
         clipboard: {
             mimeTypes: ["text/markdown"],
             richHtml: true,
+            resolveSelectionRange: readSelectedSourceRange,
             createPayload: createMarkdownClipboardPayload,
-            write: (clipboard, source) =>
-                writeMarkdownClipboardPayload(clipboard, createMarkdownClipboardPayload(source)),
-            read: (clipboard) => readMarkdownClipboardInsert(clipboard)?.markdown ?? null,
+            write: writeMarkdownClipboardPayload,
+            read: readMarkdownClipboardInsert,
             convertHtml: htmlToMarkdown,
         },
         projection: {
             shouldUseNativePointer: (target) => {
+                if (target.closest("button, input, textarea, select")) {
+                    return true;
+                }
                 if (target.closest(".markdown-token-editing")) {
                     return true;
                 }

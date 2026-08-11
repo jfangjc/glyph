@@ -3,8 +3,11 @@ import type { BlockSource } from "../../editor/blocks/rendering";
 import {
     getTodoCheckbox,
     readBlockCodeFence,
+    readBlockCodeFenceClosed,
     readBlockListMarker,
     readBlockListNumber,
+    readBlockListDelimiter,
+    readBlockTodoMarker,
     readBlockQuoteLevel,
     readBlockRuleMarker,
     readBlockHeadingId,
@@ -35,12 +38,17 @@ export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, tex
     }
 
     if (type === "ordered-list") {
-        return { prefix: `${readBlockListNumber(block) ?? "1"}. `, prefixEditable: true };
+        return {
+            prefix: `${readBlockListNumber(block) ?? "1"}${readBlockListDelimiter(block) ?? "."} `,
+            prefixEditable: true,
+        };
     }
 
     if (type === "todo") {
         return {
-            prefix: `${readBlockListMarker(block) ?? "-"} [${getTodoCheckbox(block).checked ? "x" : " "}] `,
+            prefix: `${readBlockListMarker(block) ?? "-"} ${
+                readBlockTodoMarker(block) ?? (getTodoCheckbox(block).checked ? "[x]" : "[ ]")
+            } `,
             prefixEditable: true,
         };
     }
@@ -55,7 +63,7 @@ export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, tex
         const codeInfo = block.dataset.codeInfo ? ` ${block.dataset.codeInfo}` : "";
         return {
             prefix: `${fence}${codeInfo}\n`,
-            suffix: `\n${fence}`,
+            suffix: readBlockCodeFenceClosed(block) === false ? undefined : `\n${fence}`,
         };
     }
 

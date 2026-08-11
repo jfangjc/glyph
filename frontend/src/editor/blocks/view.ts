@@ -11,7 +11,7 @@ import {
 } from "./rendering";
 import { getElement } from "../../utils/dom";
 import {
-    caretSpacerCharacter,
+    caretSpacerHtml,
     findRenderedContentTextPosition,
     getRenderedContentBoundaryOffset,
     getRenderedContentText,
@@ -105,9 +105,12 @@ export function applyBlockProperties(block: HTMLElement, options: Partial<Parsed
     setBlockIndent(block, options.indent ?? 0);
     setBlockListMarker(block, options.listMarker);
     setBlockListNumber(block, options.listNumber);
+    setBlockListDelimiter(block, options.listDelimiter);
+    setBlockTodoMarker(block, options.todoMarker);
     setBlockQuoteLevel(block, options.quoteLevel);
     setTodoChecked(block, options.checked ?? false);
     setCodeFence(block, options.codeFence);
+    setCodeFenceClosed(block, options.codeFenceClosed);
     setCodeInfo(block, options.codeInfo ?? "");
     setRuleMarker(block, options.ruleMarker);
     setMathSource(block, options.mathSource);
@@ -130,12 +133,14 @@ export function setBlockType(block: HTMLElement, type: BlockType): void {
 
     if (type !== "ordered-list") {
         delete block.dataset.listNumber;
+        delete block.dataset.listDelimiter;
         delete block.dataset.listDigits;
         delete block.dataset.listMaxDigits;
     }
 
     if (type !== "code") {
         delete block.dataset.codeFence;
+        delete block.dataset.codeFenceClosed;
         delete block.dataset.codeInfo;
         delete content.dataset.codeInfo;
     }
@@ -662,7 +667,7 @@ function renderBlockBodyHtml(type: BlockType, source: BlockSource, html: string)
 
 function renderBlockEditableTextHtml(text: string, source: BlockSource): string {
     if (text === "" && source.prefix) {
-        return caretSpacerCharacter;
+        return caretSpacerHtml;
     }
 
     return renderContext.renderInlineContent(text, renderContext.context);
@@ -720,6 +725,24 @@ export function setBlockListNumber(block: HTMLElement, value: string | undefined
     delete block.dataset.listDigits;
     delete block.dataset.listMaxDigits;
     scheduleOrderedListMarkerWidthSync();
+}
+
+export function setBlockListDelimiter(block: HTMLElement, value: "." | ")" | undefined): void {
+    if (readBlockType(block.dataset.type) === "ordered-list") {
+        block.dataset.listDelimiter = value === ")" ? ")" : ".";
+        return;
+    }
+
+    delete block.dataset.listDelimiter;
+}
+
+export function setBlockTodoMarker(block: HTMLElement, value: "[ ]" | "[x]" | "[X]" | undefined): void {
+    if (readBlockType(block.dataset.type) === "todo") {
+        block.dataset.todoMarker = value === "[X]" ? "[X]" : value === "[x]" ? "[x]" : "[ ]";
+        return;
+    }
+
+    delete block.dataset.todoMarker;
 }
 
 function setBlockQuoteLevel(block: HTMLElement, level: number | undefined): void {
@@ -840,9 +863,33 @@ export function readBlockListNumber(block: HTMLElement): string | undefined {
     return number && /^\d{1,9}$/.test(number) ? number : undefined;
 }
 
+export function setCodeFenceClosed(block: HTMLElement, closed: boolean | undefined): void {
+    if (readBlockType(block.dataset.type) === "code" && closed !== undefined) {
+        block.dataset.codeFenceClosed = closed ? "true" : "false";
+        return;
+    }
+    delete block.dataset.codeFenceClosed;
+}
+
+export function readBlockListDelimiter(block: HTMLElement): "." | ")" | undefined {
+    const delimiter = block.dataset.listDelimiter;
+    return delimiter === ")" ? ")" : delimiter === "." ? "." : undefined;
+}
+
+export function readBlockTodoMarker(block: HTMLElement): "[ ]" | "[x]" | "[X]" | undefined {
+    const marker = block.dataset.todoMarker;
+    return marker === "[X]" ? "[X]" : marker === "[x]" ? "[x]" : marker === "[ ]" ? "[ ]" : undefined;
+}
+
 export function readBlockCodeFence(block: HTMLElement): string | undefined {
     const codeFence = block.dataset.codeFence;
     return codeFence && /^(`{3,}|~{3,})$/.test(codeFence) ? codeFence : undefined;
+}
+
+export function readBlockCodeFenceClosed(block: HTMLElement): boolean | undefined {
+    return block.dataset.codeFenceClosed === "true"
+        ? true
+        : block.dataset.codeFenceClosed === "false" ? false : undefined;
 }
 
 export function readNextListNumber(block: HTMLElement): string {
@@ -877,9 +924,12 @@ export function readEditorBlock(block: HTMLElement): ParsedBlock {
         indent: readBlockIndent(block),
         checked: type === "todo" ? getTodoCheckbox(block).checked : undefined,
         codeFence: readBlockCodeFence(block),
+        codeFenceClosed: readBlockCodeFenceClosed(block),
         codeInfo: block.dataset.codeInfo,
         listMarker: readBlockListMarker(block),
         listNumber: readBlockListNumber(block),
+        listDelimiter: readBlockListDelimiter(block),
+        todoMarker: readBlockTodoMarker(block),
         quoteLevel: readBlockQuoteLevel(block),
         ruleMarker: readBlockRuleMarker(block),
         mathSource: type === "math" ? block.dataset.mathSource : undefined,

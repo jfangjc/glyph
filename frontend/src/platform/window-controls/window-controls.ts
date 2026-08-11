@@ -13,6 +13,7 @@ export type { AppMenuCommand } from "../../app/keymap";
 
 export type AppMenuCommandDetail = {
     command: AppMenuCommand;
+    focusOwner: HTMLElement | null;
 };
 
 type AppPlatform = ShortcutLabelPlatform;
@@ -21,6 +22,7 @@ let maximiseButton: HTMLButtonElement | null = null;
 let snapAssistTimer = 0;
 let activeMenuId: string | null = null;
 let hostPlatform: AppPlatform | null = null;
+let lastNonTitlebarFocus: HTMLElement | null = null;
 
 export function installWindowControls(): void {
     const platform = readHostPlatform();
@@ -56,6 +58,12 @@ export function installWindowControls(): void {
 
     document.body.classList.add("window-focused");
     document.addEventListener("mousedown", handleDocumentMouseDown, true);
+    document.addEventListener("focusin", (event) => {
+        const target = event.target;
+        if (target instanceof HTMLElement && !target.closest("#app-titlebar")) {
+            lastNonTitlebarFocus = target;
+        }
+    });
     window.addEventListener("focus", () => document.body.classList.add("window-focused"));
     window.addEventListener("blur", () => {
         document.body.classList.remove("window-focused");
@@ -417,7 +425,7 @@ function getActiveMenuButton(): HTMLButtonElement | null {
 function dispatchAppMenuCommand(command: AppMenuCommand): void {
     window.dispatchEvent(
         new CustomEvent<AppMenuCommandDetail>(appMenuCommandEvent, {
-            detail: { command },
+            detail: { command, focusOwner: lastNonTitlebarFocus },
         }),
     );
 }

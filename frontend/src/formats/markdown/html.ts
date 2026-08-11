@@ -78,16 +78,22 @@ const blockHtmlTagPattern = blockHtmlTagNames.join("|");
 const blockHtmlTagLinePattern = new RegExp(`^ {0,3}</?(?:${blockHtmlTagPattern})(?=[\\s>/])[^>]*>`, "i");
 const completeHtmlTagLinePattern = /^ {0,3}<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s+[A-Za-z_:][A-Za-z0-9:._-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*\/?>\s*$/;
 const pairedHtmlElementLinePattern = /^ {0,3}<([A-Za-z][A-Za-z0-9:-]*)(?:\s+[^<>]*)?>[\s\S]*<\/\1>\s*$/i;
-const removedHtmlElementNames = new Set(["script", "iframe", "object", "embed", "base", "link", "meta"]);
-const urlHtmlAttributeNames = new Set([
-    "action",
-    "data",
-    "formaction",
-    "href",
-    "poster",
-    "src",
-    "xlink:href",
+const removedHtmlElementNames = new Set([
+    "script", "style", "iframe", "object", "embed", "base", "link", "meta",
+    "form", "input", "button", "select", "textarea", "video", "audio", "canvas",
 ]);
+const allowedHtmlElementNames = new Set([
+    "p", "br", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "code",
+    "em", "strong", "del", "s", "ul", "ol", "li", "a", "img", "hr", "table",
+    "thead", "tbody", "tfoot", "tr", "th", "td", "sup", "sub", "div", "span",
+]);
+const allowedAttributesByTag: Record<string, Set<string>> = {
+    a: new Set(["href", "title"]),
+    img: new Set(["src", "alt", "title", "width", "height"]),
+    ol: new Set(["start"]),
+    td: new Set(["colspan", "rowspan", "align"]),
+    th: new Set(["colspan", "rowspan", "align"]),
+};
 
 export function readMarkdownHtmlBlock(lines: string[], index: number): MarkdownHtmlBlock | null {
     const start = readMarkdownHtmlBlockStart(lines[index]);
@@ -199,25 +205,38 @@ function sanitizeMarkdownHtml(root: ParentNode): void {
             element.remove();
             continue;
         }
+        if (!allowedHtmlElementNames.has(tagName)) {
+            element.replaceWith(...Array.from(element.childNodes));
+            continue;
+        }
 
         for (const attribute of Array.from(element.attributes)) {
             const name = attribute.name.toLowerCase();
-            if (name.startsWith("on") || name === "srcdoc" || isUnsafeHtmlUrlAttribute(name, attribute.value)) {
+            const allowed = allowedAttributesByTag[tagName]?.has(name) ?? false;
+            if (!allowed || isUnsafeHtmlUrlAttribute(tagName, name, attribute.value)) {
                 element.removeAttribute(attribute.name);
             }
+        }
+
+        if (element instanceof HTMLAnchorElement) {
+            element.rel = "noreferrer";
         }
     }
 }
 
-function isUnsafeHtmlUrlAttribute(name: string, value: string): boolean {
-    if (!urlHtmlAttributeNames.has(name)) {
+function isUnsafeHtmlUrlAttribute(tagName: string, name: string, value: string): boolean {
+    if (name !== "href" && name !== "src") {
         return false;
     }
 
     const normalized = value.trim().replace(/[\u0000-\u001F\u007F\s]+/g, "");
-    if (/^(?:javascript|vbscript):/i.test(normalized)) {
-        return true;
+    if (tagName === "a" && name === "href") {
+        return !/^(?:https?:|mailto:|#)/i.test(normalized);
     }
 
-    return /^data:/i.test(normalized) && !/^data:image\/(?:gif|jpe?g|png|webp);/i.test(normalized);
+    if (tagName === "img" && name === "src") {
+        return !/^(?:https?:)/i.test(normalized) &&
+            !/^data:image\/(?:gif|jpe?g|png|webp);base64,/i.test(normalized);
+    }
+    return true;
 }

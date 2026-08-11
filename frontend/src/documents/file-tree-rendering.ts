@@ -64,6 +64,7 @@ function renderItem(
                 data-file-tree-path="${escapeHtml(item.path)}"
                 data-file-tree-dir="${item.isDir ? "true" : "false"}"
                 data-file-tree-selectable="true"
+                tabindex="${options.selectedPath === item.path ? "0" : "-1"}"
                 style="--file-tree-depth: ${depth}"
                 ${options.selectedPath === item.path ? `data-selected="true"` : ""}
                 ${expanded}

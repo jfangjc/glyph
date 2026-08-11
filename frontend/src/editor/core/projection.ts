@@ -1,4 +1,9 @@
-import { findSourceBlockAtOffset, readVisibleListPrefixLength, type SourceBlock } from "./types";
+import {
+    findSourceBlockAtOffset,
+    readVisibleListPrefixLength,
+    type SourceAffinity,
+    type SourceBlock,
+} from "./types";
 import {
     dispatch,
     getEditorState,
@@ -16,7 +21,6 @@ import {
     readBlockSourcePosition,
 } from "../blocks/rendering";
 import {
-    caretSpacerCharacter,
     findRenderedContentTextPosition,
     getRenderedContentBoundaryOffset,
     getRenderedContentText,
@@ -43,6 +47,7 @@ let projectedDomSelection: DomSelectionSnapshot | null = null;
 type SourceOffsetToDomPointOptions = {
     activateBlockSource?: boolean;
     activateSourceTokens?: boolean;
+    affinity?: SourceAffinity;
 };
 
 const markdownTokenEditingClass = "markdown-token-editing";
@@ -77,10 +82,16 @@ export function applySourceBlockProjectionMetadata(
         const prefix = getBlockSourceElement(content, "prefix");
         const suffix = getBlockSourceElement(content, "suffix");
         if (prefix) {
-            prefix.textContent = documentSource.slice(block.sourceFrom, block.contentFrom).replace(/\r?\n$/, "");
+            updateSourceElementText(
+                prefix,
+                documentSource.slice(block.sourceFrom, block.contentFrom).replace(/\r?\n$/, ""),
+            );
         }
         if (suffix) {
-            suffix.textContent = documentSource.slice(block.contentTo, block.sourceTo).replace(/^\r?\n/, "");
+            updateSourceElementText(
+                suffix,
+                documentSource.slice(block.contentTo, block.sourceTo).replace(/^\r?\n/, ""),
+            );
         }
 
         applySourceElementRange(prefix, block.sourceFrom);
@@ -101,7 +112,7 @@ export function sourceOffsetToDomPoint(offset: number, options: SourceOffsetToDo
     }
     const state = getEditorState();
     const clampedOffset = clampOffset(offset, state.doc.length);
-    const sourceBlock = findSourceBlockAtOffset(state.blocks, clampedOffset);
+    const sourceBlock = findSourceBlockAtOffset(state.blocks, clampedOffset, options.affinity);
     const blockElement = sourceBlock ? findProjectedBlockElement(sourceBlock.id) : null;
     if (!sourceBlock || !blockElement) {
         return fallbackEditorDomPoint();
@@ -154,9 +165,12 @@ export function installNativeSourceNavigationTracker(editor: HTMLElement): void 
     }, { capture: true });
 }
 
-export function moveSourceSelectionVertically(direction: "up" | "down"): boolean {
+export function moveSourceSelectionVertically(
+    direction: "up" | "down",
+    options: { extend?: boolean } = {},
+): boolean {
     const state = getEditorState();
-    if (state.selection.anchor !== state.selection.head) {
+    if (state.selection.anchor !== state.selection.head && !options.extend) {
         resetVerticalNavigationAffinity();
         return false;
     }
@@ -182,7 +196,10 @@ export function moveSourceSelectionVertically(direction: "up" | "down"): boolean
 
     dispatch({
         changes: [],
-        selection: { anchor: target, head: target },
+        selection: {
+            anchor: options.extend ? state.selection.anchor : target,
+            head: target,
+        },
         annotations: { userEvent: "programmatic", addToHistory: false },
     });
     verticalNavigationAffinity = {
@@ -312,27 +329,38 @@ export function domPointToSourceOffset(node: Node, offset: number): number {
     return clampOffset(contentFrom + localOffset, contentTo);
 }
 
-export function syncDomSelectionFromState(): void {
+export function syncDomSelectionFromState(
+    options: { focus?: "preserve" | "editor" } = { focus: "editor" },
+): void {
     const state = getEditorState();
     const selection = document.getSelection();
     if (!selection) {
         return;
     }
 
+    const focusOwner = options.focus === "preserve" && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const collapsed = state.selection.anchor === state.selection.head;
+
     reconcileActiveSourceTokensFromState(state);
 
     const anchor = sourceOffsetToDomPoint(state.selection.anchor, {
-        activateBlockSource: true,
-        activateSourceTokens: true,
+        activateBlockSource: collapsed,
+        activateSourceTokens: collapsed,
+        affinity: state.selection.anchorAffinity,
     });
     const head = sourceOffsetToDomPoint(state.selection.head, {
-        activateBlockSource: true,
-        activateSourceTokens: true,
+        activateBlockSource: collapsed,
+        activateSourceTokens: collapsed,
+        affinity: state.selection.headAffinity,
     });
     const editor = getElement<HTMLElement>("editor");
     const range = document.createRange();
 
-    editor.focus({ preventScroll: true });
+    if (options.focus !== "preserve") {
+        editor.focus({ preventScroll: true });
+    }
     range.setStart(anchor.node, anchor.offset);
     range.collapse(true);
     selection.removeAllRanges();
@@ -346,6 +374,10 @@ export function syncDomSelectionFromState(): void {
     syncListBlockSourceActivationFromState(state);
     syncCodeBlockSourceActivationFromState(state);
     projectedDomSelection = readDomSelectionSnapshot(selection);
+
+    if (focusOwner && focusOwner !== editor && focusOwner.isConnected) {
+        focusOwner.focus({ preventScroll: true });
+    }
 }
 
 export function syncStateSelectionFromDom(): boolean {
@@ -363,6 +395,8 @@ export function syncStateSelectionFromDom(): boolean {
     const nextSelection = {
         anchor: selectionBoundaryToSourceOffset(selection, "anchor"),
         head: selectionBoundaryToSourceOffset(selection, "focus"),
+        anchorAffinity: readDomBoundaryAffinity(selection.anchorNode, selection.anchorOffset),
+        headAffinity: readDomBoundaryAffinity(selection.focusNode, selection.focusOffset),
     };
     const navigationDirection = consumeNativeSourceNavigation();
     const nativeStepSelection = readNativeSourceNavigationStep(state, nextSelection, navigationDirection);
@@ -398,7 +432,12 @@ export function syncStateSelectionFromDom(): boolean {
         return true;
     }
 
-    if (nextSelection.anchor === state.selection.anchor && nextSelection.head === state.selection.head) {
+    if (
+        nextSelection.anchor === state.selection.anchor &&
+        nextSelection.head === state.selection.head &&
+        nextSelection.anchorAffinity === state.selection.anchorAffinity &&
+        nextSelection.headAffinity === state.selection.headAffinity
+    ) {
         return false;
     }
 
@@ -408,6 +447,35 @@ export function syncStateSelectionFromDom(): boolean {
         annotations: { userEvent: "programmatic", addToHistory: false },
     });
     return false;
+}
+
+function updateSourceElementText(source: HTMLElement, value: string): void {
+    if (source.textContent === value) {
+        return;
+    }
+    if (source.childNodes.length === 1 && source.firstChild instanceof Text) {
+        source.firstChild.data = value;
+        return;
+    }
+    source.replaceChildren(document.createTextNode(value));
+}
+
+function readDomBoundaryAffinity(node: Node, offset: number): SourceAffinity {
+    if (node instanceof Element) {
+        if (offset <= 0) {
+            return "downstream";
+        }
+        if (offset >= node.childNodes.length) {
+            return "upstream";
+        }
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+        const length = node.textContent?.length ?? 0;
+        return offset >= length ? "upstream" : "downstream";
+    }
+
+    return "downstream";
 }
 
 function readDomSelectionSnapshot(selection: Selection): DomSelectionSnapshot {
@@ -430,8 +498,6 @@ function domSelectionMatchesSnapshot(selection: Selection, snapshot: DomSelectio
 
 function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditorState>): void {
     const collapsed = state.selection.anchor === state.selection.head;
-    const selectionFrom = Math.min(state.selection.anchor, state.selection.head);
-    const selectionTo = Math.max(state.selection.anchor, state.selection.head);
     const activeTokens = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"));
     const blocksToRender = new Set<HTMLElement>();
 
@@ -448,9 +514,7 @@ function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditor
         const selectionInsideToken = Boolean(
             tokenFrom !== null &&
             tokenTo !== null &&
-            (collapsed
-                ? state.selection.head > tokenFrom && state.selection.head < tokenTo
-                : selectionFrom < tokenTo && selectionTo > tokenFrom),
+            collapsed && state.selection.head > tokenFrom && state.selection.head < tokenTo,
         );
         if (!selectionInsideToken) {
             blocksToRender.add(block);
@@ -475,61 +539,15 @@ export function syncInlineSourceRevealFromDomSelection(): boolean {
     return true;
 }
 
-/**
- * Keep raw Markdown visible for every inline token touched by a non-collapsed
- * source selection. Tokens outside the selection are restored to their
- * rendered previews, including when they share a block with a selected token.
- */
+/** Keep range selections rendered while preserving their canonical source offsets. */
 export function syncInlineSourceRevealFromSelection(): boolean {
     const state = getEditorState();
     if (state.selection.anchor === state.selection.head) {
         return syncInlineSourceRevealFromDomSelection();
     }
 
-    const selectionFrom = Math.min(state.selection.anchor, state.selection.head);
-    const selectionTo = Math.max(state.selection.anchor, state.selection.head);
-    const activeTokens = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"));
-    const blocksToRender = new Set<HTMLElement>();
-
-    for (const token of activeTokens) {
-        const block = findBlock(token);
-        const content = block ? getBlockContent(block) : null;
-        const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
-        const tokenRange = content ? readSourceTokenRange(content, token) : null;
-        const tokenFrom = contentFrom !== null && tokenRange ? contentFrom + tokenRange.from : null;
-        const tokenTo = contentFrom !== null && tokenRange ? contentFrom + tokenRange.to : null;
-        const selected = tokenFrom !== null && tokenTo !== null && selectionFrom < tokenTo && selectionTo > tokenFrom;
-        if (!selected && block) {
-            blocksToRender.add(block);
-        }
-    }
-
-    const rerendered = rerenderActiveSourceTokenBlocks(Array.from(blocksToRender));
-    let activated = false;
-
-    for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-source-raw]"))) {
-        const block = findBlock(token);
-        const content = block ? getBlockContent(block) : null;
-        const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
-        const tokenRange = content ? readSourceTokenRange(content, token) : null;
-        if (contentFrom === null || !tokenRange) {
-            continue;
-        }
-
-        const tokenFrom = contentFrom + tokenRange.from;
-        const tokenTo = contentFrom + tokenRange.to;
-        if (!(selectionFrom < tokenTo && selectionTo > tokenFrom)) {
-            continue;
-        }
-
-        const rawSource = readRawSourceTokenText(token);
-        if (rawSource !== null) {
-            activateRawSourceTokenAtOffset(token, rawSource, 0);
-            activated = true;
-        }
-    }
-
-    if (!rerendered && !activated) {
+    const rerendered = rerenderActiveSourceTokenBlocks(readAllActiveSourceTokenBlocks());
+    if (!rerendered) {
         return false;
     }
 
@@ -877,7 +895,14 @@ function readInactiveSourceTokenOffset(content: HTMLElement, node: Node, offset:
 
 function findInactiveSourceTokenAtDomPoint(node: Node): HTMLElement | null {
     const element = node instanceof Element ? node : node.parentElement;
-    const token = element?.closest<HTMLElement>(".markdown-token") ?? null;
+    let token = element?.closest<HTMLElement>(".markdown-token") ?? null;
+    while (token) {
+        const owner = token.parentElement?.closest<HTMLElement>(".markdown-token") ?? null;
+        if (!owner) {
+            break;
+        }
+        token = owner;
+    }
     if (!token || token.dataset.active === "true" || readRawSourceTokenText(token) === null) {
         return null;
     }
@@ -897,13 +922,13 @@ function readInactiveTokenRawOffset(token: HTMLElement, rawSource: string, node:
     }
 
     const previewText = readTokenPreviewText(token);
-    if (previewText.length === 0) {
+    const contentRange = readTokenContentRange(token);
+    if (!contentRange || previewText.length === 0) {
         return offset <= 0 ? 0 : rawSource.length;
     }
 
     const previewOffset = getTokenPreviewBoundaryOffset(token, node, offset);
-    const sourcePrefixLength = readTokenPreviewSourcePrefixLength(rawSource, previewText);
-    return clampOffset(sourcePrefixLength + previewOffset, rawSource.length);
+    return clampOffset(contentRange.from + previewOffset, contentRange.to);
 }
 
 function readTokenPreviewText(token: HTMLElement): string {
@@ -937,13 +962,10 @@ function readTokenPreviewTextFromNode(node: Node): number {
     return stripCaretSpacers(node.textContent ?? "").length;
 }
 
-function readTokenPreviewSourcePrefixLength(rawSource: string, previewText: string): number {
-    const exactPreviewIndex = rawSource.indexOf(previewText);
-    if (exactPreviewIndex >= 0) {
-        return exactPreviewIndex;
-    }
-
-    return Math.max(0, Math.floor((rawSource.length - previewText.length) / 2));
+function readTokenContentRange(token: HTMLElement): { from: number; to: number } | null {
+    const from = readDatasetNumber(token.dataset.sourceContentFrom);
+    const to = readDatasetNumber(token.dataset.sourceContentTo);
+    return from === null || to === null ? null : { from, to };
 }
 
 function readNativeSourceNavigationStep(
@@ -1244,7 +1266,6 @@ function activateRawSourceTokenAtOffset(token: HTMLElement, rawSource: string, o
         return getPlainTextDomPoint(token, offset);
     }
 
-    token.dataset.sourceBeforeActivation = rawSource;
     token.dataset.active = "true";
     delete token.dataset.sourceRaw;
     token.classList.add(markdownTokenEditingClass);
@@ -1258,12 +1279,12 @@ function activateRawSourceTokenAtOffset(token: HTMLElement, rawSource: string, o
 
 function getInactiveSourceTokenDomPoint(token: HTMLElement, rawSource: string, offset: number): DomPoint {
     const previewText = readTokenPreviewText(token);
-    if (previewText.length === 0) {
+    const contentRange = readTokenContentRange(token);
+    if (!contentRange || previewText.length === 0) {
         return getElementBoundaryDomPoint(token, offset >= rawSource.length / 2);
     }
 
-    const sourcePrefixLength = readTokenPreviewSourcePrefixLength(rawSource, previewText);
-    const previewOffset = clampOffset(offset - sourcePrefixLength, previewText.length);
+    const previewOffset = clampOffset(offset - contentRange.from, previewText.length);
     return findTokenPreviewTextPosition(token, previewOffset)
         ?? getElementBoundaryDomPoint(token, previewOffset >= previewText.length);
 }
@@ -1277,9 +1298,7 @@ function findTokenPreviewTextPosition(current: Node, offset: number): DomPoint |
             if (renderedOffset >= target) {
                 return { node: current, offset: index };
             }
-            if (text[index] !== caretSpacerCharacter) {
-                renderedOffset += 1;
-            }
+            renderedOffset += 1;
         }
         return { node: current, offset: text.length };
     }
@@ -1307,6 +1326,16 @@ export function activateSourceToken(token: HTMLElement, offset = 0): boolean {
 
     activateRawSourceTokenAtOffset(token, rawSource, offset);
     return true;
+}
+
+export function readSourceTokenDocumentRange(token: HTMLElement): { from: number; to: number } | null {
+    const block = findBlock(token);
+    const content = block ? getBlockContent(block) : null;
+    const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
+    const tokenRange = content ? readSourceTokenRange(content, token) : null;
+    return contentFrom === null || !tokenRange
+        ? null
+        : { from: contentFrom + tokenRange.from, to: contentFrom + tokenRange.to };
 }
 
 function clearActiveSourceTokensOutsideSelection(): void {

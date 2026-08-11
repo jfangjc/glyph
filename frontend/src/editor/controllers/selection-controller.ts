@@ -74,7 +74,10 @@ export function createSelectionController(options: SelectionControllerOptions): 
             return;
         }
 
-        options.hooks.syncBlockSourceRevealBlocks(selectionState.selectedBlocks);
+        // A range should remain a WYSIWYG selection. Revealing every marker in
+        // every touched block changes layout and makes the selected text differ
+        // from what the user can see.
+        options.hooks.syncBlockSourceReveal(null);
     }
 }
 

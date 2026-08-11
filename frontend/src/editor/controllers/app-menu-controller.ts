@@ -21,7 +21,7 @@ type AppMenuControllerOptions = {
     ensureExportSaved: () => Promise<boolean>;
     toggleFileTree: () => void;
     canExport: () => boolean;
-    executeEditorCommand: (command: EditorCommand) => Promise<void>;
+    executeEditorCommand: (command: EditorCommand, focusOwner?: Element | null) => Promise<void>;
 };
 
 export function createAppMenuController(options: AppMenuControllerOptions): AppMenuController {
@@ -51,22 +51,22 @@ export function createAppMenuController(options: AppMenuControllerOptions): AppM
                 void exportCurrentDocumentToPdf();
                 return;
             case "edit:undo":
-                void options.executeEditorCommand("undo");
+                void options.executeEditorCommand("undo", event.detail.focusOwner);
                 return;
             case "edit:redo":
-                void options.executeEditorCommand("redo");
+                void options.executeEditorCommand("redo", event.detail.focusOwner);
                 return;
             case "edit:cut":
-                void options.executeEditorCommand("cut");
+                void options.executeEditorCommand("cut", event.detail.focusOwner);
                 return;
             case "edit:copy":
-                void options.executeEditorCommand("copy");
+                void options.executeEditorCommand("copy", event.detail.focusOwner);
                 return;
             case "edit:paste":
-                void options.executeEditorCommand("paste");
+                void options.executeEditorCommand("paste", event.detail.focusOwner);
                 return;
             case "edit:select-all":
-                void options.executeEditorCommand("select-all");
+                void options.executeEditorCommand("select-all", event.detail.focusOwner);
                 return;
             case "edit:find":
                 options.findReplaceController.openFind();
@@ -104,6 +104,7 @@ export function createAppMenuController(options: AppMenuControllerOptions): AppM
             return;
         }
 
+        const focusOwner = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         try {
             document.body.dataset.printingMarkdown = "true";
             await waitForMarkdownExportView();
@@ -116,7 +117,9 @@ export function createAppMenuController(options: AppMenuControllerOptions): AppM
             console.error("Failed to export PDF:", error);
         } finally {
             delete document.body.dataset.printingMarkdown;
-            options.editor.focus();
+            if (focusOwner?.isConnected) {
+                focusOwner.focus({ preventScroll: true });
+            }
         }
     }
 
@@ -141,12 +144,16 @@ function nextAnimationFrame(): Promise<void> {
 }
 
 function waitForPreviewImages(root: HTMLElement): Promise<void> {
-    const pendingImages = Array.from(root.querySelectorAll<HTMLImageElement>("img")).filter((image) => !image.complete);
+    const images = Array.from(root.querySelectorAll<HTMLImageElement>("img"));
+    for (const image of images) {
+        image.loading = "eager";
+    }
+    const pendingImages = images.filter((image) => !image.complete);
     if (pendingImages.length === 0) {
         return Promise.resolve();
     }
 
-    return Promise.all(
+    const settled = Promise.all(
         pendingImages.map(
             (image) =>
                 new Promise<void>((resolve) => {
@@ -156,6 +163,8 @@ function waitForPreviewImages(root: HTMLElement): Promise<void> {
                 }),
         ),
     ).then(() => undefined);
+    const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, 5_000));
+    return Promise.race([settled, timeout]);
 }
 
 function assertUnhandledMenuCommand(command: never): never {

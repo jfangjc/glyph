@@ -34,6 +34,7 @@ export function syncFileTreeSelection(root: HTMLElement, selectedPath: string | 
             item.classList.remove("is-selected");
         }
         item.setAttribute("aria-selected", isSelected ? "true" : "false");
+        item.tabIndex = isSelected ? 0 : -1;
         if (isSelected) {
             hasSelectedPath = true;
         }

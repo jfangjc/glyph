@@ -5,11 +5,11 @@ import { getElement } from "../utils/dom";
 import { fileNameFromPath } from "../utils/text";
 
 export function syncDocumentWindowTitle(): void {
-    const fileName = documentState.activeFilePath
-        ? fileNameFromPath(documentState.activeFilePath)
-        : getSuggestedFileName();
-    const status = readDocumentStatusLabel(canUseDesktopFileSystem());
-    const title = status ? `${fileName} - ${status} - Glyph` : `${fileName} - Glyph`;
+    const fileName = documentState.fileName || (
+        documentState.activeFilePath ? fileNameFromPath(documentState.activeFilePath) : getSuggestedFileName()
+    );
+    const dirty = documentState.hasUnsavedChanges ? " •" : "";
+    const title = `${fileName}${dirty} — Glyph`;
 
     document.title = title;
 
@@ -20,7 +20,7 @@ export function syncDocumentWindowTitle(): void {
 
 export function getSuggestedFileName(): string {
     const title = getElement<HTMLInputElement>("document-title").value.trim();
-    const baseName = title || fileNameFromPath(documentState.activeFilePath ?? "") || "Untitled";
+    const baseName = title || documentState.fileName || fileNameFromPath(documentState.activeFilePath ?? "") || "Untitled";
     const safeName = baseName
         .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
         .replace(/\s+/g, " ")
@@ -29,24 +29,4 @@ export function getSuggestedFileName(): string {
         .trim();
 
     return safeName ? safeName : "Untitled";
-}
-
-function readDocumentStatusLabel(canUseFiles: boolean): string {
-    if (!canUseFiles) {
-        return documentState.hasUnsavedChanges ? "Unsaved preview" : "";
-    }
-
-    if (documentState.isSavingDocument) {
-        return "Saving...";
-    }
-
-    if (documentState.isOpeningDocument) {
-        return "Opening...";
-    }
-
-    if (documentState.hasUnsavedChanges) {
-        return "Unsaved";
-    }
-
-    return documentState.activeFilePath ? "" : "Not saved";
 }

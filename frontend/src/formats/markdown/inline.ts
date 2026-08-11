@@ -377,7 +377,20 @@ function readHardBreakToken(text: string, index: number): HardBreakToken | null 
         return { raw: "\\\n" };
     }
 
-    return text[index] === "\n" ? { raw: "\n" } : null;
+    if (text[index] !== "\n") {
+        return null;
+    }
+
+    let precedingSpaces = 0;
+    for (let cursor = index - 1; cursor >= 0 && text[cursor] === " "; cursor -= 1) {
+        precedingSpaces += 1;
+    }
+    return precedingSpaces >= 2 ? { raw: "\n" } : null;
+}
+
+export function isCompleteInlineFormatToken(source: string, marker: "*" | "**"): boolean {
+    const token = readEmphasisToken(source, 0);
+    return Boolean(token && token.marker === marker && token.raw === source);
 }
 
 function readInlineToken(text: string, index: number, image: boolean): InlineToken | null {
@@ -685,6 +698,7 @@ function renderInlineCodeToken(token: InlineCodeToken): string {
         "markdown-token markdown-code-token",
         "code",
         `<code data-source-ignore="true">${code}</code>`,
+        readContentRange(token.raw, token.code),
     );
 }
 
@@ -696,6 +710,7 @@ function renderEscapedCharacter(token: EscapedCharacterToken): string {
         "markdown-token markdown-escape-token",
         "escape",
         `<span class="markdown-escape" data-source-ignore="true">${character}</span>`,
+        readContentRange(token.raw, token.character),
     );
 }
 
@@ -705,6 +720,7 @@ function renderHardBreakToken(token: HardBreakToken): string {
         "markdown-token markdown-hard-break-token",
         "hard-break",
         `<span class="markdown-hard-break" data-source-ignore="true"><br></span>`,
+        null,
     );
 }
 
@@ -718,6 +734,7 @@ function renderMathToken(token: MathToken): string {
         className,
         kind,
         `<span class="markdown-math" data-source-ignore="true">${math}</span>`,
+        null,
     );
 }
 
@@ -739,6 +756,7 @@ function renderFormattingToken(token: FormattingToken, context: DocumentRenderCo
         "markdown-token markdown-format-token",
         "formatting",
         `<${tag} class="${className}" data-source-ignore="true">${label}</${tag}>`,
+        { from: token.marker.length, to: token.raw.length - token.marker.length },
     );
 }
 
@@ -749,6 +767,7 @@ function renderFootnoteReferenceToken(token: FootnoteReferenceToken): string {
         "markdown-token markdown-footnote-reference-token",
         "footnote-reference",
         `<sup class="markdown-footnote-reference" data-source-ignore="true" id="${escapeHtml(token.id)}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup>`,
+        null,
     );
 }
 
@@ -761,6 +780,7 @@ function renderEmphasisToken(token: EmphasisToken, context: DocumentRenderContex
             "markdown-token markdown-format-token",
             "strong-emphasis",
             `<strong class="markdown-strong" data-source-ignore="true"><em class="markdown-emphasis">${label}</em></strong>`,
+            { from: token.marker.length, to: token.raw.length - token.marker.length },
         );
     }
 
@@ -770,6 +790,7 @@ function renderEmphasisToken(token: EmphasisToken, context: DocumentRenderContex
             "markdown-token markdown-format-token",
             "strong",
             `<strong class="markdown-strong" data-source-ignore="true">${label}</strong>`,
+            { from: token.marker.length, to: token.raw.length - token.marker.length },
         );
     }
 
@@ -778,6 +799,7 @@ function renderEmphasisToken(token: EmphasisToken, context: DocumentRenderContex
         "markdown-token markdown-format-token",
         "emphasis",
         `<em class="markdown-emphasis" data-source-ignore="true">${label}</em>`,
+        { from: token.marker.length, to: token.raw.length - token.marker.length },
     );
 }
 
@@ -791,7 +813,8 @@ function renderImageToken(token: InlineToken): string {
         token.raw,
         "markdown-token markdown-image-token",
         "image",
-        `<span class="markdown-image-preview" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-hidden="true"></span>`,
+        `<span class="markdown-image-preview" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-label="${alt || "Image"}"></span>`,
+        null,
     );
 }
 
@@ -807,7 +830,13 @@ function renderLinkToken(token: InlineToken, context: DocumentRenderContext, dep
         ? `<a class="markdown-link" data-source-ignore="true" tabindex="-1" href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"${title} rel="noreferrer">${labelHtml}</a>`
         : `<span class="markdown-link markdown-link-label" data-source-ignore="true"${title}>${labelHtml}</span>`;
 
-    return renderAtomicInlineToken(token.raw, "markdown-token markdown-link-token", "link", label);
+    return renderAtomicInlineToken(
+        token.raw,
+        "markdown-token markdown-link-token",
+        "link",
+        label,
+        { from: token.raw.startsWith("![") ? 2 : 1, to: 1 + token.label.length },
+    );
 }
 
 function renderAutolinkToken(token: AutolinkToken): string {
@@ -830,11 +859,26 @@ function renderRawLink(label: string, destination: string, raw: string, kind: "a
         "markdown-token markdown-link-token markdown-url-token",
         kind,
         `<a class="markdown-link" data-source-ignore="true" tabindex="-1" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a>`,
+        kind === "autolink" ? { from: 1, to: raw.length - 1 } : { from: 0, to: raw.length },
     );
 }
 
-function renderAtomicInlineToken(raw: string, className: string, kind: string, previewHtml: string): string {
-    return `<span class="${className}" data-markdown-token-kind="${kind}" data-source-raw="${escapeHtmlAttribute(raw)}" contenteditable="false">${previewHtml}</span>`;
+function renderAtomicInlineToken(
+    raw: string,
+    className: string,
+    kind: string,
+    previewHtml: string,
+    contentRange: { from: number; to: number } | null = null,
+): string {
+    const mapping = contentRange
+        ? ` data-source-content-from="${contentRange.from}" data-source-content-to="${contentRange.to}"`
+        : ' data-source-atomic="true"';
+    return `<span class="${className}" data-markdown-token-kind="${kind}" data-source-raw="${escapeHtmlAttribute(raw)}"${mapping} contenteditable="false">${previewHtml}</span>`;
+}
+
+function readContentRange(raw: string, content: string): { from: number; to: number } | null {
+    const from = raw.indexOf(content);
+    return from < 0 ? null : { from, to: from + content.length };
 }
 
 function escapeHtmlAttribute(value: string): string {
@@ -944,11 +988,7 @@ function normalizeLinkHref(value: string): string | null {
         const url = new URL(urlText);
         return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:" ? url.href : null;
     } catch {
-        if (/\s/.test(trimmed) || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(trimmed)) {
-            return null;
-        }
-
-        return trimmed;
+        return trimmed.startsWith("#") && !/\s/.test(trimmed) ? trimmed : null;
     }
 }
 

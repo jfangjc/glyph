@@ -3,14 +3,20 @@ import {
     chooseDocumentToOpen,
     chooseDocumentToSave,
     chooseUnsavedDocumentDecision,
-    createUntitledMarkdownDocument,
     readDocument,
     renameDocument,
     saveDocument,
 } from "../bridge/documents";
 import { onOpenDocumentRequested, takePendingOpenDocumentPaths } from "../bridge/launch";
 import type { DocumentFile } from "../bridge/types";
-import { getDocumentFormatById } from "../formats/registry";
+import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
+import {
+    finalizePendingImages,
+    hasPendingImagesInContent,
+    preparePendingImagesForSave,
+    type PreparedPendingImages,
+} from "../formats/markdown/pending-images";
+import { reportEditorError } from "../editor/editor-status";
 import { getElement } from "../utils/dom";
 import { fileNameFromPath } from "../utils/text";
 import { canUseNativeRuntime } from "../platform/runtime";
@@ -30,6 +36,7 @@ import {
 type DocumentActionHost = {
     loadDocument: (documentFile: DocumentFile) => void;
     serializeDocument: () => string;
+    commitSavedDocument: (path: string, savedContent: string) => void;
 };
 
 type SaveDocumentOptions = {
@@ -149,6 +156,7 @@ export async function openDocument(): Promise<void> {
         rememberLastOpenDocumentPath(selectedPath);
     } catch (error) {
         console.error("Failed to open file:", error);
+        reportEditorError(error instanceof Error ? error.message : "Could not open the document.");
     } finally {
         documentState.isOpeningDocument = false;
         notifyDocumentStateChanged();
@@ -172,6 +180,7 @@ export async function openDocumentPath(path: string): Promise<void> {
         rememberLastOpenDocumentPath(path);
     } catch (error) {
         console.error("Failed to open file:", error);
+        reportEditorError(error instanceof Error ? error.message : "Could not open the document.");
     } finally {
         documentState.isOpeningDocument = false;
         notifyDocumentStateChanged();
@@ -179,7 +188,7 @@ export async function openDocumentPath(path: string): Promise<void> {
 }
 
 export async function createNewMarkdownDocument(suggestedFileName?: string): Promise<void> {
-    if (documentState.isOpeningDocument || !canUseDesktopFileSystem()) {
+    if (documentState.isOpeningDocument) {
         return;
     }
 
@@ -187,25 +196,18 @@ export async function createNewMarkdownDocument(suggestedFileName?: string): Pro
     notifyDocumentStateChanged();
 
     try {
-        if (
-            (!documentState.activeFilePath || documentState.hasUnsavedChanges) &&
-            !(await confirmUnsavedDocumentAction({
-                suggestedFileName,
-            }))
-        ) {
+        if (documentState.hasUnsavedChanges && !(await confirmUnsavedDocumentAction({ suggestedFileName }))) {
             return;
         }
 
-        if (!documentState.activeFilePath) {
-            return;
-        }
-
-        const documentFile = await createUntitledMarkdownDocument(documentState.activeFilePath);
-        getHost().loadDocument(documentFile);
-        rememberLastOpenDocumentPath(documentFile.path);
-        await refreshOpenDirectoryTree();
+        getHost().loadDocument({
+            path: "",
+            name: "Untitled.md",
+            content: "",
+        });
     } catch (error) {
         console.error("Failed to create new markdown file:", error);
+        reportEditorError("Could not create a new document session.");
     } finally {
         documentState.isOpeningDocument = false;
         notifyDocumentStateChanged();
@@ -231,54 +233,73 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
         return false;
     }
 
+    const saveSessionId = documentState.sessionId;
     const previousPath = documentState.activeFilePath;
-    const path = await resolveSavePath(options);
-    if (!path) {
-        return false;
-    }
-
-    const content = getHost().serializeDocument();
-    const pathChanged = Boolean(previousPath && !areSamePath(previousPath, path));
-
-    if (content === documentState.lastSavedContent && !pathChanged && !options.promptForPath) {
-        documentState.hasUnsavedChanges = false;
-        notifyDocumentStateChanged();
-        return true;
-    }
-
     documentState.isSavingDocument = true;
     notifyDocumentStateChanged();
     let saved = false;
+    let writeStarted = false;
 
     try {
+        const path = await resolveSavePath(options);
+        if (!path || documentState.sessionId !== saveSessionId) {
+            return false;
+        }
+
+        const targetFormat = getDocumentFormatForPath(path);
+        let content = getHost().serializeDocument();
+        const pathChanged = Boolean(previousPath && !areSamePath(previousPath, path));
+        let preparedImages: PreparedPendingImages = { content, replacements: [] };
+
+        if (hasPendingImagesInContent(content)) {
+            if (targetFormat.descriptor.id !== "markdown") {
+                reportEditorError("Save as Markdown or remove pending images.");
+                return false;
+            }
+            preparedImages = await preparePendingImagesForSave(path, content, saveSessionId);
+            content = preparedImages.content;
+        }
+
+        if (documentState.sessionId !== saveSessionId) {
+            return false;
+        }
+        if (content === documentState.lastSavedContent && !pathChanged && !options.promptForPath) {
+            documentState.hasUnsavedChanges = false;
+            return true;
+        }
+
+        writeStarted = true;
         if (pathChanged && previousPath && !options.promptForPath) {
             await renameDocument(previousPath, path);
-            documentState.activeFilePath = path;
         }
 
         await saveDocument(path, content);
+        if (documentState.sessionId !== saveSessionId) {
+            return false;
+        }
         if (pathChanged) {
             await refreshOpenDirectoryTree();
         }
 
-        if (documentState.activeFilePath === previousPath || documentState.activeFilePath === path || options.promptForPath) {
-            documentState.activeFilePath = path;
-            documentState.lastSavedContent = content;
-            documentState.hasUnsavedChanges = getHost().serializeDocument() !== documentState.lastSavedContent;
-            rememberLastOpenDocumentPath(path);
-        }
+        finalizePendingImages(preparedImages, saveSessionId);
+        getHost().commitSavedDocument(path, content);
+        documentState.hasUnsavedChanges = getHost().serializeDocument() !== content || documentState.fileNameDirty;
+        rememberLastOpenDocumentPath(path);
 
         saved = !documentState.hasUnsavedChanges;
     } catch (error) {
         documentState.hasUnsavedChanges = true;
         console.error("Failed to save file:", error);
+        reportEditorError(error instanceof Error ? error.message : "Could not save the document.");
     } finally {
         documentState.isSavingDocument = false;
         notifyDocumentStateChanged();
 
-        if (documentState.saveAgainAfterCurrent) {
+        if (documentState.saveAgainAfterCurrent && writeStarted) {
             documentState.saveAgainAfterCurrent = false;
             void saveCurrentDocument();
+        } else {
+            documentState.saveAgainAfterCurrent = false;
         }
     }
 
@@ -288,13 +309,6 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
 async function confirmUnsavedDocumentAction(options: SaveDocumentOptions = {}): Promise<boolean> {
     if (!documentState.hasUnsavedChanges) {
         return true;
-    }
-
-    if (documentState.activeFilePath) {
-        return saveCurrentDocument({
-            ...options,
-            promptForPath: false,
-        });
     }
 
     const decision = await chooseUnsavedDocumentDecision();
@@ -308,7 +322,7 @@ async function confirmUnsavedDocumentAction(options: SaveDocumentOptions = {}): 
 
     return saveCurrentDocument({
         ...options,
-        promptForPath: true,
+        promptForPath: !documentState.activeFilePath,
     });
 }
 
@@ -346,6 +360,7 @@ async function resolveSavePath(options: SaveDocumentOptions): Promise<string | n
     const titleFileName = getElement<HTMLInputElement>("document-title").value.trim();
     const suggestedFileName =
         (options.suggestedFileName ??
+            (documentState.fileNameDirty ? documentState.fileName : null) ??
             (documentState.activeFilePath ? fileNameFromPath(documentState.activeFilePath) : null) ??
             titleFileName) ||
         defaultFileName;

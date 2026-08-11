@@ -1,6 +1,13 @@
 import type { BlockType, ParsedBlock } from "../editor/blocks/model";
 import type { BlockSource } from "../editor/blocks/rendering";
-import type { BlockIndexBuilder, EditorState, ProjectionCapability, Transaction } from "../editor/core/types";
+import type {
+    BlockIndexBuilder,
+    DocOffset,
+    EditorState,
+    ProjectionCapability,
+    SourceBlock,
+    Transaction,
+} from "../editor/core/types";
 
 export type DocumentReference = {
     destination: string;
@@ -67,12 +74,27 @@ export type ClipboardPayload = {
     html: string;
 };
 
+export type ClipboardSelectionContext = {
+    state: EditorState;
+    from: DocOffset;
+    to: DocOffset;
+    blocks: SourceBlock[];
+    activeFilePath: string | null;
+};
+
+export type ClipboardReadResult =
+    | { kind: "markdown"; value: string; warning?: string }
+    | { kind: "html"; value: string; warning?: string }
+    | { kind: "plain"; value: string; warning?: string }
+    | { kind: "images"; files: File[] };
+
 export type ClipboardCapability = {
     mimeTypes: string[];
     richHtml: boolean;
-    createPayload?: (source: string) => ClipboardPayload;
-    write?: (clipboard: DataTransfer, source: string) => void;
-    read?: (clipboard: DataTransfer | null | undefined) => string | null;
+    resolveSelectionRange?: (state: EditorState) => { from: DocOffset; to: DocOffset } | null;
+    createPayload?: (context: ClipboardSelectionContext) => ClipboardPayload;
+    write?: (clipboard: DataTransfer, payload: ClipboardPayload) => void;
+    read?: (clipboard: DataTransfer | null | undefined) => ClipboardReadResult | null;
     convertHtml?: (html: string) => string;
 };
 

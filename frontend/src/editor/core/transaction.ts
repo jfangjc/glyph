@@ -1,4 +1,4 @@
-import type { Change, SelectionRange, Transaction } from "./types";
+import type { Change, SelectionRange, SourceAffinity, Transaction } from "./types";
 
 export function applyTransactionToDoc(
     doc: string,
@@ -23,22 +23,38 @@ export function normalizeSelection(selection: SelectionRange, docLength: number)
     return {
         anchor: clampOffset(selection.anchor, docLength),
         head: clampOffset(selection.head, docLength),
+        anchorAffinity: selection.anchorAffinity ?? "downstream",
+        headAffinity: selection.headAffinity ?? "downstream",
     };
 }
 
 export function mapSelection(selection: SelectionRange, changes: Change[]): SelectionRange {
     return {
-        anchor: mapOffset(selection.anchor, changes),
-        head: mapOffset(selection.head, changes),
+        anchor: mapOffset(selection.anchor, changes, selection.anchorAffinity),
+        head: mapOffset(selection.head, changes, selection.headAffinity),
+        anchorAffinity: selection.anchorAffinity,
+        headAffinity: selection.headAffinity,
     };
 }
 
-export function mapOffset(offset: number, changes: Change[]): number {
+export function mapOffset(
+    offset: number,
+    changes: Change[],
+    affinity: SourceAffinity = "downstream",
+): number {
     let delta = 0;
 
     for (const change of changes) {
         if (offset < change.from) {
             break;
+        }
+
+        if (
+            offset === change.from &&
+            change.from === change.to &&
+            affinity === "upstream"
+        ) {
+            return change.from + delta;
         }
 
         if (offset <= change.to) {

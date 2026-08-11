@@ -8,12 +8,12 @@ import {
     previousWordBoundary,
 } from "../../utils/text-boundaries";
 import {
-    createEmptyMarkdownTableRow,
-    formatMarkdownTableSource,
     readMarkdownTableCellAtOffset,
     readMarkdownTableCellFocusOffset,
     readMarkdownTableColumnCount,
 } from "./table";
+import { isCompleteInlineFormatToken } from "./inline";
+import { mapOffset } from "../../editor/core/transaction";
 
 export type DeleteDirection = "backward" | "forward";
 export type DeleteGranularity = "grapheme" | "word" | "soft-line" | "hard-line";
@@ -71,6 +71,12 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
         };
     }
 
+    if (block?.type === "paragraph" && range.from >= block.contentFrom && range.from <= block.contentTo) {
+        const nextToSoftBreak = state.doc[range.from] === "\n" || state.doc[range.from - 1] === "\n";
+        const insert = options.shiftKey ? "  \n" : nextToSoftBreak ? "\n" : "\n\n";
+        return createReplaceSelectionTransaction(state, insert, "input");
+    }
+
     return createCodeBodyReplaceTransaction(state, "\n", "input")
         ?? createReplaceSelectionTransaction(state, "\n", "input");
 }
@@ -108,27 +114,16 @@ export function createTableTabTransaction(state: EditorState, delta: -1 | 1): Tr
     }
 
     const lines = source.split("\n");
-    const emptyRow = createEmptyMarkdownTableRow(columnCount);
-    while (targetLineIndex >= lines.length) {
-        lines.push(emptyRow);
+    if (targetLineIndex >= lines.length) {
+        return createTableExitTransaction(state, block, false);
     }
 
-    const formatted = formatMarkdownTableSource(lines.join("\n"));
-    const targetOffset = readMarkdownTableCellFocusOffset(formatted, targetLineIndex, targetCellIndex);
+    const targetOffset = readMarkdownTableCellFocusOffset(source, targetLineIndex, targetCellIndex);
     if (targetOffset === null) {
         return null;
     }
 
-    const head = block.sourceFrom + targetOffset;
-    if (formatted === source) {
-        return createSelectionTransaction(head);
-    }
-
-    return {
-        changes: [{ from: block.sourceFrom, to: block.sourceTo, insert: formatted }],
-        selection: { anchor: head, head },
-        annotations: { userEvent: "input" },
-    };
+    return createSelectionTransaction(block.sourceFrom + targetOffset);
 }
 
 function createTableEnterTransaction(state: EditorState, block: SourceBlock, offset: number): Transaction | null {
@@ -136,38 +131,11 @@ function createTableEnterTransaction(state: EditorState, block: SourceBlock, off
         return null;
     }
 
-    const source = state.doc.slice(block.sourceFrom, block.sourceTo);
-    const lines = source.split("\n");
-    const localOffset = offset - block.sourceFrom;
-    const finalPipeOffset = source.search(/\|\s*$/);
-    if (lines.length > 2 && finalPipeOffset >= 0 && localOffset > finalPipeOffset) {
+    if (offset === block.sourceTo) {
         return createTableExitTransaction(state, block, false);
     }
 
-    const currentCell = readMarkdownTableCellAtOffset(source, localOffset);
-    const columnCount = readMarkdownTableColumnCount(source);
-    if (!currentCell || columnCount < 2) {
-        return null;
-    }
-
-    const targetLineIndex = currentCell.lineIndex + 1;
-    const emptyRow = createEmptyMarkdownTableRow(columnCount);
-    while (targetLineIndex >= lines.length) {
-        lines.push(emptyRow);
-    }
-
-    const formatted = formatMarkdownTableSource(lines.join("\n"));
-    const targetOffset = readMarkdownTableCellFocusOffset(formatted, targetLineIndex, 0);
-    if (targetOffset === null) {
-        return null;
-    }
-
-    const head = block.sourceFrom + targetOffset;
-    return {
-        changes: [{ from: block.sourceFrom, to: block.sourceTo, insert: formatted }],
-        selection: { anchor: head, head },
-        annotations: { userEvent: "input" },
-    };
+    return createReplaceSelectionTransaction(state, "\n", "input");
 }
 
 function createTableExitTransaction(state: EditorState, block: SourceBlock, createParagraph: boolean): Transaction {
@@ -377,14 +345,22 @@ export function createInlineFormatTransaction(state: EditorState, marker: "*" | 
         ];
     });
 
-    const delta = changes.reduce((total, change) => total + change.insert.length - (change.to - change.from), 0);
-    const forward = state.selection.anchor <= state.selection.head;
-    const nextFrom = Math.max(0, range.from + Math.min(0, delta));
-    const nextTo = Math.max(nextFrom, range.to + delta);
-
     return {
         changes,
-        selection: forward ? { anchor: nextFrom, head: nextTo } : { anchor: nextTo, head: nextFrom },
+        selection: {
+            anchor: mapOffset(
+                state.selection.anchor,
+                changes,
+                state.selection.anchor <= state.selection.head ? "downstream" : "upstream",
+            ),
+            head: mapOffset(
+                state.selection.head,
+                changes,
+                state.selection.anchor <= state.selection.head ? "upstream" : "downstream",
+            ),
+            anchorAffinity: state.selection.anchorAffinity,
+            headAffinity: state.selection.headAffinity,
+        },
         annotations: { userEvent: "format" },
     };
 }
@@ -408,17 +384,16 @@ function readFormatRemoval(
     marker: "*" | "**",
 ): Change[] | null {
     const selected = doc.slice(segment.from, segment.to);
-    if (selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= marker.length * 2) {
+    if (isCompleteInlineFormatToken(selected, marker)) {
         return [
             { from: segment.from, to: segment.from + marker.length, insert: "" },
             { from: segment.to - marker.length, to: segment.to, insert: "" },
         ];
     }
 
-    if (
-        doc.slice(Math.max(0, segment.from - marker.length), segment.from) === marker &&
-        doc.slice(segment.to, segment.to + marker.length) === marker
-    ) {
+    const surroundingFrom = Math.max(0, segment.from - marker.length);
+    const surrounding = doc.slice(surroundingFrom, segment.to + marker.length);
+    if (isCompleteInlineFormatToken(surrounding, marker)) {
         return [
             { from: segment.from - marker.length, to: segment.from, insert: "" },
             { from: segment.to, to: segment.to + marker.length, insert: "" },
@@ -440,12 +415,13 @@ function isRichMarkdownBlock(type: SourceBlock["type"]): boolean {
 }
 
 export function readSelectedSourceText(state: EditorState): string | null {
-    const range = expandCompleteCodeBodySelection(state, orderedSelection(state));
-    if (range.from === range.to) {
-        return null;
-    }
+    const range = readSelectedSourceRange(state);
+    return range ? state.doc.slice(range.from, range.to) : null;
+}
 
-    return state.doc.slice(range.from, range.to);
+export function readSelectedSourceRange(state: EditorState): { from: number; to: number } | null {
+    const range = expandCompleteCodeBodySelection(state, orderedSelection(state));
+    return range.from === range.to ? null : range;
 }
 
 export function createCutTransaction(state: EditorState): Transaction | null {
@@ -829,7 +805,7 @@ function readLineContinuationPrefix(block: SourceBlock): string {
 
     if (block.type === "ordered-list") {
         const number = Number(block.listNumber ?? "1");
-        return `${serializeIndent(block.indent)}${Number.isFinite(number) ? number + 1 : 1}. `;
+        return `${serializeIndent(block.indent)}${Number.isFinite(number) ? number + 1 : 1}${block.listDelimiter ?? "."} `;
     }
 
     if (block.type === "todo") {

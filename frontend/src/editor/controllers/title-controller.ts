@@ -1,14 +1,11 @@
-import { matchesShortcutCommand } from "../../app/keymap";
 import { syncDocumentWindowTitle } from "../../app/window-title";
+import { documentState, notifyDocumentStateChanged } from "../../documents/document-state";
+import { syncEditorDirtyState } from "../../documents/document-session";
+import { titleFromFileName } from "../../formats/file-names";
 import type { DocumentFormat } from "../../formats/types";
 import { getElement } from "../../utils/dom";
-import {
-    dispatch,
-    flushSourceHistoryBatch,
-    getEditorState,
-    redoSourceHistory,
-    undoSourceHistory,
-} from "../core/store";
+import { flushSourceHistoryBatch } from "../core/store";
+import { reportEditorError } from "../editor-status";
 
 export type TitleController = {
     handleTitleBeforeInput: (event: InputEvent) => void;
@@ -28,66 +25,47 @@ type TitleControllerOptions = {
 };
 
 export function createTitleController(options: TitleControllerOptions): TitleController {
-    let historyMode: "typing" | "discrete" = "typing";
-    let flushAfterInput = false;
-
     return {
-        handleTitleBeforeInput,
+        handleTitleBeforeInput: () => undefined,
         handleTitleKeydown,
         handleTitleInput,
         handleTitleFocus,
         handleTitleBlur,
     };
 
-    function handleTitleBeforeInput(event: InputEvent): void {
-        if (!options.getActiveDocumentFormat().descriptor.editableTitle) {
-            return;
-        }
-        if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
-            event.preventDefault();
-            restoreHistory(event.inputType === "historyUndo" ? "undo" : "redo");
-            return;
-        }
-
-        historyMode = isTypingInput(event, options.isComposingText()) ? "typing" : "discrete";
-        flushAfterInput = event.inputType === "insertText" && Boolean(event.data && /[\s.,;:!?()[\]{}"'`]/.test(event.data));
-    }
-
     function handleTitleKeydown(event: KeyboardEvent): void {
-        if (matchesShortcutCommand(event, "edit:undo", "title")) {
+        if (event.key === "Escape") {
             event.preventDefault();
-            restoreHistory("undo");
+            const input = getTitleInput();
+            documentState.fileName = documentState.committedFileName;
+            documentState.fileNameDirty = false;
+            input.value = titleFromFileName(documentState.committedFileName);
+            input.blur();
+            syncEditorDirtyState();
             return;
         }
-        if (matchesShortcutCommand(event, "edit:redo", "title")) {
+
+        if (event.key === "Enter") {
             event.preventDefault();
-            restoreHistory("redo");
-            return;
-        }
-        if (isNavigationKey(event)) {
-            flushSourceHistoryBatch();
+            if (!commitInputValue()) {
+                return;
+            }
+            void options.saveDocument();
         }
     }
 
     function handleTitleInput(): void {
-        if (!options.getActiveDocumentFormat().descriptor.editableTitle) {
-            return;
+        const input = getTitleInput();
+        const value = sanitizeFileNameStem(input.value);
+        if (value !== input.value) {
+            const start = input.selectionStart ?? value.length;
+            input.value = value;
+            input.setSelectionRange(Math.min(start, value.length), Math.min(start, value.length));
         }
 
-        const title = getElement<HTMLInputElement>("document-title").value;
-        dispatch({
-            changes: [],
-            title,
-            annotations: {
-                userEvent: "input",
-                historyMode,
-            },
-        });
-        if (flushAfterInput || historyMode === "discrete") {
-            flushAfterInput = false;
-            flushSourceHistoryBatch();
-        }
-        syncDocumentWindowTitle();
+        documentState.fileName = buildFileName(value);
+        documentState.fileNameDirty = documentState.fileName !== documentState.committedFileName;
+        syncEditorDirtyState();
     }
 
     function handleTitleFocus(): void {
@@ -97,34 +75,46 @@ export function createTitleController(options: TitleControllerOptions): TitleCon
     }
 
     function handleTitleBlur(): void {
-        flushSourceHistoryBatch();
-        if (options.hasActiveFileWithUnsavedChanges()) {
-            void options.saveDocument();
+        if (!commitInputValue()) {
+            return;
         }
-    }
-
-    function restoreHistory(direction: "undo" | "redo"): void {
-        if (direction === "undo") {
-            undoSourceHistory();
-        } else {
-            redoSourceHistory();
-        }
-        getElement<HTMLInputElement>("document-title").value = getEditorState().title;
+        notifyDocumentStateChanged();
         syncDocumentWindowTitle();
     }
+
+    function commitInputValue(): boolean {
+        const input = getTitleInput();
+        const stem = sanitizeFileNameStem(input.value).trim();
+        if (!stem || stem === "." || stem === "..") {
+            reportEditorError("Enter a valid filename.");
+            input.setAttribute("aria-invalid", "true");
+            input.focus();
+            return false;
+        }
+
+        input.removeAttribute("aria-invalid");
+        input.value = stem;
+        documentState.fileName = buildFileName(stem);
+        documentState.fileNameDirty = documentState.fileName !== documentState.committedFileName;
+        syncEditorDirtyState();
+        return true;
+    }
+
+    function buildFileName(stem: string): string {
+        const currentExtension = documentState.committedFileName.match(/\.([^./\\\s]+)$/)?.[1]
+            ?? options.getActiveDocumentFormat().descriptor.defaultExtension;
+        return `${stem || "Untitled"}.${currentExtension}`;
+    }
 }
 
-function isTypingInput(event: InputEvent, isComposing: boolean): boolean {
-    return isComposing || event.inputType === "insertText" || event.inputType.startsWith("delete");
+function getTitleInput(): HTMLInputElement {
+    return getElement<HTMLInputElement>("document-title");
 }
 
-function isNavigationKey(event: KeyboardEvent): boolean {
-    return !event.ctrlKey && !event.metaKey && !event.altKey && (
-        event.key.startsWith("Arrow") ||
-        event.key === "Home" ||
-        event.key === "End" ||
-        event.key === "PageUp" ||
-        event.key === "PageDown" ||
-        event.key === "Escape"
-    );
+function sanitizeFileNameStem(value: string): string {
+    return value
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+        .replace(/\s+/g, " ")
+        .replace(/[. ]+$/g, "")
+        .slice(0, 80);
 }

@@ -40,10 +40,38 @@ export type DocumentEditorSelectionState = {
 
 export type DocOffset = number;
 
+export type SourceAffinity = "upstream" | "downstream";
+
+export type SelectionEndpoint = {
+    offset: DocOffset;
+    affinity: SourceAffinity;
+};
+
 export type SelectionRange = {
     anchor: DocOffset;
     head: DocOffset;
+    anchorAffinity?: SourceAffinity;
+    headAffinity?: SourceAffinity;
 };
+
+export function selectionEndpoint(
+    selection: SelectionRange,
+    endpoint: "anchor" | "head",
+): SelectionEndpoint {
+    return {
+        offset: selection[endpoint],
+        affinity: endpoint === "anchor"
+            ? selection.anchorAffinity ?? "downstream"
+            : selection.headAffinity ?? "downstream",
+    };
+}
+
+export function orderedSelectionBounds(selection: SelectionRange): { from: DocOffset; to: DocOffset } {
+    return {
+        from: Math.min(selection.anchor, selection.head),
+        to: Math.max(selection.anchor, selection.head),
+    };
+}
 
 export type Change = {
     from: DocOffset;
@@ -54,7 +82,6 @@ export type Change = {
 export type Transaction = {
     changes: Change[];
     selection?: SelectionRange;
-    title?: string;
     annotations?: {
         userEvent?: "input" | "delete" | "paste" | "format" | "history" | "programmatic";
         addToHistory?: boolean;
@@ -93,7 +120,6 @@ export type ProjectionCapability = {
 
 export type EditorState = {
     doc: string;
-    title: string;
     selection: SelectionRange;
     blocks: BlockIndex;
     revision: number;
@@ -107,30 +133,53 @@ export type EditorStateListener = (
 
 export type EditorSnapshot = {
     doc: string;
-    title: string;
     selection: SelectionRange;
 };
 
-export function findSourceBlockAtOffset(index: BlockIndex, offset: number): SourceBlock | null {
+export function findSourceBlockAtOffset(
+    index: BlockIndex,
+    offset: number,
+    affinity: "upstream" | "downstream" = "downstream",
+): SourceBlock | null {
     if (index.blocks.length === 0) {
         return null;
     }
-    const containing = index.blocks.find((block) => offset >= block.sourceFrom && offset <= block.sourceTo);
-    if (containing) {
-        return containing;
+
+    let low = 0;
+    let high = index.blocks.length - 1;
+    let candidateIndex = 0;
+    while (low <= high) {
+        const middle = (low + high) >>> 1;
+        if (index.blocks[middle].sourceFrom <= offset) {
+            candidateIndex = middle;
+            low = middle + 1;
+        } else {
+            high = middle - 1;
+        }
     }
-    const nextIndex = index.blocks.findIndex((block) => offset < block.sourceFrom);
-    return nextIndex < 0
-        ? index.blocks[index.blocks.length - 1]
-        : index.blocks[Math.max(0, nextIndex - 1)];
+
+    const candidate = index.blocks[candidateIndex];
+    const next = index.blocks[candidateIndex + 1];
+    if (
+        affinity === "downstream" &&
+        next &&
+        offset === candidate.sourceTo &&
+        offset === next.sourceFrom
+    ) {
+        return next;
+    }
+    if (offset >= candidate.sourceFrom && offset <= candidate.sourceTo) {
+        return candidate;
+    }
+    return next && offset >= next.sourceFrom ? next : candidate;
 }
 
 export function readVisibleListPrefixLength(block: SourceBlock): number {
     if (block.type === "ordered-list") {
-        return `${block.listNumber ?? "1"}. `.length;
+        return `${block.listNumber ?? "1"}${block.listDelimiter ?? "."} `.length;
     }
     if (block.type === "todo") {
-        return `${block.listMarker ?? "-"} [${block.checked ? "x" : " "}] `.length;
+        return `${block.listMarker ?? "-"} ${block.todoMarker ?? (block.checked ? "[x]" : "[ ]")} `.length;
     }
     return `${block.listMarker ?? "-"} `.length;
 }

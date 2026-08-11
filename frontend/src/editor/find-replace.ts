@@ -39,6 +39,7 @@ export function installFindReplaceController(options: {
     let activeIndex = -1;
     let findOptions: FindOptions = { caseSensitive: false, wholeWord: false };
     let highlightFrame = 0;
+    let focusOwnerBeforeOpen: HTMLElement | null = null;
 
     elements.findInput.addEventListener("input", () => scan());
     elements.findInput.addEventListener("keydown", handleFindKeydown);
@@ -73,6 +74,9 @@ export function installFindReplaceController(options: {
     }
 
     function open(replace: boolean): void {
+        if (elements.panel.hidden) {
+            focusOwnerBeforeOpen = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }
         syncStateSelectionFromDom();
         seedQueryFromSelection();
         elements.panel.hidden = false;
@@ -86,8 +90,13 @@ export function installFindReplaceController(options: {
     function close(): void {
         elements.panel.hidden = true;
         elements.highlightLayer.replaceChildren();
-        options.editor.focus();
-        syncDomSelectionFromState();
+        const focusOwner = focusOwnerBeforeOpen;
+        focusOwnerBeforeOpen = null;
+        if (focusOwner && focusOwner.isConnected && focusOwner !== options.editor) {
+            focusOwner.focus({ preventScroll: true });
+        } else {
+            syncDomSelectionFromState({ focus: "editor" });
+        }
     }
 
     function refresh(): void {
@@ -125,7 +134,7 @@ export function installFindReplaceController(options: {
             selection: { anchor: match.from, head: match.to },
             annotations: { userEvent: "programmatic", addToHistory: false },
         });
-        syncDomSelectionFromState();
+        syncDomSelectionFromState({ focus: "preserve" });
         const point = sourceOffsetToDomPoint(match.from);
         const element = point.node instanceof Element ? point.node : point.node.parentElement;
         element?.scrollIntoView({ block: "center" });
@@ -134,6 +143,10 @@ export function installFindReplaceController(options: {
     function replaceCurrent(): void {
         const match = matches[activeIndex];
         if (!match) return;
+        if (!matchesQueryAt(getEditorState().doc, match, elements.findInput.value, findOptions)) {
+            scan();
+            return;
+        }
         const insert = elements.replaceInput.value;
         dispatch({
             changes: [{ from: match.from, to: match.to, insert }],
@@ -204,7 +217,7 @@ export function installFindReplaceController(options: {
         elements.highlightLayer.replaceChildren();
         if (elements.panel.hidden) return;
         const highlights: HTMLElement[] = [];
-        matches.forEach((match, index) => {
+        matches.slice(0, 1000).forEach((match, index) => {
             const start = sourceOffsetToDomPoint(match.from, { activateSourceTokens: false });
             const end = sourceOffsetToDomPoint(match.to, { activateSourceTokens: false });
             const range = document.createRange();
@@ -242,18 +255,29 @@ export function installFindReplaceController(options: {
 
 function collectMatches(source: string, query: string, options: FindOptions): FindMatch[] {
     if (!query) return [];
-    const haystack = options.caseSensitive ? source : source.toLocaleLowerCase();
-    const needle = options.caseSensitive ? query : query.toLocaleLowerCase();
     const matches: FindMatch[] = [];
-    let from = 0;
-    while (from <= haystack.length - needle.length) {
-        const index = haystack.indexOf(needle, from);
-        if (index < 0) break;
-        const to = index + needle.length;
-        if (!options.wholeWord || isWholeWord(source, index, to)) matches.push({ from: index, to });
-        from = Math.max(to, index + 1);
+    const pattern = new RegExp(escapeRegExp(query), options.caseSensitive ? "gu" : "giu");
+    for (const match of source.matchAll(pattern)) {
+        const from = match.index;
+        const to = from + match[0].length;
+        if (!options.wholeWord || isWholeWord(source, from, to)) {
+            matches.push({ from, to });
+        }
+        if (matches.length >= 10_000) {
+            break;
+        }
     }
     return matches;
+}
+
+function matchesQueryAt(source: string, match: FindMatch, query: string, options: FindOptions): boolean {
+    const candidate = source.slice(match.from, match.to);
+    const pattern = new RegExp(`^${escapeRegExp(query)}$`, options.caseSensitive ? "u" : "iu");
+    return pattern.test(candidate) && (!options.wholeWord || isWholeWord(source, match.from, match.to));
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isWholeWord(source: string, from: number, to: number): boolean {
