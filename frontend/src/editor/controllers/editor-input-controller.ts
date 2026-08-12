@@ -15,7 +15,12 @@ import type {
     ClipboardSelectionContext,
     DocumentFormat,
 } from "../../formats/types";
-import type { DocumentEditorHooks } from "../core/types";
+import {
+    findSourceBlockAtOffset,
+    readVisibleListPrefixLength,
+    type DocumentEditorHooks,
+    type EditorState,
+} from "../core/types";
 import {
     findBlock,
 } from "../blocks/view";
@@ -679,6 +684,14 @@ export function createEditorInputController(options: EditorInputControllerOption
                 : nextGraphemeBoundary(state.doc, state.selection.head);
         }
 
+        target = normalizeHiddenListIndentNavigationTarget(
+            state,
+            state.selection.head,
+            target,
+            backward,
+            event.key === "Home" && !event.ctrlKey && !event.metaKey,
+        );
+
         dispatch({
             changes: [],
             selection: {
@@ -1237,6 +1250,40 @@ function readClipboardImages(dataTransfer: DataTransfer | null | undefined): Fil
     return fromItems.length > 0
         ? fromItems
         : Array.from(dataTransfer.files).filter(isSupportedPastedImage);
+}
+
+function normalizeHiddenListIndentNavigationTarget(
+    state: EditorState,
+    current: number,
+    target: number,
+    backward: boolean,
+    moveToLineStart: boolean,
+): number {
+    const block = findSourceBlockAtOffset(state.blocks, current);
+    if (
+        !block ||
+        (block.type !== "list" && block.type !== "ordered-list" && block.type !== "todo") ||
+        !block.indent
+    ) {
+        return target;
+    }
+
+    const markerFrom = block.contentFrom - readVisibleListPrefixLength(block);
+    if (markerFrom <= block.sourceFrom) {
+        return target;
+    }
+
+    if (moveToLineStart) {
+        return markerFrom;
+    }
+
+    if (target >= block.sourceFrom && target < markerFrom) {
+        return backward && current <= markerFrom
+            ? previousGraphemeBoundary(state.doc, block.sourceFrom)
+            : markerFrom;
+    }
+
+    return target;
 }
 
 function extensionForImageMimeType(mimeType: string): string {

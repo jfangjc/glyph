@@ -120,7 +120,7 @@ function readRenderedClipboardText(html: string, markdown: string): string {
     const template = document.createElement("template");
     template.innerHTML = html;
     const text = readVisibleClipboardNodeText(template.content).replace(/\n$/, "");
-    if (text && text !== markdown) {
+    if (text) {
         return text;
     }
     return markdown
@@ -155,6 +155,10 @@ function readVisibleClipboardNodeText(node: Node): string {
         )).join("\t")}\n`;
     }
 
+    if (node instanceof HTMLUListElement || node instanceof HTMLOListElement) {
+        return readVisibleClipboardListText(node, 0);
+    }
+
     if (node instanceof HTMLLIElement) {
         const nestedLists = Array.from(node.children).filter((child) => (
             child instanceof HTMLUListElement || child instanceof HTMLOListElement
@@ -174,6 +178,34 @@ function readVisibleClipboardNodeText(node: Node): string {
     return node instanceof Element && /^(?:p|div|h[1-6]|blockquote|pre|li)$/.test(node.tagName.toLowerCase())
         ? `${text}\n`
         : text;
+}
+
+function readVisibleClipboardListText(list: HTMLUListElement | HTMLOListElement, depth: number): string {
+    const items = Array.from(list.children).filter((child): child is HTMLLIElement => child instanceof HTMLLIElement);
+    const orderedStart = list instanceof HTMLOListElement ? list.start : 1;
+
+    return items.map((item, index) => {
+        const nestedLists = Array.from(item.children).filter(
+            (child): child is HTMLUListElement | HTMLOListElement => (
+                child instanceof HTMLUListElement || child instanceof HTMLOListElement
+            ),
+        );
+        const nestedSet = new Set<Node>(nestedLists);
+        const checkbox = Array.from(item.children).find(
+            (child): child is HTMLInputElement => child instanceof HTMLInputElement && child.type === "checkbox",
+        );
+        const itemText = Array.from(item.childNodes)
+            .filter((child) => !nestedSet.has(child) && child !== checkbox)
+            .map(readVisibleClipboardNodeText)
+            .join("")
+            .replace(/^ /, "");
+        const orderedNumber = item.hasAttribute("value") ? item.value : orderedStart + index;
+        const marker = checkbox
+            ? `- [${checkbox.checked ? "x" : " "}] `
+            : list instanceof HTMLOListElement ? `${orderedNumber}. ` : "- ";
+        const line = `${"  ".repeat(depth)}${marker}${itemText}\n`;
+        return line + nestedLists.map((nested) => readVisibleClipboardListText(nested, depth + 1)).join("");
+    }).join("");
 }
 
 type ClipboardListItem = {
@@ -232,9 +264,12 @@ function renderClipboardListItem(
     const task = item.block.type === "todo"
         ? `<input type="checkbox" disabled${item.block.checked ? " checked" : ""}> `
         : "";
+    const value = item.block.type === "ordered-list" && item.block.listNumber
+        ? ` value="${Number(item.block.listNumber)}"`
+        : "";
     const inline = cleanRenderedInline(renderInlineMarkdown(item.block.text, context));
     const children = item.children.length > 0 ? renderClipboardListItems(item.children, context) : "";
-    return `<li>${task}${inline}${children}</li>`;
+    return `<li${value}>${task}${inline}${children}</li>`;
 }
 
 function cleanRenderedInline(html: string): string {

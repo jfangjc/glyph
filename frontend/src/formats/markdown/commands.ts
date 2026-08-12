@@ -290,7 +290,11 @@ export function createDeleteTransaction(
     if (direction === "backward") {
         const hiddenIndentRange = readHiddenListIndentRange(state, offset);
         if (hiddenIndentRange && offset > hiddenIndentRange.from && offset <= hiddenIndentRange.to) {
-            return null;
+            if (offset === hiddenIndentRange.to) {
+                return createIndentListTransaction(state, -1);
+            }
+
+            return createSelectionTransaction(hiddenIndentRange.to);
         }
 
         const resetRange = readResetBlockPrefixRange(state, offset);

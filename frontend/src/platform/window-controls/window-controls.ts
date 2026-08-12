@@ -20,6 +20,8 @@ type AppPlatform = ShortcutLabelPlatform;
 
 let maximiseButton: HTMLButtonElement | null = null;
 let snapAssistTimer = 0;
+let menuCloseTimer = 0;
+const menuPanelHideCleanups = new WeakMap<HTMLElement, () => void>();
 let activeMenuId: string | null = null;
 let hostPlatform: AppPlatform | null = null;
 let lastNonTitlebarFocus: HTMLElement | null = null;
@@ -262,6 +264,7 @@ function handleTitlebarPointerOver(event: PointerEvent): void {
         return;
     }
 
+    cancelMenuClose();
     const menuButton = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-menu-button]");
     const menuId = menuButton?.dataset.menuButton;
     if (menuId && menuId !== activeMenuId) {
@@ -270,7 +273,7 @@ function handleTitlebarPointerOver(event: PointerEvent): void {
 }
 
 function handleTitlebarPointerLeave(): void {
-    closeMenus({ blurFocus: true });
+    scheduleMenuClose();
 }
 
 function handleDocumentMouseDown(event: MouseEvent): void {
@@ -281,6 +284,7 @@ function handleDocumentMouseDown(event: MouseEvent): void {
 }
 
 function openMenu(menuId: string, options: { focusFirstItem?: boolean } = {}): void {
+    cancelMenuClose();
     const titlebar = getElement<HTMLElement>("app-titlebar");
     const menuButtons = Array.from(titlebar.querySelectorAll<HTMLButtonElement>("[data-menu-button]"));
     const panels = Array.from(titlebar.querySelectorAll<HTMLElement>("[data-menu-panel]"));
@@ -293,8 +297,17 @@ function openMenu(menuId: string, options: { focusFirstItem?: boolean } = {}): v
     }
 
     for (const panel of panels) {
-        panel.hidden = panel.dataset.menuPanel !== menuId;
-        panel.style.left = "";
+        const isActive = panel.dataset.menuPanel === menuId;
+        if (isActive) {
+            cancelPanelHide(panel);
+            panel.hidden = false;
+            panel.dataset.menuPanelState = "opening";
+            panel.style.left = "";
+            void panel.offsetWidth;
+            panel.dataset.menuPanelState = "open";
+        } else if (!panel.hidden) {
+            closeMenuPanel(panel);
+        }
     }
 
     syncOpenMenuPanelPosition();
@@ -304,7 +317,12 @@ function openMenu(menuId: string, options: { focusFirstItem?: boolean } = {}): v
     }
 }
 
-function closeMenus(options: { blurFocus?: boolean; restoreFocus?: boolean } = {}): void {
+function closeMenus(options: {
+    blurFocus?: boolean;
+    restoreFocus?: boolean;
+    delayMenuBar?: boolean;
+} = {}): void {
+    cancelMenuClose();
     if (!activeMenuId) {
         return;
     }
@@ -313,14 +331,22 @@ function closeMenus(options: { blurFocus?: boolean; restoreFocus?: boolean } = {
     const activeButton = getActiveMenuButton();
 
     activeMenuId = null;
-    titlebar?.removeAttribute("data-menu-open");
+    if (!options.delayMenuBar) {
+        titlebar?.removeAttribute("data-menu-open");
+    }
 
     for (const button of Array.from(titlebar?.querySelectorAll<HTMLButtonElement>("[data-menu-button]") ?? [])) {
         button.setAttribute("aria-expanded", "false");
     }
 
     for (const panel of Array.from(titlebar?.querySelectorAll<HTMLElement>("[data-menu-panel]") ?? [])) {
-        panel.hidden = true;
+        if (!panel.hidden) {
+            closeMenuPanel(panel, () => {
+                if (options.delayMenuBar && !activeMenuId) {
+                    titlebar?.removeAttribute("data-menu-open");
+                }
+            });
+        }
     }
 
     if (options.restoreFocus) {
@@ -328,6 +354,69 @@ function closeMenus(options: { blurFocus?: boolean; restoreFocus?: boolean } = {
     } else if (options.blurFocus) {
         blurTitlebarFocus(titlebar);
     }
+}
+
+function scheduleMenuClose(): void {
+    if (!activeMenuId || menuCloseTimer) {
+        return;
+    }
+
+    menuCloseTimer = window.setTimeout(() => {
+        menuCloseTimer = 0;
+        closeMenus({ blurFocus: true, delayMenuBar: true });
+    }, 350);
+}
+
+function cancelMenuClose(): void {
+    if (!menuCloseTimer) {
+        return;
+    }
+
+    window.clearTimeout(menuCloseTimer);
+    menuCloseTimer = 0;
+}
+
+function closeMenuPanel(panel: HTMLElement, onHidden?: () => void): void {
+    cancelPanelHide(panel);
+    panel.dataset.menuPanelState = "closing";
+
+    let hideTimer = 0;
+    let handleTransitionEnd: (event: TransitionEvent) => void;
+
+    const cleanup = (): void => {
+        panel.removeEventListener("transitionend", handleTransitionEnd);
+        if (hideTimer) {
+            window.clearTimeout(hideTimer);
+            hideTimer = 0;
+        }
+        menuPanelHideCleanups.delete(panel);
+    };
+
+    const hide = (): void => {
+        cleanup();
+        if (panel.dataset.menuPanelState !== "closing") {
+            return;
+        }
+        panel.hidden = true;
+        delete panel.dataset.menuPanelState;
+        panel.style.left = "";
+        onHidden?.();
+    };
+
+    handleTransitionEnd = (event: TransitionEvent): void => {
+        if (event.target !== panel || event.propertyName !== "transform") {
+            return;
+        }
+        hide();
+    };
+
+    panel.addEventListener("transitionend", handleTransitionEnd);
+    hideTimer = window.setTimeout(hide, 220);
+    menuPanelHideCleanups.set(panel, cleanup);
+}
+
+function cancelPanelHide(panel: HTMLElement): void {
+    menuPanelHideCleanups.get(panel)?.();
 }
 
 function blurTitlebarFocus(titlebar: HTMLElement | null): void {

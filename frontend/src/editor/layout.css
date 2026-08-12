@@ -68,7 +68,7 @@ body.app-titlebar-host .document-surface {
     font-family: var(--glyph-font-title, var(--glyph-font-text));
     font-size: 2.75rem;
     font-weight: 700;
-    line-height: 1.22;
+    line-height: 1.3;
     padding: 0 0 0.08em;
 }
 

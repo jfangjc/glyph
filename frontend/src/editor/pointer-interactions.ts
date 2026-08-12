@@ -432,7 +432,10 @@ function readPointerBlockSourcePosition(
     clientY: number,
 ): { node: Node; offset: number } | undefined {
     if (block.dataset.blockSourceActive !== "true") {
-        return undefined;
+        if (!isPointOnInactiveListMarker(block, clientX, clientY)) {
+            return undefined;
+        }
+        block.dataset.blockSourceActive = "true";
     }
 
     for (const source of Array.from(getBlockContent(block).querySelectorAll<HTMLElement>(".format-block-source"))) {
@@ -445,6 +448,26 @@ function readPointerBlockSourcePosition(
     }
 
     return undefined;
+}
+
+function isPointOnInactiveListMarker(block: HTMLElement, clientX: number, clientY: number): boolean {
+    const type = readBlockType(block.dataset.type);
+    if (type !== "list" && type !== "ordered-list") {
+        return false;
+    }
+
+    const blockRect = block.getBoundingClientRect();
+    const content = getBlockContent(block);
+    const contentRect = content.getBoundingClientRect();
+    const computedLineHeight = Number.parseFloat(window.getComputedStyle(content).lineHeight);
+    const markerLineHeight = Number.isFinite(computedLineHeight) ? Math.max(24, computedLineHeight) : 24;
+    const markerLineBottom = Math.min(blockRect.bottom, contentRect.top + markerLineHeight);
+    return (
+        clientX >= blockRect.left - 2 &&
+        clientX < contentRect.left &&
+        clientY >= contentRect.top - 2 &&
+        clientY <= markerLineBottom + 2
+    );
 }
 
 function readPointerPlainTextOffset(source: HTMLElement, clientX: number, clientY: number): number {
