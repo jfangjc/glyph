@@ -21,20 +21,25 @@ export type DeleteGranularity = "grapheme" | "word" | "soft-line" | "hard-line";
 export function createInsertTextTransaction(state: EditorState, text: string): Transaction {
     const normalizedText = normalizeInsertedText(text);
     return createCodeBodyReplaceTransaction(state, normalizedText, "input", "typing")
+        ?? createIndentedCodeReplaceTransaction(state, normalizedText, "input", "typing")
         ?? createReplaceSelectionTransaction(state, normalizedText, "input", "typing");
 }
 
 export function createPasteTransaction(state: EditorState, text: string): Transaction {
     const normalizedText = normalizeInsertedText(text);
     return createCodeBodyReplaceTransaction(state, normalizedText, "paste", "discrete")
+        ?? createIndentedCodeReplaceTransaction(state, normalizedText, "paste", "discrete")
         ?? createReplaceSelectionTransaction(state, normalizedText, "paste");
 }
 
 export function createEnterTransaction(state: EditorState, options: { shiftKey?: boolean } = {}): Transaction {
     const range = orderedSelection(state);
+    const codeLineBreak = createCodeLineBreakTransaction(state);
+    if (codeLineBreak) {
+        return codeLineBreak;
+    }
     if (range.from !== range.to) {
-        return createCodeBodyReplaceTransaction(state, "\n", "input")
-            ?? createReplaceSelectionTransaction(state, "\n", "input");
+        return createReplaceSelectionTransaction(state, "\n", "input");
     }
 
     const block = findSourceBlockAtOffset(state.blocks, range.from);
@@ -72,13 +77,16 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
     }
 
     if (block?.type === "paragraph" && range.from >= block.contentFrom && range.from <= block.contentTo) {
+        if (isOpenFencedCodeParagraph(state.doc.slice(block.sourceFrom, block.sourceTo))) {
+            return createReplaceSelectionTransaction(state, "\n", "input");
+        }
+
         const nextToSoftBreak = state.doc[range.from] === "\n" || state.doc[range.from - 1] === "\n";
         const insert = options.shiftKey ? "  \n" : nextToSoftBreak ? "\n" : "\n\n";
         return createReplaceSelectionTransaction(state, insert, "input");
     }
 
-    return createCodeBodyReplaceTransaction(state, "\n", "input")
-        ?? createReplaceSelectionTransaction(state, "\n", "input");
+    return createReplaceSelectionTransaction(state, "\n", "input");
 }
 
 export function createTableTabTransaction(state: EditorState, delta: -1 | 1): Transaction | null {
@@ -124,6 +132,11 @@ export function createTableTabTransaction(state: EditorState, delta: -1 | 1): Tr
     }
 
     return createSelectionTransaction(block.sourceFrom + targetOffset);
+}
+
+function isOpenFencedCodeParagraph(source: string): boolean {
+    const openingLine = source.split(/\r?\n/, 1)[0];
+    return /^ {0,3}(?:`{3,}|~{3,})(.*)$/.test(openingLine);
 }
 
 function createTableEnterTransaction(state: EditorState, block: SourceBlock, offset: number): Transaction | null {
@@ -507,6 +520,47 @@ function createCodeBodyReplaceTransaction(
     };
 }
 
+function createCodeLineBreakTransaction(state: EditorState): Transaction | null {
+    const range = orderedSelection(state);
+    const block = state.blocks.blocks.find((candidate) => (
+        candidate.type === "code" &&
+        range.from >= candidate.contentFrom &&
+        range.to <= candidate.contentTo
+    ));
+    if (!block) {
+        return null;
+    }
+
+    const lineFrom = state.doc.lastIndexOf("\n", Math.max(block.contentFrom, range.from) - 1) + 1;
+    const indent = state.doc.slice(lineFrom, range.from).match(/^[ \t]*/)?.[0] ?? "";
+    const insert = `\n${indent}`;
+    return createCodeBodyReplaceTransaction(state, insert, "input")
+        ?? createReplaceSelectionTransaction(state, insert, "input");
+}
+
+function createIndentedCodeReplaceTransaction(
+    state: EditorState,
+    text: string,
+    userEvent: NonNullable<Transaction["annotations"]>["userEvent"],
+    historyMode?: NonNullable<Transaction["annotations"]>["historyMode"],
+): Transaction | null {
+    const range = orderedSelection(state);
+    const block = state.blocks.blocks.find((candidate) => (
+        candidate.type === "code" &&
+        !candidate.codeFence &&
+        range.from >= candidate.contentFrom &&
+        range.to <= candidate.contentTo
+    ));
+    if (!block) {
+        return null;
+    }
+
+    const lineFrom = state.doc.lastIndexOf("\n", Math.max(block.contentFrom, range.from) - 1) + 1;
+    const indent = state.doc.slice(lineFrom).match(/^[ \t]*/)?.[0] || "    ";
+    const insert = text.replace(/\n/g, `\n${indent}`);
+    return createReplaceSelectionTransaction(state, insert, userEvent, historyMode);
+}
+
 function needsEmptyCodeClosingSeparator(
     doc: string,
     block: SourceBlock,
@@ -587,18 +641,23 @@ function createCodeBoundaryNavigationTransaction(
         return null;
     }
 
-    if (direction === "backward" && offset === block.contentFrom) {
-        const openingLineEnding = state.doc.slice(block.sourceFrom, block.contentFrom).match(/(\r?\n)$/)?.[1];
-        if (openingLineEnding) {
-            const head = block.contentFrom - openingLineEnding.length;
-            return createSelectionTransaction(head);
-        }
+    const openingLineEnding = state.doc.slice(block.sourceFrom, block.contentFrom).match(/(\r?\n)$/)?.[1];
+    const openingBoundary = block.contentFrom - (openingLineEnding?.length ?? 0);
+    if (openingLineEnding && direction === "backward" && offset === block.contentFrom) {
+        return createSelectionTransaction(openingBoundary);
+    }
+    if (openingLineEnding && direction === "forward" && offset === openingBoundary) {
+        return createSelectionTransaction(block.contentFrom);
     }
 
-    if (direction === "forward" && offset === block.contentTo) {
-        const closingLineEnding = state.doc.slice(block.contentTo, block.sourceTo).match(/^(\r?\n)/)?.[1];
-        if (readClosingFenceMarker(state.doc, block, block.codeFence?.[0] ?? "")) {
-            return createSelectionTransaction(block.contentTo + (closingLineEnding?.length ?? 0));
+    const closingLineEnding = state.doc.slice(block.contentTo, block.sourceTo).match(/^(\r?\n)/)?.[1];
+    const closingBoundary = block.contentTo + (closingLineEnding?.length ?? 0);
+    if (readClosingFenceMarker(state.doc, block, block.codeFence?.[0] ?? "")) {
+        if (direction === "forward" && offset === block.contentTo) {
+            return createSelectionTransaction(closingBoundary);
+        }
+        if (closingLineEnding && direction === "backward" && offset === closingBoundary) {
+            return createSelectionTransaction(block.contentTo);
         }
     }
 

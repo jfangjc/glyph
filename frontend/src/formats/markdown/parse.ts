@@ -197,14 +197,19 @@ function readMarkdownBlockRanges(lines: MarkdownLineRecord[]): MarkdownBlockRang
                 cursor += 1;
             }
 
-            const endIndex = cursor < lines.length ? cursor : Math.max(index, cursor - 1);
+            const hasClosingFence = cursor < lines.length;
+            const endIndex = hasClosingFence ? cursor : Math.max(index, cursor - 1);
             ranges.push(createMarkdownBlockRange(lines, index, endIndex));
-            parsedBlocksBeforeCurrent.push({ type: "code", text: "" });
+            parsedBlocksBeforeCurrent.push({ type: hasClosingFence ? "code" : "paragraph", text: "" });
             index = endIndex;
             continue;
         }
 
-        if (isIndentedCodeLine(line, getPreviousNonBlankBlock(parsedBlocksBeforeCurrent))) {
+        if (isIndentedCodeLine(
+            line,
+            getPreviousNonBlankBlock(parsedBlocksBeforeCurrent),
+            index === 0 || lines[index - 1].text.trim() === "",
+        )) {
             let cursor = index + 1;
             while (cursor < lines.length && (lines[cursor].text === "" || isIndentedCodeContinuationLine(lines[cursor].text))) {
                 cursor += 1;
@@ -433,11 +438,8 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
             ));
             if (closingFenceIndex < 0) {
                 blocks.push({
-                    type: "code",
-                    text: lines.slice(index + 1).join("\n"),
-                    codeFence: fence.marker,
-                    codeFenceClosed: false,
-                    codeInfo: fence.info,
+                    type: "paragraph",
+                    text: lines.slice(index).join("\n"),
                 });
                 index = lines.length;
                 continue;
@@ -461,7 +463,11 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
             continue;
         }
 
-        if (isIndentedCodeLine(line, getPreviousNonBlankBlock(blocks))) {
+        if (isIndentedCodeLine(
+            line,
+            getPreviousNonBlankBlock(blocks),
+            index === 0 || lines[index - 1].trim() === "",
+        )) {
             const codeLines = [stripCodeIndent(line)];
             index += 1;
 
@@ -765,7 +771,7 @@ function isPlainParagraphLine(line: string): boolean {
     return (
         line.trim() !== "" &&
         !readCodeFence(line) &&
-        !isIndentedCodeLine(line, null) &&
+        !isIndentedCodeLine(line, null, true) &&
         !isMarkdownHtmlBlockStart(line) &&
         !parseMarkdownReferenceDefinition(line) &&
         !parseFootnoteDefinitionSource(line) &&
@@ -796,12 +802,16 @@ function readHorizontalRuleMarker(line: string): string | null {
         : null;
 }
 
-function isIndentedCodeLine(line: string, previousBlock: ParsedBlock | null): boolean {
+function isIndentedCodeLine(
+    line: string,
+    previousBlock: ParsedBlock | null,
+    followsBlankLine: boolean,
+): boolean {
     if (line.trim() === "") {
         return false;
     }
 
-    if (previousBlock?.type === "paragraph") {
+    if (previousBlock?.type === "paragraph" && !followsBlankLine) {
         return false;
     }
 

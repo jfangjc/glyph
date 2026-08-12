@@ -1,10 +1,13 @@
 import { buildBlockIndex } from "./block-index";
 import {
     createCheckboxToggleTransaction,
+    createDeleteTransaction,
     createEnterTransaction,
     createIndentCodeTransaction,
     createIndentListTransaction,
+    createInsertTextTransaction,
     createInlineFormatTransaction,
+    createPasteTransaction,
     readSelectedSourceRange,
     createTableTabTransaction,
 } from "./commands";
@@ -47,6 +50,9 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
             hydrateRenderedContent: hydrateMarkdownImagePreviews,
         },
         editing: {
+            createInsertTextTransaction,
+            createPasteTransaction,
+            createDeleteTransaction,
             createEnterTransaction,
             createTabTransaction: (state, delta) =>
                 createTableTabTransaction(state, delta)

@@ -61,6 +61,13 @@ export type RenderCapability = {
 };
 
 export type EditingCapability = {
+    createInsertTextTransaction?: (state: EditorState, text: string) => Transaction;
+    createPasteTransaction?: (state: EditorState, text: string) => Transaction;
+    createDeleteTransaction?: (
+        state: EditorState,
+        direction: "backward" | "forward",
+        granularity: "grapheme" | "word" | "soft-line" | "hard-line",
+    ) => Transaction | null;
     createEnterTransaction?: (state: EditorState, options?: { shiftKey?: boolean }) => Transaction;
     createTabTransaction?: (state: EditorState, delta: -1 | 1) => Transaction | null;
     createInlineFormatTransaction?: (state: EditorState, marker: "*" | "**") => Transaction | null;

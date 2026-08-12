@@ -21,8 +21,6 @@ import {
 } from "../blocks/view";
 import {
     createCutTransaction,
-    createDeleteBackwardTransaction,
-    createDeleteForwardTransaction,
     createDeleteTransaction,
     createInsertTextTransaction,
     createPasteTransaction,
@@ -196,7 +194,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                     }
                 } else if (result.value && selection) {
                     const state = getEditorState();
-                    dispatch(createPasteTransaction(
+                    dispatch(createSourcePasteTransaction(
                         { ...state, selection },
                         prepareVirtualEofInsertion(result.value, selection),
                     ));
@@ -460,7 +458,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
         if (insert) {
             const state = getEditorState();
-            dispatch(createInsertTextTransaction(
+            dispatch(createSourceInsertTextTransaction(
                 { ...state, selection: preCompositionSourceSelection },
                 prepareVirtualEofInsertion(insert, preCompositionSourceSelection),
             ));
@@ -585,7 +583,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             const state = getEditorState();
             dispatch(
                 options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state, { shiftKey: event.shiftKey })
-                ?? createInsertTextTransaction(state, "\n"),
+                ?? createSourceInsertTextTransaction(state, "\n"),
             );
             syncDomSelectionFromState();
             return true;
@@ -606,7 +604,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                     return false;
                 }
                 event.preventDefault();
-                dispatch(createInsertTextTransaction(state, "\t"));
+                dispatch(createSourceInsertTextTransaction(state, "\t"));
                 return true;
             }
 
@@ -619,13 +617,16 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (event.key === "Backspace" || event.key === "Delete") {
             event.preventDefault();
             syncStateSelectionFromDom();
-            const transaction = createDeleteTransaction(
+            const transaction = createSourceDeleteTransaction(
                 getEditorState(),
                 event.key === "Backspace" ? "backward" : "forward",
                 readDeleteGranularityFromKeydown(event),
             );
             if (transaction) {
                 dispatch(transaction);
+                if (transaction.changes.length === 0) {
+                    syncDomSelectionFromState({ focus: "editor" });
+                }
             }
             return true;
         }
@@ -712,6 +713,9 @@ export function createEditorInputController(options: EditorInputControllerOption
         const nextTransaction = transaction();
         if (nextTransaction) {
             dispatch(nextTransaction);
+            if (nextTransaction.changes.length === 0) {
+                syncDomSelectionFromState({ focus: "editor" });
+            }
         }
         return true;
     }
@@ -723,7 +727,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         ) {
             return () => {
                 const state = getEditorState();
-                return createInsertTextTransaction(
+                return createSourceInsertTextTransaction(
                     state,
                     prepareVirtualEofInsertion(event.data ?? "", state.selection),
                 );
@@ -748,7 +752,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (event.inputType === "insertReplacementText") {
             const replacement = event.dataTransfer?.getData("text/plain");
             if (replacement !== undefined && replacement !== null) {
-                return () => createInsertTextTransaction(getEditorState(), replacement);
+                return () => createSourceInsertTextTransaction(getEditorState(), replacement);
             }
             return () => null;
         }
@@ -757,28 +761,28 @@ export function createEditorInputController(options: EditorInputControllerOption
             return () => {
                 const state = getEditorState();
                 return options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state)
-                    ?? createInsertTextTransaction(state, "\n");
+                    ?? createSourceInsertTextTransaction(state, "\n");
             };
         }
 
         if (event.inputType === "deleteContentBackward") {
-            return () => createDeleteBackwardTransaction(getEditorState());
+            return () => createSourceDeleteTransaction(getEditorState(), "backward", "grapheme");
         }
 
         if (event.inputType === "deleteContentForward") {
-            return () => createDeleteForwardTransaction(getEditorState());
+            return () => createSourceDeleteTransaction(getEditorState(), "forward", "grapheme");
         }
 
         if (event.inputType === "deleteWordBackward") {
-            return () => createDeleteTransaction(getEditorState(), "backward", "word");
+            return () => createSourceDeleteTransaction(getEditorState(), "backward", "word");
         }
 
         if (event.inputType === "deleteWordForward") {
-            return () => createDeleteTransaction(getEditorState(), "forward", "word");
+            return () => createSourceDeleteTransaction(getEditorState(), "forward", "word");
         }
 
         if (event.inputType === "deleteSoftLineBackward" || event.inputType === "deleteHardLineBackward") {
-            return () => createDeleteTransaction(
+            return () => createSourceDeleteTransaction(
                 getEditorState(),
                 "backward",
                 event.inputType === "deleteSoftLineBackward" ? "soft-line" : "hard-line",
@@ -786,7 +790,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         if (event.inputType === "deleteSoftLineForward" || event.inputType === "deleteHardLineForward") {
-            return () => createDeleteTransaction(
+            return () => createSourceDeleteTransaction(
                 getEditorState(),
                 "forward",
                 event.inputType === "deleteSoftLineForward" ? "soft-line" : "hard-line",
@@ -931,7 +935,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             const selection = bookmark.read();
             if (selection && sessionId === documentState.sessionId && source !== "") {
                 const state = getEditorState();
-                dispatch(createPasteTransaction(
+                dispatch(createSourcePasteTransaction(
                     { ...state, selection },
                     prepareVirtualEofInsertion(source, selection),
                 ));
@@ -965,7 +969,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             if (move && drag) {
                 applyInternalDragMove(drag, target);
             } else {
-                dispatch(createPasteTransaction(state, text));
+                dispatch(createSourcePasteTransaction(state, text));
             }
             internalDrag = null;
         } else {
@@ -1043,7 +1047,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             if (sources.length > 0 && mappedSelection && lease.sessionId === documentState.sessionId) {
                 const state = getEditorState();
                 const source = prepareVirtualEofInsertion(sources.join("\n\n"), mappedSelection);
-                dispatch(createPasteTransaction({ ...state, selection: mappedSelection }, source));
+                dispatch(createSourcePasteTransaction({ ...state, selection: mappedSelection }, source));
                 if (lease.focusOwner && document.activeElement === lease.focusOwner) {
                     syncDomSelectionFromState({ focus: "editor" });
                 }
@@ -1059,7 +1063,7 @@ export function createEditorInputController(options: EditorInputControllerOption
     function pasteSourceText(text: string): void {
         syncStateSelectionFromDom();
         const state = getEditorState();
-        dispatch(createPasteTransaction(state, prepareVirtualEofInsertion(text, state.selection)));
+        dispatch(createSourcePasteTransaction(state, prepareVirtualEofInsertion(text, state.selection)));
     }
 
     function prepareVirtualEofInsertion(
@@ -1101,6 +1105,31 @@ export function createEditorInputController(options: EditorInputControllerOption
     function supportsRichSourceEditing(): boolean {
         const format = options.getActiveDocumentFormat();
         return Boolean(format.clipboard?.richHtml && format.clipboard.mimeTypes.includes("text/markdown"));
+    }
+
+    function createSourceInsertTextTransaction(
+        state: ReturnType<typeof getEditorState>,
+        text: string,
+    ): Parameters<typeof dispatch>[0] {
+        return options.getActiveDocumentFormat().editing?.createInsertTextTransaction?.(state, text)
+            ?? createInsertTextTransaction(state, text);
+    }
+
+    function createSourcePasteTransaction(
+        state: ReturnType<typeof getEditorState>,
+        text: string,
+    ): Parameters<typeof dispatch>[0] {
+        return options.getActiveDocumentFormat().editing?.createPasteTransaction?.(state, text)
+            ?? createPasteTransaction(state, text);
+    }
+
+    function createSourceDeleteTransaction(
+        state: ReturnType<typeof getEditorState>,
+        direction: "backward" | "forward",
+        granularity: "grapheme" | "word" | "soft-line" | "hard-line",
+    ): Parameters<typeof dispatch>[0] | null {
+        return options.getActiveDocumentFormat().editing?.createDeleteTransaction?.(state, direction, granularity)
+            ?? createDeleteTransaction(state, direction, granularity);
     }
 
     function writeSourceClipboard(clipboard: DataTransfer, _text: string): boolean {
