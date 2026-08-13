@@ -48,3 +48,102 @@ body {
 input {
     font: inherit;
 }
+
+.unsaved-document-dialog {
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgb(28 28 30 / 7%);
+    color: #202124;
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+}
+
+.unsaved-document-dialog-panel {
+    width: min(440px, calc(100vw - 40px));
+    padding: 24px;
+    overflow: hidden;
+    border: 1px solid rgb(72 72 78 / 12%);
+    border-radius: 20px;
+    background: rgb(255 255 255 / 82%);
+    box-shadow:
+        0 22px 52px rgb(30 30 36 / 14%),
+        0 6px 18px rgb(30 30 36 / 7%),
+        inset 0 1px 0 rgb(255 255 255 / 90%);
+    -webkit-backdrop-filter: blur(28px) saturate(115%) brightness(106%);
+    backdrop-filter: blur(28px) saturate(115%) brightness(106%);
+}
+
+.unsaved-document-dialog h2 {
+    margin: 0;
+    font-size: 1.12rem;
+    font-weight: 650;
+    letter-spacing: -0.012em;
+}
+
+.unsaved-document-dialog p {
+    margin: 8px 0 22px;
+    color: #65676d;
+    font-size: 0.94rem;
+    line-height: 1.45;
+}
+
+.unsaved-document-dialog-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.unsaved-document-dialog button {
+    min-width: 86px;
+    min-height: 36px;
+    padding: 7px 15px;
+    border: 1px solid rgb(72 72 78 / 10%);
+    border-radius: 10px;
+    background: rgb(238 238 241 / 74%);
+    color: #303136;
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 520;
+    cursor: default;
+    transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.unsaved-document-dialog button:hover {
+    border-color: rgb(72 72 78 / 16%);
+    background: rgb(229 229 233 / 86%);
+}
+
+.unsaved-document-dialog button:active {
+    transform: scale(0.98);
+}
+
+.unsaved-document-dialog button:focus-visible {
+    outline: 2px solid rgb(0 122 255 / 44%);
+    outline-offset: 2px;
+}
+
+.unsaved-document-dialog .unsaved-document-dialog-discard {
+    color: #c5262f;
+}
+
+.unsaved-document-dialog .unsaved-document-dialog-save {
+    border-color: rgb(0 104 220 / 70%);
+    background: #0879e8;
+    color: #ffffff;
+}
+
+.unsaved-document-dialog .unsaved-document-dialog-save:hover {
+    border-color: rgb(0 91 195 / 82%);
+    background: #0672dc;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .unsaved-document-dialog button {
+        transition-duration: 0.01ms;
+    }
+}

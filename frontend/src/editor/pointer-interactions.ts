@@ -22,6 +22,7 @@ import {
     activateSourceToken,
     readSourceTokenDocumentRange,
     syncDomSelectionFromState,
+    syncStateSelectionFromDom,
 } from "./core/projection";
 import { dispatch } from "./core/store";
 
@@ -56,8 +57,17 @@ let pendingGutterHoverFrame = 0;
 let pointerAutoScrollFrame = 0;
 let lastPointerSelectionEvent: MouseEvent | null = null;
 let capturedPointer: { element: Element; pointerId: number } | null = null;
+let recentPrimaryPointerDown: {
+    timestamp: number;
+    x: number;
+    y: number;
+    pointerId: number;
+    count: number;
+} | null = null;
 
 const lineStartProbeWidth = 24;
+const multiClickDelayMs = 500;
+const multiClickRadiusPx = 6;
 
 export function configurePointerInteractions(nextHooks: PointerInteractionHooks): void {
     hooks = { ...hooks, ...nextHooks };
@@ -112,25 +122,62 @@ export function handleEditorMouseDown(event: PointerEvent): void {
         return;
     }
 
-    if (event.button !== 0 || event.detail < 2 || event.defaultPrevented) {
+    if (event.button !== 0 || event.defaultPrevented) {
         return;
     }
 
-    if (event.detail === 2) {
+    const clickCount = readPrimaryPointerClickCount(event);
+    if (clickCount < 2) {
+        return;
+    }
+
+    if (clickCount === 2) {
         const token = event.target instanceof Element
             ? event.target.closest<HTMLElement>(".markdown-token[data-source-atomic='true']")
             : null;
         const range = token ? readSourceTokenDocumentRange(token) : null;
-        if (!range) {
+        if (range) {
+            event.preventDefault();
+            dispatch({
+                changes: [],
+                selection: { anchor: range.from, head: range.to },
+                annotations: { userEvent: "programmatic", addToHistory: false },
+            });
+            syncDomSelectionFromState({ focus: "editor" });
+            setPointerSelecting(true);
             return;
         }
+
+        const target = event.target;
+        const plainTextTarget = target instanceof Element
+            ? target.closest<HTMLElement>(
+                ".markdown-token-editing, " +
+                ".markdown-token[data-source-raw], " +
+                ".format-block-source[data-block-source-editable='true']",
+            )
+            : null;
+        if (plainTextTarget && selectPlainTextWord(plainTextTarget, event.clientX, event.clientY)) {
+            event.preventDefault();
+            syncStateSelectionFromDom();
+            hooks.onBlockActivated?.(findBlock(plainTextTarget));
+            setPointerSelecting(true);
+            return;
+        }
+
+        const pointerTarget = target instanceof Element
+            ? findPointerTargetBlock(target, event.clientX, event.clientY)
+            : null;
+        const wordRange = pointerTarget ? findWordRange(getBlockText(pointerTarget.block), pointerTarget.offset) : null;
+        if (!pointerTarget || !wordRange) {
+            return;
+        }
+
         event.preventDefault();
-        dispatch({
-            changes: [],
-            selection: { anchor: range.from, head: range.to },
-            annotations: { userEvent: "programmatic", addToHistory: false },
-        });
-        syncDomSelectionFromState({ focus: "editor" });
+        selectPointerTargetRange(
+            { block: pointerTarget.block, offset: wordRange.from },
+            { block: pointerTarget.block, offset: wordRange.to },
+        );
+        syncStateSelectionFromDom();
         setPointerSelecting(true);
         return;
     }
@@ -143,6 +190,31 @@ export function handleEditorMouseDown(event: PointerEvent): void {
     event.preventDefault();
     selectBlockContents(block);
     hooks.onBlockActivated?.(block);
+}
+
+function readPrimaryPointerClickCount(event: PointerEvent): number {
+    const previous = recentPrimaryPointerDown;
+    const elapsed = previous ? event.timeStamp - previous.timestamp : Number.POSITIVE_INFINITY;
+    const distanceSquared = previous
+        ? ((event.clientX - previous.x) ** 2) + ((event.clientY - previous.y) ** 2)
+        : Number.POSITIVE_INFINITY;
+    const continuesSequence = Boolean(
+        previous &&
+        previous.pointerId === event.pointerId &&
+        elapsed >= 0 &&
+        elapsed <= multiClickDelayMs &&
+        distanceSquared <= multiClickRadiusPx ** 2,
+    );
+    const count = continuesSequence ? Math.min(previous!.count + 1, 3) : 1;
+
+    recentPrimaryPointerDown = {
+        timestamp: event.timeStamp,
+        x: event.clientX,
+        y: event.clientY,
+        pointerId: event.pointerId,
+        count,
+    };
+    return count;
 }
 
 export function handleDocumentMouseMove(event: PointerEvent): void {
@@ -162,6 +234,51 @@ export function handleDocumentMouseMove(event: PointerEvent): void {
         extendPointerSelection(event);
         requestPointerAutoScroll();
     }
+}
+
+function findWordRange(text: string, offset: number): { from: number; to: number } | null {
+    const point = clamp(offset, 0, text.length);
+    if (typeof Intl.Segmenter === "function") {
+        const segments = new Intl.Segmenter(undefined, { granularity: "word" }).segment(text);
+        for (const segment of segments) {
+            const from = segment.index;
+            const to = from + segment.segment.length;
+            if (segment.isWordLike && point >= from && point <= to) {
+                return { from, to };
+            }
+        }
+        return null;
+    }
+
+    for (const match of text.matchAll(/[\p{L}\p{M}\p{N}_]+/gu)) {
+        const from = match.index;
+        const to = from + match[0].length;
+        if (point >= from && point <= to) {
+            return { from, to };
+        }
+    }
+    return null;
+}
+
+function selectPlainTextWord(target: HTMLElement, clientX: number, clientY: number): boolean {
+    const wordRange = findWordRange(
+        target.textContent ?? "",
+        readPointerPlainTextOffset(target, clientX, clientY),
+    );
+    const selection = document.getSelection();
+    if (!wordRange || !selection) {
+        return false;
+    }
+
+    const start = getPlainTextSourcePosition(target, wordRange.from);
+    const end = getPlainTextSourcePosition(target, wordRange.to);
+    const range = document.createRange();
+    getElement<HTMLElement>("editor").focus({ preventScroll: true });
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
 }
 
 export function handleDocumentMouseUp(): void {
@@ -825,11 +942,19 @@ function readAtomicPreviewSourceOffset(target: Element | undefined, sourceLength
 }
 
 function getPlainTextSourcePosition(source: HTMLElement, offset: number): { node: Node; offset: number } {
-    const text = source.firstChild ?? source.appendChild(document.createTextNode(""));
-    return {
-        node: text,
-        offset: Math.min(Math.max(0, offset), text.textContent?.length ?? 0),
-    };
+    let remaining = Math.max(0, offset);
+    const walker = document.createTreeWalker(source, NodeFilter.SHOW_TEXT);
+    let text = walker.nextNode();
+    while (text) {
+        const length = text.textContent?.length ?? 0;
+        if (remaining <= length) {
+            return { node: text, offset: remaining };
+        }
+        remaining -= length;
+        text = walker.nextNode();
+    }
+
+    return { node: source, offset: source.childNodes.length };
 }
 
 function requestGutterHover(event: MouseEvent): void {

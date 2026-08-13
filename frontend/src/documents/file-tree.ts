@@ -1,7 +1,7 @@
 import { chooseDirectoryToOpen, readDirectoryTree } from "../bridge/documents";
 import type { DirectoryTree, DirectoryTreeItem } from "../bridge/types";
 import { createCenteredFrame } from "../ui/centered-frame";
-import { documentState, documentStateChangedEvent } from "./document-state";
+import { documentState } from "./document-state";
 import { renderFileTreeHtml } from "./file-tree-rendering";
 import { getFileTreeItem, moveFileTreeSelection, syncFileTreeSelection } from "./file-tree-selection";
 
@@ -20,11 +20,18 @@ let query = "";
 let selectedPath: string | null = null;
 let searchRenderTimer: number | null = null;
 let treeRootElement: HTMLElement | null = null;
-let activeFilePathForCollapsedState: string | null = null;
+let treeContextElement: HTMLElement | null = null;
+let treeContextNameElement: HTMLElement | null = null;
 let directoryRequestId = 0;
+let treeSignature = "";
+let directoryPollTimer = 0;
+let directoryPollingGeneration = 0;
+let consecutiveDirectoryRefreshFailures = 0;
 const collapsedDirectories = new Set<string>();
 const lastOpenDirectoryPathStorageKey = "glyph:last-open-directory-path";
 const maxSearchResults = 500;
+const directoryPollIntervalMs = 1_000;
+const maxDirectoryRefreshFailures = 2;
 
 export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): FileTreeController {
     host = nextHost;
@@ -37,19 +44,60 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
     search.className = "file-tree-search";
     search.type = "search";
     search.placeholder = "Search files";
+    search.autocomplete = "off";
+    search.spellcheck = false;
     search.setAttribute("aria-label", "Search files");
+    search.setAttribute("aria-describedby", "file-tree-search-hint");
+
+    const searchHint = document.createElement("kbd");
+    searchHint.id = "file-tree-search-hint";
+    searchHint.className = "file-tree-search-hint";
+    searchHint.textContent = "Esc";
+
+    const searchSurface = document.createElement("div");
+    searchSurface.className = "file-tree-search-surface";
+    searchSurface.append(search, searchHint);
+
+    const contextName = document.createElement("span");
+    contextName.className = "file-tree-context-name";
+
+    const resultsContext = document.createElement("div");
+    resultsContext.className = "file-tree-results-context";
+    resultsContext.hidden = true;
+    resultsContext.append(contextName);
 
     const treeRoot = document.createElement("div");
     treeRoot.className = "file-tree";
     treeRoot.setAttribute("role", "tree");
     treeRootElement = treeRoot;
+    treeContextElement = resultsContext;
+    treeContextNameElement = contextName;
 
-    frame.content.append(search, treeRoot);
+    const resultsSurface = document.createElement("div");
+    resultsSurface.className = "file-tree-results";
+    resultsSurface.append(resultsContext, treeRoot);
+
+    frame.content.append(searchSurface, resultsSurface);
     root.append(frame.element);
 
     const closeFrame = (): void => {
-        frame.hide();
-        clearSearch(treeRoot, search);
+        stopDirectoryPolling();
+        frame.hide(() => clearSearch(treeRoot, search));
+    };
+
+    const chooseAndOpenDirectory = async (): Promise<void> => {
+        const selectedDirectoryPath = await chooseDirectoryToOpen();
+        if (!selectedDirectoryPath) {
+            if (frame.isOpen()) {
+                search.focus({ preventScroll: true });
+            }
+            return;
+        }
+
+        await openDirectoryPath(selectedDirectoryPath, treeRoot, search);
+        frame.show();
+        search.focus({ preventScroll: true });
+        startDirectoryPolling();
     };
 
     search.addEventListener("input", () => {
@@ -78,11 +126,15 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
         }
     });
 
-    window.addEventListener(documentStateChangedEvent, () => {
-        syncCollapsedDirectoriesToActiveFile(treeRoot);
-    });
-
     treeRoot.addEventListener("click", (event) => {
+        const openDirectoryButton = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>(
+            "[data-file-tree-open-directory]",
+        );
+        if (openDirectoryButton) {
+            void chooseAndOpenDirectory();
+            return;
+        }
+
         const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-file-tree-path]");
         if (!button || button.dataset.fileTreeSelectable !== "true") {
             return;
@@ -101,25 +153,16 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
     renderTree(treeRoot);
 
     return {
-        openDirectory: async () => {
-            const selectedDirectoryPath = await chooseDirectoryToOpen();
-            if (!selectedDirectoryPath) {
-                return;
-            }
-
-            await openDirectoryPath(selectedDirectoryPath, treeRoot, search);
-            frame.show();
-            search.focus();
-        },
+        openDirectory: chooseAndOpenDirectory,
         toggle: () => {
             if (frame.isOpen()) {
                 closeFrame();
                 return;
             }
 
-            syncCollapsedDirectoriesToActiveFile(treeRoot);
             frame.show();
-            search.focus();
+            search.focus({ preventScroll: true });
+            startDirectoryPolling();
         },
     };
 }
@@ -138,32 +181,52 @@ export async function restoreLastOpenDirectory(): Promise<void> {
     }
 }
 
-export async function refreshOpenDirectoryTree(): Promise<void> {
+async function refreshOpenDirectoryTree(): Promise<void> {
     if (!tree?.path || !treeRootElement) {
         return;
     }
 
+    const requestId = ++directoryRequestId;
+    const path = tree.path;
     try {
-        const requestId = ++directoryRequestId;
-        const nextTree = await readDirectoryTree(tree.path);
+        const previousScrollTop = treeRootElement.scrollTop;
+        const nextTree = await readDirectoryTree(path);
         if (requestId !== directoryRequestId) {
             return;
         }
+        consecutiveDirectoryRefreshFailures = 0;
+        const nextSignature = createDirectoryTreeSignature(nextTree);
+        if (nextSignature === treeSignature) {
+            return;
+        }
         tree = nextTree;
+        treeSignature = nextSignature;
         pruneCollapsedDirectories();
         renderTree(treeRootElement);
+        treeRootElement.scrollTop = previousScrollTop;
     } catch (error) {
+        if (requestId !== directoryRequestId) {
+            return;
+        }
+        consecutiveDirectoryRefreshFailures += 1;
+        if (consecutiveDirectoryRefreshFailures >= maxDirectoryRefreshFailures) {
+            clearRemovedDirectoryTree();
+            return;
+        }
         console.error("Failed to refresh file tree:", error);
     }
 }
 
 async function openDirectoryPath(path: string, treeRoot: HTMLElement, search?: HTMLInputElement): Promise<void> {
+    stopDirectoryPolling();
     const requestId = ++directoryRequestId;
     const nextTree = await readDirectoryTree(path);
     if (requestId !== directoryRequestId) {
         return;
     }
     tree = nextTree;
+    treeSignature = createDirectoryTreeSignature(nextTree);
+    consecutiveDirectoryRefreshFailures = 0;
     resetCollapsedDirectories();
     query = "";
     selectedPath = null;
@@ -172,6 +235,68 @@ async function openDirectoryPath(path: string, treeRoot: HTMLElement, search?: H
     }
     rememberLastOpenDirectoryPath(tree.path);
     renderTree(treeRoot);
+}
+
+function startDirectoryPolling(): void {
+    stopDirectoryPolling();
+    const generation = directoryPollingGeneration;
+    void pollOpenDirectory(generation);
+}
+
+function stopDirectoryPolling(): void {
+    directoryPollingGeneration += 1;
+    if (directoryPollTimer) {
+        window.clearTimeout(directoryPollTimer);
+        directoryPollTimer = 0;
+    }
+}
+
+async function pollOpenDirectory(generation: number): Promise<void> {
+    if (generation !== directoryPollingGeneration || !tree) {
+        return;
+    }
+
+    await refreshOpenDirectoryTree();
+    if (generation !== directoryPollingGeneration || !tree) {
+        return;
+    }
+
+    directoryPollTimer = window.setTimeout(() => {
+        directoryPollTimer = 0;
+        void pollOpenDirectory(generation);
+    }, directoryPollIntervalMs);
+}
+
+function clearRemovedDirectoryTree(): void {
+    directoryRequestId += 1;
+    stopDirectoryPolling();
+    tree = null;
+    treeSignature = "";
+    query = "";
+    selectedPath = null;
+    collapsedDirectories.clear();
+    forgetLastOpenDirectoryPath();
+    if (treeRootElement) {
+        renderTree(treeRootElement);
+    }
+}
+
+function createDirectoryTreeSignature(directoryTree: DirectoryTree): string {
+    const parts = [normalizeSignaturePath(directoryTree.path)];
+    const appendItems = (items: DirectoryTreeItem[]): void => {
+        for (const item of items) {
+            parts.push(item.isDir ? "d" : "f", normalizeSignaturePath(item.path));
+            if (item.children) {
+                appendItems(item.children);
+            }
+        }
+    };
+    appendItems(directoryTree.children);
+    return parts.join("\0");
+}
+
+function normalizeSignaturePath(path: string): string {
+    return path.replace(/\\/g, "/");
 }
 
 function handleFileTreeKeydown(event: KeyboardEvent, treeRoot: HTMLElement, closeFrame: () => void): void {
@@ -278,6 +403,23 @@ function renderTree(root: HTMLElement): void {
     });
     selectFirstSearchResult(root);
     syncSelection(root);
+    syncTreeContext();
+}
+
+function syncTreeContext(): void {
+    if (!treeContextElement || !treeContextNameElement) {
+        return;
+    }
+
+    treeContextElement.hidden = !tree;
+    if (!tree) {
+        treeContextNameElement.textContent = "";
+        treeContextNameElement.removeAttribute("title");
+        return;
+    }
+
+    treeContextNameElement.textContent = tree.name || tree.path;
+    treeContextNameElement.title = tree.path;
 }
 
 function activateSelectedItem(root: HTMLElement, path: string, closeFrame: () => void): void {
@@ -324,14 +466,7 @@ function toggleDirectory(path: string): void {
 
 function resetCollapsedDirectories(): void {
     collapsedDirectories.clear();
-    activeFilePathForCollapsedState = documentState.activeFilePath;
-
-    if (!tree) {
-        return;
-    }
-
-    const expandedDirectories = getActiveFileAncestorDirectories(tree.children, documentState.activeFilePath);
-    collapseInactiveDirectories(tree.children, expandedDirectories);
+    collapseDirectories(tree?.children ?? []);
 }
 
 function pruneCollapsedDirectories(): void {
@@ -354,73 +489,16 @@ function pruneCollapsedDirectories(): void {
             collapsedDirectories.delete(path);
         }
     }
-    const activeAncestors = getActiveFileAncestorDirectories(tree.children, documentState.activeFilePath);
-    for (const path of activeAncestors) {
-        collapsedDirectories.delete(path);
-    }
 }
 
-function collapseInactiveDirectories(items: DirectoryTreeItem[], expandedDirectories: Set<string>): void {
+function collapseDirectories(items: DirectoryTreeItem[]): void {
     for (const item of items) {
         if (!item.isDir) {
             continue;
         }
 
-        if (!expandedDirectories.has(item.path)) {
-            collapsedDirectories.add(item.path);
-            continue;
-        }
-
-        collapseInactiveDirectories(item.children ?? [], expandedDirectories);
-    }
-}
-
-function getActiveFileAncestorDirectories(items: DirectoryTreeItem[], activeFilePath: string | null): Set<string> {
-    const ancestors = new Set<string>();
-    if (!activeFilePath) {
-        return ancestors;
-    }
-
-    findActiveFileAncestors(items, normalizePath(activeFilePath), ancestors);
-    return ancestors;
-}
-
-function findActiveFileAncestors(
-    items: DirectoryTreeItem[],
-    activeFilePath: string,
-    ancestors: Set<string>,
-    parentDirectories: string[] = [],
-): boolean {
-    for (const item of items) {
-        const nextParents = item.isDir ? [...parentDirectories, item.path] : parentDirectories;
-        if (normalizePath(item.path) === activeFilePath) {
-            for (const path of parentDirectories) {
-                ancestors.add(path);
-            }
-            return true;
-        }
-
-        if (item.isDir && findActiveFileAncestors(item.children ?? [], activeFilePath, ancestors, nextParents)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-function normalizePath(path: string): string {
-    return path.replace(/\\/g, "/").toLowerCase();
-}
-
-function syncCollapsedDirectoriesToActiveFile(root: HTMLElement): void {
-    if (documentState.activeFilePath === activeFilePathForCollapsedState) {
-        return;
-    }
-
-    resetCollapsedDirectories();
-    if (!query) {
-        selectedPath = documentState.activeFilePath;
-        renderTree(root);
+        collapsedDirectories.add(item.path);
+        collapseDirectories(item.children ?? []);
     }
 }
 

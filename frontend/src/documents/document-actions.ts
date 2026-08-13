@@ -26,7 +26,6 @@ import {
     getLastOpenDocumentPath,
     rememberLastOpenDocumentPath,
 } from "./document-storage";
-import { refreshOpenDirectoryTree } from "./file-tree";
 import {
     areSamePath,
     normalizeSuggestedFileName,
@@ -143,7 +142,7 @@ export async function openDocument(): Promise<void> {
     notifyDocumentStateChanged();
 
     try {
-        if (!(await confirmUnsavedDocumentAction())) {
+        if (!(await prepareToLeaveDocument())) {
             return;
         }
 
@@ -172,7 +171,7 @@ export async function openDocumentPath(path: string): Promise<void> {
     notifyDocumentStateChanged();
 
     try {
-        if (!(await confirmUnsavedDocumentAction())) {
+        if (!(await prepareToLeaveDocument())) {
             return;
         }
 
@@ -196,7 +195,7 @@ export async function createNewMarkdownDocument(suggestedFileName?: string): Pro
     notifyDocumentStateChanged();
 
     try {
-        if (documentState.hasUnsavedChanges && !(await confirmUnsavedDocumentAction({ suggestedFileName }))) {
+        if (!(await prepareToLeaveDocument({ suggestedFileName }))) {
             return;
         }
 
@@ -277,10 +276,6 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
         if (documentState.sessionId !== saveSessionId) {
             return false;
         }
-        if (pathChanged) {
-            await refreshOpenDirectoryTree();
-        }
-
         finalizePendingImages(preparedImages, saveSessionId);
         getHost().commitSavedDocument(path, content);
         documentState.hasUnsavedChanges = getHost().serializeDocument() !== content || documentState.fileNameDirty;
@@ -326,6 +321,18 @@ async function confirmUnsavedDocumentAction(options: SaveDocumentOptions = {}): 
     });
 }
 
+async function prepareToLeaveDocument(options: SaveDocumentOptions = {}): Promise<boolean> {
+    if (!documentState.hasUnsavedChanges) {
+        return true;
+    }
+
+    if (documentState.activeFilePath) {
+        return saveCurrentDocument();
+    }
+
+    return confirmUnsavedDocumentAction(options);
+}
+
 async function confirmWindowClose(readSuggestedFileName: () => string): Promise<void> {
     if (pendingWindowCloseConfirmation) {
         return;
@@ -333,7 +340,7 @@ async function confirmWindowClose(readSuggestedFileName: () => string): Promise<
 
     pendingWindowCloseConfirmation = true;
     try {
-        const shouldClose = await confirmUnsavedDocumentAction({
+        const shouldClose = await prepareToLeaveDocument({
             suggestedFileName: readSuggestedFileName(),
         });
         if (!shouldClose) {

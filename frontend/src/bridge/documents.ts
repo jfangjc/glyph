@@ -9,9 +9,10 @@ const textFileFilters: Dialogs.FileFilter[] = getDocumentFileFilters().map((filt
     Pattern: filter.patterns.join(";"),
 }));
 
-const saveChangesButton = "Yes";
-const discardChangesButton = "No";
+const saveChangesButton = "Save";
+const discardChangesButton = "Don't Save";
 const cancelChangesButton = "Cancel";
+let pendingUnsavedDocumentDecision: Promise<UnsavedDocumentDecision> | null = null;
 
 export async function chooseDocumentToOpen(): Promise<string | null> {
     const selection = await Dialogs.OpenFile({
@@ -62,26 +63,115 @@ export async function chooseDocumentToSave(filename: string): Promise<string | n
 }
 
 export async function chooseUnsavedDocumentDecision(): Promise<UnsavedDocumentDecision> {
-    const selection = await Dialogs.Question({
-        Title: "Save changes?",
-        Message: "Save changes before continuing?",
-        Buttons: [
-            { Label: saveChangesButton, IsDefault: true },
-            { Label: discardChangesButton },
-            { Label: cancelChangesButton, IsCancel: true },
-        ],
+    if (pendingUnsavedDocumentDecision) {
+        return pendingUnsavedDocumentDecision;
+    }
+
+    pendingUnsavedDocumentDecision = showUnsavedDocumentPrompt();
+    try {
+        return await pendingUnsavedDocumentDecision;
+    } finally {
+        pendingUnsavedDocumentDecision = null;
+    }
+}
+
+function showUnsavedDocumentPrompt(): Promise<UnsavedDocumentDecision> {
+    return new Promise((resolve) => {
+        const focusBeforePrompt = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        const dialog = document.createElement("div");
+        dialog.className = "unsaved-document-dialog";
+        dialog.setAttribute("role", "alertdialog");
+        dialog.setAttribute("aria-modal", "true");
+        dialog.setAttribute("aria-labelledby", "unsaved-document-dialog-title");
+        dialog.setAttribute("aria-describedby", "unsaved-document-dialog-message");
+
+        const panel = document.createElement("section");
+        panel.className = "unsaved-document-dialog-panel";
+
+        const title = document.createElement("h2");
+        title.id = "unsaved-document-dialog-title";
+        title.textContent = "Save changes?";
+
+        const message = document.createElement("p");
+        message.id = "unsaved-document-dialog-message";
+        message.textContent = "Do you want to save the changes you made to this document?";
+
+        const actions = document.createElement("div");
+        actions.className = "unsaved-document-dialog-actions";
+        const cancelButton = createUnsavedDocumentButton(cancelChangesButton, "cancel");
+        const discardButton = createUnsavedDocumentButton(discardChangesButton, "discard");
+        discardButton.classList.add("unsaved-document-dialog-discard");
+        const saveButton = createUnsavedDocumentButton(saveChangesButton, "save");
+        saveButton.classList.add("unsaved-document-dialog-save");
+        saveButton.autofocus = true;
+        actions.append(cancelButton, discardButton, saveButton);
+        panel.append(title, message, actions);
+        dialog.append(panel);
+
+        let settled = false;
+        const finish = (decision: UnsavedDocumentDecision): void => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            dialog.remove();
+            if (focusBeforePrompt?.isConnected) {
+                focusBeforePrompt.focus({ preventScroll: true });
+            }
+            resolve(decision);
+        };
+
+        dialog.addEventListener("click", (event) => {
+            if (event.target === dialog) {
+                finish("cancel");
+                return;
+            }
+
+            const button = event.target instanceof Element
+                ? event.target.closest<HTMLButtonElement>("button[data-unsaved-document-decision]")
+                : null;
+            const decision = button?.dataset.unsavedDocumentDecision;
+            if (decision === "save" || decision === "discard" || decision === "cancel") {
+                finish(decision);
+            }
+        });
+        dialog.addEventListener("keydown", (event) => {
+            event.stopPropagation();
+            if (event.key === "Escape") {
+                event.preventDefault();
+                finish("cancel");
+                return;
+            }
+
+            if (event.key !== "Tab") {
+                return;
+            }
+
+            const buttons = [cancelButton, discardButton, saveButton];
+            const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
+            const nextIndex = event.shiftKey
+                ? (currentIndex <= 0 ? buttons.length - 1 : currentIndex - 1)
+                : (currentIndex >= buttons.length - 1 ? 0 : currentIndex + 1);
+            event.preventDefault();
+            buttons[nextIndex].focus({ preventScroll: true });
+        });
+
+        document.body.append(dialog);
+        saveButton.focus({ preventScroll: true });
     });
-    const normalizedSelection = selection.trim().toLowerCase();
+}
 
-    if (normalizedSelection === saveChangesButton.toLowerCase()) {
-        return "save";
-    }
-
-    if (normalizedSelection === discardChangesButton.toLowerCase()) {
-        return "discard";
-    }
-
-    return "cancel";
+function createUnsavedDocumentButton(
+    label: string,
+    decision: UnsavedDocumentDecision,
+): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.unsavedDocumentDecision = decision;
+    button.textContent = label;
+    return button;
 }
 
 export function readDocument(path: string): Promise<DocumentFile> {

@@ -9,12 +9,12 @@
     overscroll-behavior: none;
     scroll-padding: 72px 0 120px;
     scrollbar-gutter: stable;
-    scrollbar-color: #b8b8b8 transparent;
+    scrollbar-color: #c6c8cb transparent;
     scrollbar-width: thin;
 }
 
 .editor-shell::-webkit-scrollbar {
-    width: 10px;
+    width: 8px;
 }
 
 .editor-shell::-webkit-scrollbar-track {
@@ -36,13 +36,13 @@ body.app-titlebar-host .editor-shell {
 }
 
 .editor-shell::-webkit-scrollbar-thumb {
-    border: 3px solid #ffffff;
+    border: 2px solid #ffffff;
     border-radius: 999px;
-    background: #b8b8b8;
+    background: #c6c8cb;
 }
 
 .editor-shell::-webkit-scrollbar-thumb:hover {
-    background: #8d8d8d;
+    background: #999da2;
 }
 
 .document-surface {

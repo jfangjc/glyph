@@ -81,8 +81,7 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
             return createReplaceSelectionTransaction(state, "\n", "input");
         }
 
-        const nextToSoftBreak = state.doc[range.from] === "\n" || state.doc[range.from - 1] === "\n";
-        const insert = options.shiftKey ? "  \n" : nextToSoftBreak ? "\n" : "\n\n";
+        const insert = options.shiftKey ? "  \n" : "\n";
         return createReplaceSelectionTransaction(state, insert, "input");
     }
 

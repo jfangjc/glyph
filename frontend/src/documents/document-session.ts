@@ -83,7 +83,7 @@ export function loadDocument(documentFile: DocumentFile): void {
     syncDocumentFooter(format);
     clearSourceHistory();
     documentState.lastSavedContent = serializeDocument();
-    documentState.hasUnsavedChanges = !documentState.activeFilePath;
+    documentState.hasUnsavedChanges = false;
     notifyDocumentStateChanged();
     syncDocumentWindowTitle();
 }
@@ -127,8 +127,7 @@ export function commitSavedDocument(path: string, savedContent: string): void {
 export function syncEditorDirtyState(): void {
     documentState.hasUnsavedChanges =
         serializeDocument() !== documentState.lastSavedContent ||
-        documentState.fileNameDirty ||
-        !documentState.activeFilePath;
+        documentState.fileNameDirty;
     notifyDocumentStateChanged();
     syncDocumentWindowTitle();
 }

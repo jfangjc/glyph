@@ -13,7 +13,16 @@ type FileTreeRenderOptions = {
 export function renderFileTreeHtml(options: FileTreeRenderOptions): string {
     if (!options.tree) {
         const shortcut = readShortcutLabel("file:open-directory");
-        return `<div class="file-tree-empty">Open a directory${shortcut ? ` with ${escapeHtml(shortcut)}` : ""}</div>`;
+        return `
+            <div class="file-tree-empty">
+                <strong class="file-tree-empty-title">No folder open</strong>
+                <span class="file-tree-empty-detail">Choose a folder to browse its files.</span>
+                <span class="file-tree-empty-actions">
+                    <button class="file-tree-empty-action" type="button" data-file-tree-open-directory>Open folder</button>
+                    ${shortcut ? `<kbd class="file-tree-shortcut">${escapeHtml(shortcut)}</kbd>` : ""}
+                </span>
+            </div>
+        `;
     }
 
     const state = { rendered: 0, truncated: false };
@@ -21,9 +30,11 @@ export function renderFileTreeHtml(options: FileTreeRenderOptions): string {
     const children = options.tree.children
         .map((child) => renderItem(child, 0, matchCache, state, options))
         .join("");
-    const truncated = state.truncated ? `<div class="file-tree-empty">Keep typing to narrow results</div>` : "";
+    const truncated = state.truncated
+        ? `<div class="file-tree-empty file-tree-empty--message">Keep typing to narrow results</div>`
+        : "";
 
-    return `<div role="group">${children || `<div class="file-tree-empty">No matching files</div>`}${truncated}</div>`;
+    return `<div role="group">${children || `<div class="file-tree-empty file-tree-empty--message">No matching files</div>`}${truncated}</div>`;
 }
 
 function renderItem(
@@ -51,7 +62,6 @@ function renderItem(
         item.isDir && !isCollapsed
             ? (item.children ?? []).map((child) => renderItem(child, depth + 1, matchCache, state, options)).join("")
             : "";
-    const disclosure = item.isDir ? (isCollapsed ? ">" : "v") : "";
     const expanded = item.isDir ? ` aria-expanded="${!isCollapsed}"` : "";
     state.rendered += 1;
 
@@ -69,7 +79,6 @@ function renderItem(
                 ${options.selectedPath === item.path ? `data-selected="true"` : ""}
                 ${expanded}
             >
-                <span class="file-tree-disclosure">${disclosure}</span>
                 <span class="file-tree-name">${escapeHtml(item.name)}</span>
             </button>
             ${children ? `<div role="group">${children}</div>` : ""}
