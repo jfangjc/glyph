@@ -141,11 +141,6 @@ body.app-titlebar-host .find-replace-panel {
         grid-template-columns: minmax(0, 1fr) auto auto auto;
     }
 
-    .find-replace-row > .find-replace-button:first-child {
-        grid-column: 1 / -1;
-        justify-self: start;
-    }
-
     .find-counter {
         justify-self: end;
     }

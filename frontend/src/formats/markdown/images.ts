@@ -33,7 +33,8 @@ export function hydrateMarkdownImagePreviews(content: HTMLElement, baseFilePath:
         }
 
         preview.dataset.resolvedFor = cacheKey;
-        preview.dataset.state = "loading";
+        setImagePreviewState(preview, "loading");
+        preview.setAttribute("aria-busy", "true");
         preview.replaceChildren();
 
         const pendingUrl = readPendingImageObjectUrl(source);
@@ -84,10 +85,13 @@ function setImagePreviewSource(
     image.decoding = "async";
     image.draggable = false;
     image.loading = "lazy";
+    if (/^https?:/i.test(source)) image.referrerPolicy = "no-referrer";
     image.dataset.imageOrigin = originLabel;
     image.addEventListener("load", () => {
         if (preview.dataset.resolvedFor === cacheKey) {
-            preview.dataset.state = "ready";
+            preview.style.setProperty("--markdown-image-natural-width", `${image.naturalWidth}px`);
+            setImagePreviewState(preview, "ready");
+            preview.setAttribute("aria-busy", "false");
         }
     });
     image.addEventListener("error", () => {
@@ -100,15 +104,23 @@ function setImagePreviewSource(
     preview.replaceChildren(image);
 
     if (image.complete && image.naturalWidth > 0) {
-        preview.dataset.state = "ready";
+        preview.style.setProperty("--markdown-image-natural-width", `${image.naturalWidth}px`);
+        setImagePreviewState(preview, "ready");
+        preview.setAttribute("aria-busy", "false");
     }
 }
 
 function showImageError(preview: HTMLElement, message: string, cacheKey?: string): void {
-    preview.dataset.state = "error";
+    setImagePreviewState(preview, "error");
+    preview.setAttribute("aria-busy", "false");
     const label = document.createElement("span");
     label.className = "markdown-image-error-label";
-    label.textContent = preview.dataset.imageAlt || message;
+    const title = document.createElement("strong");
+    title.textContent = preview.dataset.imageAlt || "Image unavailable";
+    const detail = document.createElement("small");
+    detail.className = "markdown-image-error-detail";
+    detail.textContent = `${message}: ${abbreviateImageSource(preview.dataset.imageSource ?? "")}`;
+    label.append(title, detail);
 
     const retry = document.createElement("button");
     retry.type = "button";
@@ -128,6 +140,17 @@ function showImageError(preview: HTMLElement, message: string, cacheKey?: string
         }
     });
     preview.replaceChildren(label, retry);
+}
+
+function setImagePreviewState(preview: HTMLElement, state: "loading" | "ready" | "error"): void {
+    preview.dataset.state = state;
+    const token = preview.closest<HTMLElement>(".markdown-image-token");
+    if (token) token.dataset.imageState = state;
+}
+
+function abbreviateImageSource(source: string): string {
+    if (source === "") return "no source";
+    return source.length <= 96 ? source : `${source.slice(0, 93)}…`;
 }
 
 function resolveLocalImageSource(

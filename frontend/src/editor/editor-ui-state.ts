@@ -68,24 +68,11 @@ function addBlockSourceRevealTarget(targets: Set<HTMLElement>, block: HTMLElemen
     }
 
     const type = readBlockType(block.dataset.type);
-    if (isListBlockType(type) && !isSelectionInsideListSource(block)) {
-        return;
-    }
 
     if (options.hasBlockSource(type)) {
         ensureBlockSourceRendered(block);
         targets.add(block);
     }
-}
-
-function isListBlockType(type: BlockType): boolean {
-    return type === "list" || type === "ordered-list" || type === "todo";
-}
-
-function isSelectionInsideListSource(block: HTMLElement): boolean {
-    const focusNode = document.getSelection()?.focusNode ?? null;
-    const prefix = block.querySelector<HTMLElement>(".format-block-source-prefix");
-    return Boolean(focusNode && prefix && (focusNode === prefix || prefix.contains(focusNode)));
 }
 
 function readRevealedBlockSourceBlocks(): HTMLElement[] {

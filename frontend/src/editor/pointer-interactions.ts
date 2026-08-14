@@ -20,6 +20,7 @@ import { nextGraphemeBoundary, previousGraphemeBoundary } from "../utils/text-bo
 import type { ProjectionCapability } from "./core/types";
 import {
     activateSourceToken,
+    readSourceTokenEditOffsetFromPreviewOffset,
     readSourceTokenDocumentRange,
     syncDomSelectionFromState,
     syncStateSelectionFromDom,
@@ -895,11 +896,11 @@ function focusVisualInlinePreviewSource(pointerTarget: PointerBlockTarget): bool
         ? pointerTarget.clientX < rect.left + rect.width / 2
         : pointerTarget.clientX > rect.left + rect.width / 2;
     const previewOffset = isAtomic
-        ? (afterMidpoint ? rawSource.length : 0)
+        ? readAtomicSourceEditOffset(rawSource, afterMidpoint)
         : readPointerPlainTextOffset(token, pointerTarget.clientX, pointerTarget.clientY);
     const sourceOffset = isAtomic
         ? previewOffset
-        : clamp(contentFrom + previewOffset, contentFrom, contentTo);
+        : readSourceTokenEditOffsetFromPreviewOffset(token, previewOffset);
     if (!activateSourceToken(token, sourceOffset)) {
         return false;
     }
@@ -927,6 +928,14 @@ function focusAtomicPreviewSource(pointerTarget: PointerBlockTarget): boolean {
     focusPlainTextElement(source, sourceOffset);
     hooks.onBlockActivated?.(pointerTarget.block);
     return true;
+}
+
+function readAtomicSourceEditOffset(rawSource: string, afterMidpoint: boolean): number {
+    if (rawSource.length <= 1) {
+        return 0;
+    }
+
+    return afterMidpoint ? rawSource.length - 1 : 1;
 }
 
 function readAtomicPreviewSourceOffset(target: Element | undefined, sourceLength: number): number | null {

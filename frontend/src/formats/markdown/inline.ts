@@ -66,6 +66,13 @@ type MarkdownInlineToken = {
     raw: string;
 };
 
+export type InlineSourceTokenRange = {
+    from: number;
+    to: number;
+    contentFrom: number | null;
+    contentTo: number | null;
+};
+
 const escapableCharacters = new Set(["\\", "`", "*", "_", "{", "}", "[", "]", "<", ">", "(", ")", "#", "+", "-", ".", "!", "|", "$", "~", "=", "^", ":"]);
 
 export function renderInlineMarkdown(
@@ -386,6 +393,85 @@ function readHardBreakToken(text: string, index: number): HardBreakToken | null 
         precedingSpaces += 1;
     }
     return precedingSpaces >= 2 ? { raw: "\n" } : null;
+}
+
+/**
+ * Returns source and visible-content ranges for every inline construct, including
+ * constructs nested inside labels. Commands use these ranges to translate an
+ * exact visual selection back to the complete Markdown unit that produced it.
+ */
+export function readInlineSourceTokenRanges(text: string): InlineSourceTokenRange[] {
+    const ranges: InlineSourceTokenRange[] = [];
+    collectInlineSourceTokenRanges(text, 0, ranges);
+    return ranges;
+}
+
+function collectInlineSourceTokenRanges(
+    text: string,
+    baseOffset: number,
+    ranges: InlineSourceTokenRange[],
+): void {
+    let cursor = 0;
+    while (cursor < text.length) {
+        const found = findFirstInlineToken(text.slice(cursor));
+        if (!found) {
+            break;
+        }
+
+        const localFrom = cursor + found.start;
+        const localTo = localFrom + found.token.raw.length;
+        const content = readInlineTokenSourceContentRange(found.token);
+        const range: InlineSourceTokenRange = {
+            from: baseOffset + localFrom,
+            to: baseOffset + localTo,
+            contentFrom: content ? baseOffset + localFrom + content.from : null,
+            contentTo: content ? baseOffset + localFrom + content.to : null,
+        };
+        ranges.push(range);
+
+        if (content && content.to > content.from && shouldScanInlineTokenContent(found.token)) {
+            collectInlineSourceTokenRanges(
+                found.token.raw.slice(content.from, content.to),
+                baseOffset + localFrom + content.from,
+                ranges,
+            );
+        }
+        cursor = localTo;
+    }
+}
+
+function shouldScanInlineTokenContent(token: MarkdownInlineToken): boolean {
+    return "marker" in token || token.raw.startsWith("[") && !token.raw.startsWith("[^");
+}
+
+function readInlineTokenSourceContentRange(
+    token: MarkdownInlineToken,
+): { from: number; to: number } | null {
+    if ("code" in token && typeof token.code === "string") {
+        return readContentRange(token.raw, token.code);
+    }
+    if ("character" in token && typeof token.character === "string") {
+        return readContentRange(token.raw, token.character);
+    }
+    if ("source" in token || "number" in token || !("label" in token) || typeof token.label !== "string") {
+        return null;
+    }
+    if ("marker" in token && typeof token.marker === "string") {
+        return { from: token.marker.length, to: token.raw.length - token.marker.length };
+    }
+    if (token.raw.startsWith("![") || token.raw.startsWith("[^")) {
+        return null;
+    }
+    if (token.raw.startsWith("[")) {
+        return { from: 1, to: 1 + token.label.length };
+    }
+    if (token.raw.startsWith("<") && token.raw.endsWith(">")) {
+        return { from: 1, to: token.raw.length - 1 };
+    }
+    if (token.raw === token.label) {
+        return { from: 0, to: token.raw.length };
+    }
+    return readContentRange(token.raw, token.label);
 }
 
 export function isCompleteInlineFormatToken(source: string, marker: "*" | "**"): boolean {

@@ -79,7 +79,7 @@ function renderClipboardHtml(selection: ClipboardSelectionContext): string {
     const parsed = selectedBlocks.length > 0
         ? { blocks: selectedBlocks }
         : parseMarkdownFragment(selection.state.doc.slice(selection.from, selection.to));
-    const context = readMarkdownRenderContext(parsed.blocks);
+    const context = readMarkdownRenderContext(selection.state.blocks.blocks);
     const html: string[] = [];
     for (let index = 0; index < parsed.blocks.length; index += 1) {
         const block = parsed.blocks[index];
@@ -281,7 +281,8 @@ function cleanRenderedInline(html: string): string {
             const image = token.querySelector<HTMLElement>(".markdown-image-preview");
             const source = image?.dataset.imageSource ?? "";
             const alt = image?.dataset.imageAlt ?? "";
-            token.replaceWith(createImageElement(source, alt));
+            const title = image?.dataset.imageTitle ?? "";
+            token.replaceWith(createImageElement(source, alt, title));
         } else if (preview) {
             token.replaceWith(preview);
         } else {
@@ -310,12 +311,13 @@ function cleanRenderedInline(html: string): string {
     return template.innerHTML;
 }
 
-function createImageElement(source: string, alt: string): HTMLImageElement {
+function createImageElement(source: string, alt: string, title: string): HTMLImageElement {
     const image = document.createElement("img");
     if (isSafeImageUrl(source)) {
         image.setAttribute("src", source);
     }
     image.alt = alt;
+    if (title) image.title = title;
     return image;
 }
 
@@ -352,7 +354,9 @@ function convertBlockNode(node: Node, depth: number): string {
     if (tag === "hr") {
         return "---\n\n";
     }
-    return `${convertInlineChildren(node)}${isBlockElement(tag) ? "\n" : ""}`;
+    return isBlockElement(tag)
+        ? `${convertInlineChildren(node)}\n`
+        : convertInlineNode(node);
 }
 
 function convertInlineNode(node: Node): string {
@@ -368,15 +372,22 @@ function convertInlineNode(node: Node): string {
     if (tag === "strong" || tag === "b") return content ? `**${content}**` : "";
     if (tag === "em" || tag === "i") return content ? `*${content}*` : "";
     if (tag === "del" || tag === "s" || tag === "strike") return content ? `~~${content}~~` : "";
+    if (tag === "mark") return content ? `==${content}==` : "";
+    if (tag === "sub") return content ? `~${content}~` : "";
+    if (tag === "sup") return content ? `^${content}^` : "";
     if (tag === "code") return serializeInlineCode(node.textContent ?? "");
     if (tag === "a") {
         const href = node.getAttribute("href") ?? "";
-        return href && isSafeLinkUrl(href) ? `[${content}](${escapeMarkdownDestination(href)})` : content;
+        const title = node.getAttribute("title") ?? "";
+        return href && isSafeLinkUrl(href) ? `[${content}](${serializeMarkdownDestination(href, title)})` : content;
     }
     if (tag === "img") {
         const source = node.getAttribute("src") ?? "";
         const alt = escapeMarkdownText(node.getAttribute("alt") ?? "");
-        return source && isSafeImageUrl(source) ? `![${alt}](${escapeMarkdownDestination(source)})` : alt;
+        const title = node.getAttribute("title") ?? "";
+        return source && isSafeImageUrl(source)
+            ? `![${alt}](${serializeMarkdownDestination(source, title)})`
+            : alt;
     }
     return content;
 }
@@ -434,6 +445,20 @@ function isSafeImageUrl(value: string): boolean {
 
 function escapeMarkdownDestination(value: string): string {
     return value.replace(/\\/g, "\\\\").replace(/\)/g, "\\)");
+}
+
+function serializeMarkdownDestination(destination: string, title: string): string {
+    const escapedDestination = escapeMarkdownDestination(destination);
+    if (!title) return escapedDestination;
+    const normalizedTitle = title.replace(/[\r\n]+/g, " ");
+    const escapedBackslashes = normalizedTitle.replace(/\\/g, "\\\\");
+    if (!normalizedTitle.includes('"')) {
+        return `${escapedDestination} "${escapedBackslashes}"`;
+    }
+    if (!normalizedTitle.includes("'")) {
+        return `${escapedDestination} '${escapedBackslashes}'`;
+    }
+    return `${escapedDestination} (${escapedBackslashes.replace(/\)/g, "\\)")})`;
 }
 
 function escapeMarkdownText(value: string): string {

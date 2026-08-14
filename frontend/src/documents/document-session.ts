@@ -15,7 +15,7 @@ import { readEditorDom } from "../editor/editor-dom";
 import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
 import { titleFromFileName } from "../formats/file-names";
 import type { DocumentFormat } from "../formats/types";
-import { resetPendingImagesForSession } from "../formats/markdown/pending-images";
+import { pruneUnreferencedPendingImages, resetPendingImagesForSession } from "../formats/markdown/pending-images";
 import { invalidateMarkdownImageCache } from "../formats/markdown/images";
 import {
     applyDocumentRenderContext,
@@ -49,6 +49,7 @@ export function installSourceStateDocumentIntegration(): void {
         if (next.doc !== previous.doc) {
             invalidateMarkdownImageCache();
             syncDocumentProjectionFromState(next, previous, transaction);
+            pruneUnreferencedPendingImages();
             syncEditorDirtyState();
         }
     });

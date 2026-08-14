@@ -73,6 +73,7 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
             convertHtml: htmlToMarkdown,
         },
         projection: {
+            resolveSelectionRange: readSelectedSourceRange,
             shouldUseNativePointer: (target) => {
                 if (target.closest("button, input, textarea, select")) {
                     return true;

@@ -12,7 +12,7 @@ import {
     readMarkdownTableCellFocusOffset,
     readMarkdownTableColumnCount,
 } from "./table";
-import { isCompleteInlineFormatToken } from "./inline";
+import { isCompleteInlineFormatToken, readInlineSourceTokenRanges } from "./inline";
 import { mapOffset } from "../../editor/core/transaction";
 
 export type DeleteDirection = "backward" | "forward";
@@ -39,7 +39,12 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
         return codeLineBreak;
     }
     if (range.from !== range.to) {
-        return createReplaceSelectionTransaction(state, "\n", "input");
+        const semanticRange = expandInlineVisualSelectionRange(state, range);
+        return createReplaceSelectionTransaction(
+            { ...state, selection: { anchor: semanticRange.from, head: semanticRange.to } },
+            "\n",
+            "input",
+        );
     }
 
     const block = findSourceBlockAtOffset(state.blocks, range.from);
@@ -273,7 +278,9 @@ export function createDeleteTransaction(
 ): Transaction | null {
     const range = orderedSelection(state);
     if (range.from !== range.to) {
-        return createDeleteRangeTransaction(range.from, range.to, "delete");
+        const semanticRange = expandVisualSelectionRange(state, range);
+        const deletionRange = expandStandaloneImageDeletionRange(state, semanticRange);
+        return createDeleteRangeTransaction(deletionRange.from, deletionRange.to, "delete");
     }
 
     const offset = range.from;
@@ -436,30 +443,156 @@ export function readSelectedSourceText(state: EditorState): string | null {
 }
 
 export function readSelectedSourceRange(state: EditorState): { from: number; to: number } | null {
-    const range = expandCompleteCodeBodySelection(state, orderedSelection(state));
+    const selected = orderedSelection(state);
+    if (selected.from === selected.to) return null;
+    const range = expandVisualSelectionRange(state, selected);
     return range.from === range.to ? null : range;
 }
 
 export function createCutTransaction(state: EditorState): Transaction | null {
-    const range = expandCompleteCodeBodySelection(state, orderedSelection(state));
-    if (range.from === range.to) {
-        return null;
-    }
+    const selected = orderedSelection(state);
+    if (selected.from === selected.to) return null;
+    const range = expandStandaloneImageDeletionRange(
+        state,
+        expandVisualSelectionRange(state, selected),
+    );
 
     return createDeleteRangeTransaction(range.from, range.to, "delete");
 }
 
-function expandCompleteCodeBodySelection(
+function expandVisualSelectionRange(
     state: EditorState,
     range: { from: number; to: number },
 ): { from: number; to: number } {
-    const block = state.blocks.blocks.find((candidate) => (
-        candidate.type === "code" &&
-        range.from === candidate.contentFrom &&
-        range.to === candidate.contentTo
-    ));
+    let expanded = expandInlineVisualSelectionRange(state, range);
+    let changed = true;
 
-    return block ? { from: block.sourceFrom, to: block.sourceTo } : range;
+    while (changed) {
+        changed = false;
+        for (const block of state.blocks.blocks) {
+            if (expanded.to < block.contentFrom || expanded.from > block.contentTo) {
+                continue;
+            }
+
+            const coversBlockContent = expanded.from <= block.contentFrom && expanded.to >= block.contentTo;
+            const expandLeadingSource = coversBlockContent && expanded.from === block.contentFrom;
+            const expandTrailingSource = coversBlockContent && expanded.to === block.contentTo;
+            if (expandLeadingSource || expandTrailingSource) {
+                const next = {
+                    from: expandLeadingSource ? block.sourceFrom : expanded.from,
+                    to: expandTrailingSource ? block.sourceTo : expanded.to,
+                };
+                if (next.from !== expanded.from || next.to !== expanded.to) {
+                    expanded = next;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    return expanded;
+}
+
+function expandInlineVisualSelectionRange(
+    state: EditorState,
+    range: { from: number; to: number },
+): { from: number; to: number } {
+    let expanded = { ...range };
+    for (const block of state.blocks.blocks) {
+        if (
+            !isRichMarkdownBlock(block.type) ||
+            range.to < block.contentFrom ||
+            range.from > block.contentTo
+        ) {
+            continue;
+        }
+
+        const content = state.doc.slice(block.contentFrom, block.contentTo);
+        const tokens = readInlineSourceTokenRanges(content).map((token) => ({
+            from: block.contentFrom + token.from,
+            to: block.contentFrom + token.to,
+            contentFrom: token.contentFrom === null ? null : block.contentFrom + token.contentFrom,
+            contentTo: token.contentTo === null ? null : block.contentFrom + token.contentTo,
+        }));
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const token of tokens) {
+                if (
+                    token.contentFrom === null ||
+                    token.contentTo === null ||
+                    isSelectionContainedByNestedToken(range, token, tokens)
+                ) {
+                    continue;
+                }
+                const next = {
+                    from: expanded.from === token.contentFrom && expanded.to >= token.contentTo
+                        ? Math.min(expanded.from, token.from)
+                        : expanded.from,
+                    to: expanded.to === token.contentTo && expanded.from <= token.contentFrom
+                        ? Math.max(expanded.to, token.to)
+                        : expanded.to,
+                };
+                if (next.from !== expanded.from || next.to !== expanded.to) {
+                    expanded = next;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    return expanded;
+}
+
+function isSelectionContainedByNestedToken(
+    selection: { from: number; to: number },
+    token: { from: number; to: number },
+    tokens: Array<{ from: number; to: number }>,
+): boolean {
+    return tokens.some((nested) => (
+        nested !== token &&
+        nested.from >= token.from &&
+        nested.to <= token.to &&
+        (nested.from > token.from || nested.to < token.to) &&
+        selection.from >= nested.from &&
+        selection.to <= nested.to
+    ));
+}
+
+function expandStandaloneImageDeletionRange(
+    state: EditorState,
+    range: { from: number; to: number },
+): { from: number; to: number } {
+    const selectedContentBlocks = state.blocks.blocks.filter((block) => (
+        block.contentFrom < range.to && block.contentTo > range.from && block.contentFrom !== block.contentTo
+    ));
+    const first = selectedContentBlocks[0];
+    const last = selectedContentBlocks[selectedContentBlocks.length - 1];
+    if (
+        !first ||
+        !last ||
+        range.from !== first.contentFrom ||
+        range.to !== last.contentTo ||
+        !selectedContentBlocks.every((block) => isStandaloneImageBlock(state, block))
+    ) {
+        return range;
+    }
+
+    if (state.doc.slice(range.to, range.to + 2) === "\n\n") {
+        return { from: range.from, to: range.to + 2 };
+    }
+    if (state.doc.slice(Math.max(0, range.from - 2), range.from) === "\n\n") {
+        return { from: range.from - 2, to: range.to };
+    }
+    return range;
+}
+
+function isStandaloneImageBlock(state: EditorState, block: SourceBlock): boolean {
+    if (block.type !== "paragraph") return false;
+    const content = state.doc.slice(block.contentFrom, block.contentTo);
+    if (!content.startsWith("![")) return false;
+    const tokens = readInlineSourceTokenRanges(content);
+    return tokens.length === 1 && tokens[0].from === 0 && tokens[0].to === content.length;
 }
 
 function createCodeBodyReplaceTransaction(

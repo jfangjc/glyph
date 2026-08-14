@@ -1,5 +1,11 @@
 import { getElement } from "../utils/dom";
-import { sourceOffsetToDomPoint, syncDomSelectionFromState, syncStateSelectionFromDom } from "./core/projection";
+import {
+    readSourceTokenDocumentRange,
+    setPinnedSourceRevealRange,
+    sourceOffsetToDomPoint,
+    syncDomSelectionFromState,
+    syncStateSelectionFromDom,
+} from "./core/projection";
 import { dispatch, getEditorState } from "./core/store";
 
 export type FindReplaceController = {
@@ -90,6 +96,7 @@ export function installFindReplaceController(options: {
     function close(): void {
         elements.panel.hidden = true;
         elements.highlightLayer.replaceChildren();
+        setPinnedSourceRevealRange(null);
         const focusOwner = focusOwnerBeforeOpen;
         focusOwnerBeforeOpen = null;
         if (focusOwner && focusOwner.isConnected && focusOwner !== options.editor) {
@@ -106,17 +113,31 @@ export function installFindReplaceController(options: {
     }
 
     function scan(chooseFromSelection = true): void {
+        const previousMatch = activeIndex >= 0 ? matches[activeIndex] ?? null : null;
         matches = collectMatches(getEditorState().doc, elements.findInput.value, findOptions);
         if (matches.length === 0) {
             activeIndex = -1;
+            setPinnedSourceRevealRange(null);
         } else if (chooseFromSelection) {
-            const head = getEditorState().selection.head;
-            const next = matches.findIndex((match) => match.from >= head);
+            const origin = previousMatch?.from ?? getEditorState().selection.head;
+            const retained = previousMatch
+                ? matches.findIndex((match) => match.from === previousMatch.from)
+                : -1;
+            const next = retained >= 0
+                ? retained
+                : matches.findIndex((match) => match.from >= origin);
             activeIndex = next >= 0 ? next : 0;
         } else {
             activeIndex = Math.min(Math.max(0, activeIndex), matches.length - 1);
         }
         syncControls();
+        if (activeIndex >= 0) {
+            if (chooseFromSelection) {
+                focusMatch(matches[activeIndex]);
+            } else {
+                setPinnedSourceRevealRange(matches[activeIndex]);
+            }
+        }
         scheduleHighlights();
     }
 
@@ -134,6 +155,7 @@ export function installFindReplaceController(options: {
             selection: { anchor: match.from, head: match.to },
             annotations: { userEvent: "programmatic", addToHistory: false },
         });
+        setPinnedSourceRevealRange(match);
         syncDomSelectionFromState({ focus: "preserve" });
         const point = sourceOffsetToDomPoint(match.from);
         const element = point.node instanceof Element ? point.node : point.node.parentElement;
@@ -218,28 +240,60 @@ export function installFindReplaceController(options: {
         if (elements.panel.hidden) return;
         const highlights: HTMLElement[] = [];
         matches.slice(0, 1000).forEach((match, index) => {
-            const start = sourceOffsetToDomPoint(match.from, { activateSourceTokens: false });
-            const end = sourceOffsetToDomPoint(match.to, { activateSourceTokens: false });
-            const range = document.createRange();
+            const active = index === activeIndex;
+            const range = active ? createRevealedMatchRange(match) : null;
+            const fallbackRange = range ?? document.createRange();
             try {
-                range.setStart(start.node, start.offset);
-                range.setEnd(end.node, end.offset);
+                if (!range) {
+                    const start = sourceOffsetToDomPoint(match.from, {
+                        activateBlockSource: active,
+                        activateSourceTokens: active,
+                    });
+                    const end = sourceOffsetToDomPoint(match.to, {
+                        activateBlockSource: active,
+                        activateSourceTokens: active,
+                    });
+                    fallbackRange.setStart(start.node, start.offset);
+                    fallbackRange.setEnd(end.node, end.offset);
+                }
             } catch {
                 return;
             }
-            for (const rect of Array.from(range.getClientRects())) {
+            for (const rect of Array.from(fallbackRange.getClientRects())) {
                 if (rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) continue;
+                if (!active && rect.width < 2) continue;
                 const highlight = document.createElement("div");
                 highlight.className = "find-highlight-rect";
                 highlight.style.left = `${rect.left}px`;
                 highlight.style.top = `${rect.top}px`;
                 highlight.style.width = `${Math.max(1, rect.width)}px`;
                 highlight.style.height = `${Math.max(1, rect.height)}px`;
-                if (index === activeIndex) highlight.dataset.active = "true";
+                if (active) highlight.dataset.active = "true";
                 highlights.push(highlight);
             }
         });
         elements.highlightLayer.append(...highlights);
+    }
+
+    function createRevealedMatchRange(match: FindMatch): Range | null {
+        for (const token of Array.from(document.querySelectorAll<HTMLElement>(
+            ".markdown-token[data-active='true'][data-source-pinned='true']",
+        ))) {
+            const tokenRange = readSourceTokenDocumentRange(token);
+            const text = token.firstChild;
+            if (
+                tokenRange &&
+                text?.nodeType === Node.TEXT_NODE &&
+                match.from >= tokenRange.from &&
+                match.to <= tokenRange.to
+            ) {
+                const range = document.createRange();
+                range.setStart(text, match.from - tokenRange.from);
+                range.setEnd(text, match.to - tokenRange.from);
+                return range;
+            }
+        }
+        return null;
     }
 
     function seedQueryFromSelection(): void {

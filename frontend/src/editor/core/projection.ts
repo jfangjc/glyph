@@ -58,6 +58,7 @@ type NativeSourceNavigationDirection = "forward" | "backward";
 let pendingNativeSourceNavigation: { direction: NativeSourceNavigationDirection; timestamp: number } | null = null;
 let verticalNavigationAffinity: { preferredColumn: number; revision: number } | null = null;
 let activeProjectionCapability: ProjectionCapability | undefined;
+let pinnedSourceRevealRange: { from: number; to: number } | null = null;
 
 export function configureProjectionCapability(capability: ProjectionCapability | undefined): void {
     activeProjectionCapability = capability;
@@ -318,6 +319,12 @@ export function domPointToSourceOffset(node: Node, offset: number): number {
     const inactiveSourceTokenOffset = content === node || content.contains(node)
         ? readInactiveSourceTokenOffset(content, node, offset)
         : null;
+    const activeSourceTokenOffset = content === node || content.contains(node)
+        ? readActiveSourceTokenOffset(content, node, offset)
+        : null;
+    if (activeSourceTokenOffset !== null) {
+        return clampOffset(contentFrom + activeSourceTokenOffset, contentTo);
+    }
     if (inactiveSourceTokenOffset !== null) {
         return clampOffset(contentFrom + inactiveSourceTokenOffset, contentTo);
     }
@@ -341,18 +348,28 @@ export function syncDomSelectionFromState(
     const focusOwner = options.focus === "preserve" && document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
-    const collapsed = state.selection.anchor === state.selection.head;
-
     reconcileActiveSourceTokensFromState(state);
+    if (state.selection.anchor !== state.selection.head) {
+        revealSourceTokensInRange(
+            Math.min(state.selection.anchor, state.selection.head),
+            Math.max(state.selection.anchor, state.selection.head),
+        );
+    }
 
-    const anchor = sourceOffsetToDomPoint(state.selection.anchor, {
-        activateBlockSource: collapsed,
-        activateSourceTokens: collapsed,
+    const displaySelection = activeProjectionCapability?.resolveSelectionRange?.(state)
+        ?? expandSelectionToSourceTokenBoundaries(state.selection);
+    const forward = state.selection.anchor <= state.selection.head;
+    const displayAnchor = forward ? displaySelection.from : displaySelection.to;
+    const displayHead = forward ? displaySelection.to : displaySelection.from;
+
+    const anchor = sourceOffsetToDomPoint(displayAnchor, {
+        activateBlockSource: true,
+        activateSourceTokens: true,
         affinity: state.selection.anchorAffinity,
     });
-    const head = sourceOffsetToDomPoint(state.selection.head, {
-        activateBlockSource: collapsed,
-        activateSourceTokens: collapsed,
+    const head = sourceOffsetToDomPoint(displayHead, {
+        activateBlockSource: true,
+        activateSourceTokens: true,
         affinity: state.selection.headAffinity,
     });
     const editor = getElement<HTMLElement>("editor");
@@ -378,6 +395,32 @@ export function syncDomSelectionFromState(
     if (focusOwner && focusOwner !== editor && focusOwner.isConnected) {
         focusOwner.focus({ preventScroll: true });
     }
+}
+
+function expandSelectionToSourceTokenBoundaries(
+    selection: ReturnType<typeof getEditorState>["selection"],
+): { from: number; to: number } {
+    const range = {
+        from: Math.min(selection.anchor, selection.head),
+        to: Math.max(selection.anchor, selection.head),
+    };
+    if (range.from === range.to) return range;
+
+    const expanded = { ...range };
+    for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token"))) {
+        const tokenRange = readSourceTokenDocumentRange(token);
+        const contentRange = readTokenContentRange(token);
+        if (!tokenRange || !contentRange) continue;
+        const contentFrom = tokenRange.from + contentRange.from;
+        const contentTo = tokenRange.from + contentRange.to;
+        if (range.from === contentFrom && range.to >= contentTo) {
+            expanded.from = Math.min(expanded.from, tokenRange.from);
+        }
+        if (range.to === contentTo && range.from <= contentFrom) {
+            expanded.to = Math.max(expanded.to, tokenRange.to);
+        }
+    }
+    return expanded;
 }
 
 export function syncStateSelectionFromDom(): boolean {
@@ -498,6 +541,8 @@ function domSelectionMatchesSnapshot(selection: Selection, snapshot: DomSelectio
 
 function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditorState>): void {
     const collapsed = state.selection.anchor === state.selection.head;
+    const selectionFrom = Math.min(state.selection.anchor, state.selection.head);
+    const selectionTo = Math.max(state.selection.anchor, state.selection.head);
     const activeTokens = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"));
     const blocksToRender = new Set<HTMLElement>();
 
@@ -506,15 +551,17 @@ function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditor
         if (!block) {
             continue;
         }
-        const content = getBlockContent(block);
-        const contentFrom = readDatasetNumber(content.dataset.sourceFrom);
-        const tokenRange = readSourceTokenRange(content, token);
-        const tokenFrom = contentFrom !== null && tokenRange ? contentFrom + tokenRange.from : null;
-        const tokenTo = contentFrom !== null && tokenRange ? contentFrom + tokenRange.to : null;
+        const tokenRange = readSourceTokenDocumentRange(token);
+        const tokenFrom = tokenRange?.from ?? null;
+        const tokenTo = tokenRange?.to ?? null;
         const selectionInsideToken = Boolean(
             tokenFrom !== null &&
             tokenTo !== null &&
-            collapsed && state.selection.head > tokenFrom && state.selection.head < tokenTo,
+            (collapsed
+                ? state.selection.head > tokenFrom && state.selection.head < tokenTo
+                : selectionFrom < tokenTo && selectionTo > tokenFrom) ||
+            token.dataset.sourcePinned === "true" ||
+            tokenFrom !== null && tokenTo !== null && doesRangeIntersectPinnedSource(tokenFrom, tokenTo),
         );
         if (!selectionInsideToken) {
             blocksToRender.add(block);
@@ -539,20 +586,88 @@ export function syncInlineSourceRevealFromDomSelection(): boolean {
     return true;
 }
 
-/** Keep range selections rendered while preserving their canonical source offsets. */
 export function syncInlineSourceRevealFromSelection(): boolean {
     const state = getEditorState();
     if (state.selection.anchor === state.selection.head) {
         return syncInlineSourceRevealFromDomSelection();
     }
 
-    const rerendered = rerenderActiveSourceTokenBlocks(readAllActiveSourceTokenBlocks());
-    if (!rerendered) {
-        return false;
+    const selectionFrom = Math.min(state.selection.anchor, state.selection.head);
+    const selectionTo = Math.max(state.selection.anchor, state.selection.head);
+    const changed = revealSourceTokensInRange(selectionFrom, selectionTo);
+    if (changed) syncDomSelectionFromState();
+    return changed;
+}
+
+export function revealSourceTokensInRange(selectionFrom: number, selectionTo: number): boolean {
+    const blocksToRender = new Set<HTMLElement>();
+    for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
+        const tokenRange = readSourceTokenDocumentRange(token);
+        if (
+            !tokenRange ||
+            selectionFrom >= tokenRange.to || selectionTo <= tokenRange.from
+        ) {
+            if (tokenRange && doesRangeIntersectPinnedSource(tokenRange.from, tokenRange.to)) continue;
+            const block = findBlock(token);
+            if (block) blocksToRender.add(block);
+        }
     }
 
-    syncDomSelectionFromState();
-    return true;
+    let changed = rerenderActiveSourceTokenBlocks(Array.from(blocksToRender));
+    const sourceTokens = Array.from(
+        document.querySelectorAll<HTMLElement>(".markdown-token[data-source-raw]"),
+    );
+    for (const token of sourceTokens) {
+        const tokenRange = readSourceTokenDocumentRange(token);
+        if (
+            token.isConnected &&
+            tokenRange &&
+            selectionFrom < tokenRange.to &&
+            selectionTo > tokenRange.from &&
+            !hasNestedSourceTokenContainingSelection(token, selectionFrom, selectionTo) &&
+            activateSourceToken(token)
+        ) {
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+function hasNestedSourceTokenContainingSelection(
+    token: HTMLElement,
+    selectionFrom: number,
+    selectionTo: number,
+): boolean {
+    for (const nested of Array.from(token.querySelectorAll<HTMLElement>(".markdown-token"))) {
+        const nestedRange = readSourceTokenDocumentRange(nested);
+        if (nestedRange && selectionFrom >= nestedRange.from && selectionTo <= nestedRange.to) {
+            return true;
+        }
+    }
+    return false;
+}
+
+export function setPinnedSourceRevealRange(range: { from: number; to: number } | null): void {
+    for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-source-pinned='true']"))) {
+        delete token.dataset.sourcePinned;
+    }
+    pinnedSourceRevealRange = range;
+    if (range) {
+        revealSourceTokensInRange(range.from, range.to);
+        for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
+            const tokenRange = readSourceTokenDocumentRange(token);
+            if (tokenRange && range.from < tokenRange.to && range.to > tokenRange.from) {
+                token.dataset.sourcePinned = "true";
+            }
+        }
+    } else {
+        reconcileActiveSourceTokensFromState(getEditorState());
+    }
+}
+
+function doesRangeIntersectPinnedSource(from: number, to: number): boolean {
+    return Boolean(pinnedSourceRevealRange && pinnedSourceRevealRange.from < to && pinnedSourceRevealRange.to > from);
 }
 
 export function clearInlineSourceReveal(): void {
@@ -580,6 +695,11 @@ function readSelectedSourceTokenBoundaryOffset(selection: Selection, node: Node,
     const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
     const block = findBlock(node);
     if (!range || !block) {
+        return null;
+    }
+
+    const boundaryElement = node instanceof Element ? node : node.parentElement;
+    if (boundaryElement?.closest(".markdown-token")) {
         return null;
     }
 
@@ -885,7 +1005,11 @@ function readInactiveSourceTokenOffset(content: HTMLElement, node: Node, offset:
     }
 
     const rawSource = readRawSourceTokenText(token);
-    const tokenRange = rawSource === null ? null : readSourceTokenRange(content, token);
+    const contentFrom = readDatasetNumber(content.dataset.sourceFrom);
+    const documentRange = rawSource === null ? null : readSourceTokenDocumentRange(token);
+    const tokenRange = contentFrom === null || !documentRange
+        ? null
+        : { from: documentRange.from - contentFrom, to: documentRange.to - contentFrom };
     if (rawSource === null || !tokenRange) {
         return null;
     }
@@ -895,19 +1019,24 @@ function readInactiveSourceTokenOffset(content: HTMLElement, node: Node, offset:
 
 function findInactiveSourceTokenAtDomPoint(node: Node): HTMLElement | null {
     const element = node instanceof Element ? node : node.parentElement;
-    let token = element?.closest<HTMLElement>(".markdown-token") ?? null;
-    while (token) {
-        const owner = token.parentElement?.closest<HTMLElement>(".markdown-token") ?? null;
-        if (!owner) {
-            break;
-        }
-        token = owner;
-    }
+    const token = element?.closest<HTMLElement>(".markdown-token") ?? null;
     if (!token || token.dataset.active === "true" || readRawSourceTokenText(token) === null) {
         return null;
     }
 
     return token;
+}
+
+function readActiveSourceTokenOffset(content: HTMLElement, node: Node, offset: number): number | null {
+    const element = node instanceof Element ? node : node.parentElement;
+    const token = element?.closest<HTMLElement>(".markdown-token[data-active='true']") ?? null;
+    const contentFrom = readDatasetNumber(content.dataset.sourceFrom);
+    const tokenRange = token ? readSourceTokenDocumentRange(token) : null;
+    if (!token || contentFrom === null || !tokenRange) {
+        return null;
+    }
+
+    return tokenRange.from - contentFrom + getTokenPreviewBoundaryOffset(token, node, offset);
 }
 
 function readInactiveTokenRawOffset(token: HTMLElement, rawSource: string, node: Node, offset: number): number {
@@ -927,7 +1056,7 @@ function readInactiveTokenRawOffset(token: HTMLElement, rawSource: string, node:
         return offset <= 0 ? 0 : rawSource.length;
     }
 
-    const previewOffset = getTokenPreviewBoundaryOffset(token, node, offset);
+    const previewOffset = getNestedSourceBoundaryOffset(token, node, offset);
     return clampOffset(contentRange.from + previewOffset, contentRange.to);
 }
 
@@ -1199,6 +1328,16 @@ function findSourceTokenDomPointInNode(
 ): DomPoint | null | undefined {
     const rawSource = readRawSourceTokenText(node);
     if (rawSource !== null) {
+        if (node instanceof HTMLElement && node.dataset.active !== "true") {
+            const nested = findActiveNestedSourceTokenAtOffset(node, offset);
+            if (nested) {
+                return findSourceTokenDomPointInNode(
+                    nested.token,
+                    offset - nested.from,
+                    activateSourceTokens,
+                );
+            }
+        }
         if (offset >= 0 && offset <= rawSource.length) {
             return readRawSourceTokenDomPoint(node, rawSource, offset, activateSourceTokens);
         }
@@ -1234,6 +1373,45 @@ function findSourceTokenDomPointInNode(
     return undefined;
 }
 
+function getNestedSourceBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
+    if (current === anchorNode) {
+        if (current.nodeType === Node.TEXT_NODE) {
+            return stripCaretSpacers((current.textContent ?? "").slice(0, anchorOffset)).length;
+        }
+
+        return Array.from(current.childNodes)
+            .slice(0, Math.max(0, anchorOffset))
+            .reduce((length, child) => length + readNestedSourceSearchLength(child), 0);
+    }
+
+    let sourceOffset = 0;
+    for (const child of Array.from(current.childNodes)) {
+        if (child === anchorNode || child.contains(anchorNode)) {
+            return sourceOffset + getNestedSourceBoundaryOffset(child, anchorNode, anchorOffset);
+        }
+        sourceOffset += readNestedSourceSearchLength(child);
+    }
+    return sourceOffset;
+}
+
+function findActiveNestedSourceTokenAtOffset(
+    token: HTMLElement,
+    offset: number,
+): { token: HTMLElement; from: number } | null {
+    const contentRange = readTokenContentRange(token);
+    if (!contentRange) return null;
+
+    for (const nested of Array.from(token.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
+        const nestedRange = readNestedSourceTokenRange(token, nested);
+        const from = nestedRange ? contentRange.from + nestedRange.from : null;
+        const to = nestedRange ? contentRange.from + nestedRange.to : null;
+        if (from !== null && to !== null && offset >= from && offset <= to) {
+            return { token: nested, from };
+        }
+    }
+    return null;
+}
+
 function readRawSourceTokenDomPoint(
     node: Node,
     rawSource: string,
@@ -1242,6 +1420,10 @@ function readRawSourceTokenDomPoint(
 ): DomPoint | null {
     if (!(node instanceof HTMLElement)) {
         return null;
+    }
+
+    if (node.dataset.active === "true" && node.classList.contains(markdownTokenEditingClass)) {
+        return getPlainTextDomPoint(node, offset);
     }
 
     if (offset <= 0) {
@@ -1266,6 +1448,9 @@ function activateRawSourceTokenAtOffset(token: HTMLElement, rawSource: string, o
         return getPlainTextDomPoint(token, offset);
     }
 
+    if (token.classList.contains("markdown-code-token")) {
+        token.style.setProperty("--markdown-token-preview-width", `${token.getBoundingClientRect().width}px`);
+    }
     token.dataset.active = "true";
     delete token.dataset.sourceRaw;
     token.classList.add(markdownTokenEditingClass);
@@ -1333,9 +1518,127 @@ export function readSourceTokenDocumentRange(token: HTMLElement): { from: number
     const content = block ? getBlockContent(block) : null;
     const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
     const tokenRange = content ? readSourceTokenRange(content, token) : null;
-    return contentFrom === null || !tokenRange
-        ? null
-        : { from: contentFrom + tokenRange.from, to: contentFrom + tokenRange.to };
+    if (contentFrom !== null && tokenRange) {
+        return { from: contentFrom + tokenRange.from, to: contentFrom + tokenRange.to };
+    }
+
+    const owner = token.parentElement?.closest<HTMLElement>(".markdown-token") ?? null;
+    const ownerRange = owner ? readSourceTokenDocumentRange(owner) : null;
+    const ownerContentRange = owner ? readTokenContentRange(owner) : null;
+    const nestedRange = owner ? readNestedSourceTokenRange(owner, token) : null;
+    return ownerRange && ownerContentRange && nestedRange
+        ? {
+            from: ownerRange.from + ownerContentRange.from + nestedRange.from,
+            to: ownerRange.from + ownerContentRange.from + nestedRange.to,
+        }
+        : null;
+}
+
+export function readSourceTokenEditOffsetFromPreviewOffset(
+    token: HTMLElement,
+    previewOffset: number,
+): number {
+    const rawSource = readRawSourceTokenText(token) ?? "";
+    const contentRange = readTokenContentRange(token);
+    if (!contentRange) {
+        return readAtomicPreviewEditOffset(rawSource.length, previewOffset, readTokenPreviewText(token).length);
+    }
+
+    return clampOffset(
+        contentRange.from + readNestedPreviewSourceOffset(token, previewOffset),
+        contentRange.to,
+    );
+}
+
+function readNestedPreviewSourceOffset(node: Node, previewOffset: number): number {
+    if (node.nodeType === Node.TEXT_NODE) {
+        return clampOffset(previewOffset, stripCaretSpacers(node.textContent ?? "").length);
+    }
+
+    const children = Array.from(node.childNodes);
+    let previewCursor = 0;
+    let sourceCursor = 0;
+    for (let index = 0; index < children.length; index += 1) {
+        const child = children[index];
+        const previewLength = readTokenPreviewTextFromNode(child);
+        const sourceLength = readNestedSourceSearchLength(child);
+        const previewEnd = previewCursor + previewLength;
+        if (previewOffset < previewEnd || index === children.length - 1 && previewOffset <= previewEnd) {
+            const localOffset = clampOffset(previewOffset - previewCursor, previewLength);
+            const rawSource = readRawSourceTokenText(child);
+            const contentRange = child instanceof HTMLElement ? readTokenContentRange(child) : null;
+            if (rawSource !== null && contentRange) {
+                return sourceCursor + contentRange.from + readNestedPreviewSourceOffset(child, localOffset);
+            }
+            if (rawSource !== null) {
+                return sourceCursor + readAtomicPreviewEditOffset(rawSource.length, localOffset, previewLength);
+            }
+            return sourceCursor + readNestedPreviewSourceOffset(child, localOffset);
+        }
+        previewCursor = previewEnd;
+        sourceCursor += sourceLength;
+    }
+    return sourceCursor;
+}
+
+function readAtomicPreviewEditOffset(rawLength: number, previewOffset: number, previewLength: number): number {
+    if (rawLength <= 1) return 0;
+    return previewOffset * 2 < previewLength ? 1 : rawLength - 1;
+}
+
+function readNestedSourceTokenRange(
+    owner: HTMLElement,
+    token: HTMLElement,
+): { from: number; to: number } | null {
+    let cursor = 0;
+    for (const child of Array.from(owner.childNodes)) {
+        const range = readNestedSourceTokenRangeInNode(child, token, cursor);
+        if (range) return range;
+        cursor += readNestedSourceSearchLength(child);
+    }
+    return null;
+}
+
+function readNestedSourceTokenRangeInNode(
+    node: Node,
+    token: HTMLElement,
+    start: number,
+): { from: number; to: number } | null {
+    if (node === token) {
+        return { from: start, to: start + readNestedSourceSearchLength(node) };
+    }
+
+    if (node instanceof HTMLElement && node.classList.contains("markdown-token")) {
+        if (!node.contains(token)) return null;
+        const contentRange = readTokenContentRange(node);
+        if (!contentRange) return null;
+        const nestedRange = readNestedSourceTokenRange(node, token);
+        return nestedRange
+            ? {
+                from: start + contentRange.from + nestedRange.from,
+                to: start + contentRange.from + nestedRange.to,
+            }
+            : null;
+    }
+
+    let cursor = start;
+    for (const child of Array.from(node.childNodes)) {
+        const range = readNestedSourceTokenRangeInNode(child, token, cursor);
+        if (range) return range;
+        cursor += readNestedSourceSearchLength(child);
+    }
+    return null;
+}
+
+function readNestedSourceSearchLength(node: Node): number {
+    const rawSource = readRawSourceTokenText(node);
+    if (rawSource !== null) return rawSource.length;
+    if (node instanceof HTMLElement && node.dataset.caretSpacer === "true") return 0;
+    if (node.nodeType === Node.TEXT_NODE) return stripCaretSpacers(node.textContent ?? "").length;
+    return Array.from(node.childNodes).reduce(
+        (length, child) => length + readNestedSourceSearchLength(child),
+        0,
+    );
 }
 
 function clearActiveSourceTokensOutsideSelection(): void {
@@ -1346,12 +1649,15 @@ function clearActiveSourceTokensOutsideSelection(): void {
         const blocksToRender = new Set<HTMLElement>();
         for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
             const block = findBlock(token);
-            const content = block ? getBlockContent(block) : null;
-            const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
-            const tokenRange = content ? readSourceTokenRange(content, token) : null;
-            const tokenFrom = contentFrom !== null && tokenRange ? contentFrom + tokenRange.from : null;
-            const tokenTo = contentFrom !== null && tokenRange ? contentFrom + tokenRange.to : null;
-            if (block && (tokenFrom === null || tokenTo === null || !(selectionFrom < tokenTo && selectionTo > tokenFrom))) {
+            const tokenRange = readSourceTokenDocumentRange(token);
+            const tokenFrom = tokenRange?.from ?? null;
+            const tokenTo = tokenRange?.to ?? null;
+            if (
+                block &&
+                (tokenFrom === null || tokenTo === null ||
+                    !(selectionFrom < tokenTo && selectionTo > tokenFrom) &&
+                    !doesRangeIntersectPinnedSource(tokenFrom, tokenTo))
+            ) {
                 blocksToRender.add(block);
             }
         }
@@ -1373,7 +1679,11 @@ function readActiveSourceTokenBlocksOutsideDomSelection(): HTMLElement[] {
     return Array.from(
         new Set(
             Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))
-                .filter((token) => token !== focusedActiveToken)
+                .filter((token) => {
+                    if (token === focusedActiveToken || token.dataset.sourcePinned === "true") return false;
+                    const range = readSourceTokenDocumentRange(token);
+                    return !range || !doesRangeIntersectPinnedSource(range.from, range.to);
+                })
                 .map((token) => findBlock(token))
                 .filter((block): block is HTMLElement => Boolean(block)),
         ),
@@ -1384,6 +1694,7 @@ function readAllActiveSourceTokenBlocks(): HTMLElement[] {
     return Array.from(
         new Set(
             Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))
+                .filter((token) => token.dataset.sourcePinned !== "true")
                 .map((token) => findBlock(token))
                 .filter((block): block is HTMLElement => Boolean(block)),
         ),

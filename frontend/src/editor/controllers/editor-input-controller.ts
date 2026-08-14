@@ -3,6 +3,7 @@ import { Clipboard } from "@wailsio/runtime";
 import {
     isSupportedPastedImage,
     persistImageFiles,
+    pruneUnreferencedPendingImages,
     stagePendingImages,
 } from "../../formats/markdown/pending-images";
 import {
@@ -25,7 +26,6 @@ import {
     findBlock,
 } from "../blocks/view";
 import {
-    createCutTransaction,
     createDeleteTransaction,
     createInsertTextTransaction,
     createPasteTransaction,
@@ -241,7 +241,11 @@ export function createEditorInputController(options: EditorInputControllerOption
                     const from = Math.min(selection.anchor, selection.head);
                     const to = Math.max(selection.anchor, selection.head);
                     if (current.doc.slice(from, to) === clipboardLease.selectedText) {
-                        const transaction = createCutTransaction({ ...current, selection });
+                        const transaction = createSourceDeleteTransaction(
+                            { ...current, selection },
+                            "forward",
+                            "grapheme",
+                        );
                         if (transaction) {
                             dispatch(transaction);
                         }
@@ -503,8 +507,9 @@ export function createEditorInputController(options: EditorInputControllerOption
     function handleEditorDragStart(event: DragEvent): void {
         syncStateSelectionFromDom();
         const state = getEditorState();
-        const from = Math.min(state.selection.anchor, state.selection.head);
-        const to = Math.max(state.selection.anchor, state.selection.head);
+        const selection = readClipboardSelection(state) ?? state.selection;
+        const from = Math.min(selection.anchor, selection.head);
+        const to = Math.max(selection.anchor, selection.head);
         if (!event.dataTransfer || from === to) {
             internalDrag = null;
             return;
@@ -518,9 +523,10 @@ export function createEditorInputController(options: EditorInputControllerOption
             to,
             source,
         };
+        const payload = createClipboardPayload();
         event.dataTransfer.effectAllowed = "copyMove";
-        event.dataTransfer.setData("text/markdown", source);
-        event.dataTransfer.setData("text/plain", source);
+        event.dataTransfer.setData("text/markdown", payload.markdown);
+        event.dataTransfer.setData("text/plain", payload.plainText);
     }
 
     function handleEditorDragEnd(): void {
@@ -641,6 +647,9 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         if (isSourceVerticalNavigationKey(event)) {
+            if (shouldUseNativeVisualLineNavigation()) {
+                return false;
+            }
             syncStateSelectionFromDom();
             if (moveSourceSelectionVertically(
                 event.key === "ArrowUp" ? "up" : "down",
@@ -657,6 +666,15 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function handleSourceHorizontalNavigation(event: KeyboardEvent): boolean {
         if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || event.metaKey && !["Home", "End"].includes(event.key)) {
+            return false;
+        }
+
+        if (
+            (event.key === "Home" || event.key === "End") &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            shouldUseNativeVisualLineNavigation()
+        ) {
             return false;
         }
 
@@ -859,7 +877,11 @@ export function createEditorInputController(options: EditorInputControllerOption
             ? state.doc.slice(clipboardSelection.anchor, clipboardSelection.head)
             : null;
         const transaction = clipboardSelection
-            ? createCutTransaction({ ...state, selection: clipboardSelection })
+            ? createSourceDeleteTransaction(
+                { ...state, selection: clipboardSelection },
+                "forward",
+                "grapheme",
+            )
             : null;
         if (selectedText === null || !transaction || !event.clipboardData) {
             return preventUnmappedSourceClipboardDefault(event);
@@ -938,7 +960,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             const staged = stagePendingImages(converted.files);
             let source = markdown;
             for (let index = 0; index < converted.urls.length; index += 1) {
-                const replacement = staged.sources[index]?.source ?? "";
+                const replacement = staged.sources.find((candidate) => candidate.inputIndex === index)?.source ?? "";
                 source = source.split(converted.urls[index]).join(replacement);
             }
             if (staged.rejected.length > 0) {
@@ -957,6 +979,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             console.error("Failed to import pasted data images:", error);
             reportEditorError("One or more pasted images could not be imported.");
         } finally {
+            pruneUnreferencedPendingImages();
             bookmark.dispose();
         }
     }
@@ -1059,7 +1082,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             const mappedSelection = bookmark.read();
             if (sources.length > 0 && mappedSelection && lease.sessionId === documentState.sessionId) {
                 const state = getEditorState();
-                const source = prepareVirtualEofInsertion(sources.join("\n\n"), mappedSelection);
+                const source = prepareBlockImageInsertion(sources.join("\n\n"), mappedSelection, state.doc);
                 dispatch(createSourcePasteTransaction({ ...state, selection: mappedSelection }, source));
                 if (lease.focusOwner && document.activeElement === lease.focusOwner) {
                     syncDomSelectionFromState({ focus: "editor" });
@@ -1069,6 +1092,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             console.error("Failed to paste image:", error);
             reportEditorError(error instanceof Error ? error.message : "Could not save the pasted image.");
         } finally {
+            pruneUnreferencedPendingImages();
             bookmark.dispose();
         }
     }
@@ -1077,6 +1101,26 @@ export function createEditorInputController(options: EditorInputControllerOption
         syncStateSelectionFromDom();
         const state = getEditorState();
         dispatch(createSourcePasteTransaction(state, prepareVirtualEofInsertion(text, state.selection)));
+    }
+
+    function prepareBlockImageInsertion(
+        source: string,
+        selection: ReturnType<typeof getEditorState>["selection"],
+        documentSource: string,
+    ): string {
+        const from = Math.min(selection.anchor, selection.head);
+        const to = Math.max(selection.anchor, selection.head);
+        const before = documentSource.slice(0, from);
+        const after = documentSource.slice(to);
+        const prefix = before === "" || before.endsWith("\n\n")
+            ? ""
+            : before.endsWith("\n") ? "\n" : "\n\n";
+        const suffix = after === "" || after.startsWith("\n\n")
+            ? ""
+            : after.startsWith("\n") ? "\n" : "\n\n";
+        const editor = document.getElementById("editor");
+        if (editor) editor.dataset.virtualEofCaret = "false";
+        return `${prefix}${source}${suffix}`;
     }
 
     function prepareVirtualEofInsertion(
@@ -1183,6 +1227,18 @@ export function createEditorInputController(options: EditorInputControllerOption
             ? options.getActiveDocumentFormat().clipboard?.createPayload?.(context)
                 ?? createPlainClipboardPayload(context.state.doc.slice(context.from, context.to))
             : createPlainClipboardPayload(context.state.doc.slice(context.from, context.to));
+    }
+
+    function shouldUseNativeVisualLineNavigation(): boolean {
+        const focusNode = document.getSelection()?.focusNode ?? null;
+        const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+        if (!focusElement) {
+            return true;
+        }
+
+        return !focusElement.closest(
+            ".markdown-token-editing, .format-block-source, [data-block][data-type='code']",
+        );
     }
 
     function createClipboardSelectionContext(): ClipboardSelectionContext {

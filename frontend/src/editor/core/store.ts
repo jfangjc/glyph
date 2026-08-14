@@ -53,6 +53,19 @@ export function getDocumentSource(): string {
     return editorState.doc;
 }
 
+/** Documents that may still be restored through undo or redo. */
+export function readRetainedSourceDocuments(): string[] {
+    const documents = new Set<string>([editorState.doc]);
+    const retainEntry = (entry: HistoryEntry): void => {
+        documents.add(entry.before.doc);
+        documents.add(entry.after.doc);
+    };
+    undoStack.forEach(retainEntry);
+    redoStack.forEach(retainEntry);
+    if (pendingTypingHistory) retainEntry(pendingTypingHistory);
+    return Array.from(documents);
+}
+
 export function configureBlockIndexBuilder(builder: BlockIndexBuilder): void {
     blockIndexBuilder = builder;
     blockIndexInvalidated = true;

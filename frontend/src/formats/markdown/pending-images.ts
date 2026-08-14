@@ -1,6 +1,6 @@
 import { savePastedImage } from "../../bridge/documents";
 import { documentState } from "../../documents/document-state";
-import { dispatch, getEditorState, rewriteSourceHistory } from "../../editor/core/store";
+import { dispatch, getEditorState, readRetainedSourceDocuments, rewriteSourceHistory } from "../../editor/core/store";
 
 const maxImageBytes = 20 * 1024 * 1024;
 const maxPendingBytes = 100 * 1024 * 1024;
@@ -18,7 +18,7 @@ type PendingImage = {
 };
 
 export type StagedPendingImages = {
-    sources: Array<{ source: string; file: File }>;
+    sources: Array<{ source: string; file: File; inputIndex: number }>;
     rejected: string[];
 };
 
@@ -32,11 +32,11 @@ const pendingImages = new Map<string, PendingImage>();
 
 export function stagePendingImages(files: File[]): StagedPendingImages {
     ensureCurrentSession();
-    const accepted: Array<{ source: string; file: File }> = [];
+    const accepted: Array<{ source: string; file: File; inputIndex: number }> = [];
     const rejected: string[] = [];
     let totalBytes = Array.from(pendingImages.values()).reduce((sum, item) => sum + item.file.size, 0);
 
-    for (const file of files) {
+    for (const [inputIndex, file] of files.entries()) {
         if (!supportedTypes.has(file.type.toLowerCase())) {
             rejected.push(`${file.name || "Image"} has an unsupported image type.`);
             continue;
@@ -69,7 +69,7 @@ export function stagePendingImages(files: File[]): StagedPendingImages {
         };
         pendingImages.set(id, item);
         totalBytes += file.size;
-        accepted.push({ source, file });
+        accepted.push({ source, file, inputIndex });
     }
 
     return { sources: accepted, rejected };
@@ -168,6 +168,19 @@ export function finalizePendingImages(
 export function resetPendingImagesForSession(): void {
     clearPendingImages();
     registrySessionId = documentState.sessionId;
+}
+
+export function pruneUnreferencedPendingImages(): void {
+    ensureCurrentSession();
+    if (pendingImages.size === 0) return;
+    const retainedDocuments = readRetainedSourceDocuments();
+    for (const item of pendingImages.values()) {
+        if (retainedDocuments.some((document) => document.includes(item.source))) {
+            continue;
+        }
+        URL.revokeObjectURL(item.objectUrl);
+        pendingImages.delete(item.id);
+    }
 }
 
 export function isSupportedPastedImage(file: File): boolean {

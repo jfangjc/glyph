@@ -5,6 +5,7 @@ import {
     getBlockIndex,
 } from "../blocks/view";
 import {
+    syncDomSelectionFromState,
     syncInlineSourceRevealFromSelection,
     syncStateSelectionFromDom,
 } from "../core/projection";
@@ -74,10 +75,8 @@ export function createSelectionController(options: SelectionControllerOptions): 
             return;
         }
 
-        // A range should remain a WYSIWYG selection. Revealing every marker in
-        // every touched block changes layout and makes the selected text differ
-        // from what the user can see.
-        options.hooks.syncBlockSourceReveal(null);
+        options.hooks.syncBlockSourceRevealBlocks(selectionState.selectedBlocks);
+        syncDomSelectionFromState({ focus: "preserve" });
     }
 }
 

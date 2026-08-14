@@ -535,7 +535,13 @@
 }
 
 .markdown-code-token.markdown-token-editing {
-    font-family: var(--glyph-font-code);
+    display: inline-block;
+    width: var(--markdown-token-preview-width, auto);
+    font-family: inherit;
+    font-size: inherit;
+    letter-spacing: normal;
+    overflow: visible;
+    vertical-align: baseline;
 }
 
 .markdown-math-token {
@@ -845,6 +851,12 @@
 .markdown-image-token {
     display: block;
     width: min(100%, 640px);
+    max-width: 100%;
+}
+
+.markdown-image-token[data-image-state="ready"] {
+    width: fit-content;
+    max-width: min(100%, 640px);
 }
 
 .markdown-image-token.markdown-token-editing {
@@ -870,7 +882,7 @@
     min-height: 120px;
     padding: 48px 16px;
     color: #777777;
-    content: "";
+    content: "Loading image…";
     font-size: 0.88rem;
     text-align: center;
 }
@@ -889,8 +901,16 @@
 }
 
 .markdown-image-error-label {
+    display: grid;
+    gap: 3px;
     color: #666666;
     overflow-wrap: anywhere;
+}
+
+.markdown-image-error-detail {
+    color: #888888;
+    font-size: 0.75rem;
+    font-weight: 400;
 }
 
 .markdown-image-retry {
@@ -903,6 +923,7 @@
 }
 
 .markdown-image-preview[data-state="ready"] {
+    width: min(100%, var(--markdown-image-natural-width, 640px));
     border-color: transparent;
     background: transparent;
 }
