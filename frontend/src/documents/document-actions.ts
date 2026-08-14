@@ -21,6 +21,7 @@ import { getElement } from "../utils/dom";
 import { fileNameFromPath } from "../utils/text";
 import { canUseNativeRuntime } from "../platform/runtime";
 import { documentState, notifyDocumentStateChanged } from "./document-state";
+import { notifyDirectoryTreeChanged } from "./file-tree";
 import {
     forgetLastOpenDocumentPath,
     getLastOpenDocumentPath,
@@ -280,6 +281,9 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
         getHost().commitSavedDocument(path, content);
         documentState.hasUnsavedChanges = getHost().serializeDocument() !== content || documentState.fileNameDirty;
         rememberLastOpenDocumentPath(path);
+        if (!previousPath || pathChanged) {
+            notifyDirectoryTreeChanged();
+        }
 
         saved = !documentState.hasUnsavedChanges;
     } catch (error) {

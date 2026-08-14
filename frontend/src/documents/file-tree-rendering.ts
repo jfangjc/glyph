@@ -10,6 +10,8 @@ type FileTreeRenderOptions = {
     maxSearchResults: number;
 };
 
+const searchableItemText = new WeakMap<DirectoryTreeItem, string>();
+
 export function renderFileTreeHtml(options: FileTreeRenderOptions): string {
     if (!options.tree) {
         const shortcut = readShortcutLabel("file:open-directory");
@@ -44,6 +46,10 @@ function renderItem(
     state: { rendered: number; truncated: boolean },
     options: FileTreeRenderOptions,
 ): string {
+    if (state.truncated) {
+        return "";
+    }
+
     if (!matchesQuery(item, matchCache, options.query)) {
         return "";
     }
@@ -96,9 +102,13 @@ function matchesQuery(item: DirectoryTreeItem, cache: WeakMap<DirectoryTreeItem,
         return cached;
     }
 
+    let searchableText = searchableItemText.get(item);
+    if (searchableText === undefined) {
+        searchableText = `${item.name}\n${item.path}`.toLowerCase();
+        searchableItemText.set(item, searchableText);
+    }
     const matches =
-        item.name.toLowerCase().includes(query) ||
-        item.path.toLowerCase().includes(query) ||
+        searchableText.includes(query) ||
         (item.isDir && Boolean(item.children?.some((child) => matchesQuery(child, cache, query))));
 
     cache.set(item, matches);

@@ -26,7 +26,7 @@ import {
     syncBlockViewContext,
     syncDocumentFormatUi,
 } from "../documents/document-session";
-import { installFileTree, restoreLastOpenDirectory } from "../documents/file-tree";
+import { installFileTree } from "../documents/file-tree";
 import type { DocumentEditorHooks } from "./core/types";
 import {
     appMenuCommandEvent,
@@ -206,7 +206,6 @@ export function installEditorController(): void {
     bindDocumentActions({ loadDocument, serializeDocument, commitSavedDocument });
     installOpenDocumentRequests();
     installWindowCloseRequests(getSuggestedFileName);
-    void restoreLastOpenDirectory();
     void restoreStartupDocument();
     startDocumentAutosave();
 

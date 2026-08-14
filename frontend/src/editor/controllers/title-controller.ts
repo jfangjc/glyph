@@ -56,7 +56,7 @@ export function createTitleController(options: TitleControllerOptions): TitleCon
 
     function handleTitleInput(): void {
         const input = getTitleInput();
-        const value = sanitizeFileNameStem(input.value);
+        const value = sanitizeFileNameStem(input.value, false);
         if (value !== input.value) {
             const start = input.selectionStart ?? value.length;
             input.value = value;
@@ -84,7 +84,7 @@ export function createTitleController(options: TitleControllerOptions): TitleCon
 
     function commitInputValue(): boolean {
         const input = getTitleInput();
-        const stem = sanitizeFileNameStem(input.value).trim();
+        const stem = sanitizeFileNameStem(input.value, true).trim();
         if (!stem || stem === "." || stem === "..") {
             reportEditorError("Enter a valid filename.");
             input.setAttribute("aria-invalid", "true");
@@ -111,10 +111,10 @@ function getTitleInput(): HTMLInputElement {
     return getElement<HTMLInputElement>("document-title");
 }
 
-function sanitizeFileNameStem(value: string): string {
-    return value
+function sanitizeFileNameStem(value: string, trimTrailing: boolean): string {
+    const sanitized = value
         .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
         .replace(/\s+/g, " ")
-        .replace(/[. ]+$/g, "")
         .slice(0, 80);
+    return trimTrailing ? sanitized.replace(/[. ]+$/g, "") : sanitized;
 }

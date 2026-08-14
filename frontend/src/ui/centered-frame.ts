@@ -30,57 +30,6 @@ export function createCenteredFrame(options: CenteredFrameOptions): CenteredFram
 
     let focusBeforeOpen: HTMLElement | null = null;
     let cancelPendingHide: (() => void) | null = null;
-    let activeGlassSurface: HTMLElement | null = null;
-    let pendingGlassPointer: { surface: HTMLElement; clientX: number; clientY: number } | null = null;
-    let glassPointerFrame = 0;
-
-    const clearGlassPointer = (): void => {
-        pendingGlassPointer = null;
-        if (glassPointerFrame) {
-            window.cancelAnimationFrame(glassPointerFrame);
-            glassPointerFrame = 0;
-        }
-        if (activeGlassSurface) {
-            delete activeGlassSurface.dataset.glassPointer;
-            activeGlassSurface = null;
-        }
-    };
-
-    content.addEventListener("pointermove", (event) => {
-        const target = event.target instanceof Element
-            ? event.target.closest<HTMLElement>(".centered-frame-content > *")
-            : null;
-        if (!target || target.parentElement !== content) {
-            clearGlassPointer();
-            return;
-        }
-
-        pendingGlassPointer = { surface: target, clientX: event.clientX, clientY: event.clientY };
-        if (glassPointerFrame) {
-            return;
-        }
-        glassPointerFrame = window.requestAnimationFrame(() => {
-            glassPointerFrame = 0;
-            const pending = pendingGlassPointer;
-            pendingGlassPointer = null;
-            if (!pending) {
-                return;
-            }
-
-            if (activeGlassSurface !== pending.surface) {
-                if (activeGlassSurface) {
-                    delete activeGlassSurface.dataset.glassPointer;
-                }
-                activeGlassSurface = pending.surface;
-                activeGlassSurface.dataset.glassPointer = "true";
-            }
-
-            const rect = pending.surface.getBoundingClientRect();
-            pending.surface.style.setProperty("--glass-pointer-x", `${pending.clientX - rect.left}px`);
-            pending.surface.style.setProperty("--glass-pointer-y", `${pending.clientY - rect.top}px`);
-        });
-    });
-    content.addEventListener("pointerleave", clearGlassPointer);
 
     const isOpen = (): boolean => !element.hidden && element.dataset.frameState !== "closing";
 
@@ -126,7 +75,6 @@ export function createCenteredFrame(options: CenteredFrameOptions): CenteredFram
                 return;
             }
             element.hidden = true;
-            clearGlassPointer();
             delete element.dataset.frameState;
             visibleFrames.delete(element);
             syncCenteredFramePageState();

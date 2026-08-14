@@ -20,27 +20,38 @@ export function moveFileTreeSelection(
     return nextPath;
 }
 
-export function syncFileTreeSelection(root: HTMLElement, selectedPath: string | null): string | null {
-    const items = Array.from(root.querySelectorAll<HTMLButtonElement>("[data-file-tree-path]"));
-    let hasSelectedPath = false;
-
-    for (const item of items) {
-        const isSelected = Boolean(selectedPath && item.dataset.fileTreePath === selectedPath);
-        if (isSelected) {
-            item.dataset.selected = "true";
-            item.classList.add("is-selected");
-        } else {
-            delete item.dataset.selected;
-            item.classList.remove("is-selected");
-        }
-        item.setAttribute("aria-selected", isSelected ? "true" : "false");
-        item.tabIndex = isSelected ? 0 : -1;
-        if (isSelected) {
-            hasSelectedPath = true;
-        }
+export function syncFileTreeSelectionChange(
+    root: HTMLElement,
+    selectedPath: string | null,
+    previousSelectedPath: string | null,
+): string | null {
+    if (previousSelectedPath && previousSelectedPath !== selectedPath) {
+        setFileTreeItemSelected(getFileTreeItem(root, previousSelectedPath), false);
     }
 
-    return hasSelectedPath ? selectedPath : null;
+    const selectedItem = selectedPath ? getFileTreeItem(root, selectedPath) : null;
+    if (!selectedItem) {
+        return null;
+    }
+
+    setFileTreeItemSelected(selectedItem, true);
+    return selectedPath;
+}
+
+function setFileTreeItemSelected(item: HTMLButtonElement | null, selected: boolean): void {
+    if (!item) {
+        return;
+    }
+
+    if (selected) {
+        item.dataset.selected = "true";
+        item.classList.add("is-selected");
+    } else {
+        delete item.dataset.selected;
+        item.classList.remove("is-selected");
+    }
+    item.setAttribute("aria-selected", selected ? "true" : "false");
+    item.tabIndex = selected ? 0 : -1;
 }
 
 function cssEscape(value: string): string {

@@ -3,7 +3,7 @@ import type { DirectoryTree, DirectoryTreeItem } from "../bridge/types";
 import { createCenteredFrame } from "../ui/centered-frame";
 import { documentState } from "./document-state";
 import { renderFileTreeHtml } from "./file-tree-rendering";
-import { getFileTreeItem, moveFileTreeSelection, syncFileTreeSelection } from "./file-tree-selection";
+import { getFileTreeItem, moveFileTreeSelection, syncFileTreeSelectionChange } from "./file-tree-selection";
 
 type FileTreeHost = {
     openDocumentPath: (path: string) => Promise<void>;
@@ -18,20 +18,27 @@ let host: FileTreeHost | null = null;
 let tree: DirectoryTree | null = null;
 let query = "";
 let selectedPath: string | null = null;
+let renderedSelectedPath: string | null = null;
 let searchRenderTimer: number | null = null;
 let treeRootElement: HTMLElement | null = null;
 let treeContextElement: HTMLElement | null = null;
 let treeContextNameElement: HTMLElement | null = null;
 let directoryRequestId = 0;
 let treeSignature = "";
-let directoryPollTimer = 0;
-let directoryPollingGeneration = 0;
+let directoryTreeDirty = false;
+let directoryRefreshPromise: Promise<void> | null = null;
+let refreshAgainAfterCurrent = false;
 let consecutiveDirectoryRefreshFailures = 0;
 const collapsedDirectories = new Set<string>();
 const lastOpenDirectoryPathStorageKey = "glyph:last-open-directory-path";
 const maxSearchResults = 500;
-const directoryPollIntervalMs = 1_000;
+const searchRenderDelayMs = 60;
 const maxDirectoryRefreshFailures = 2;
+const directoryTreeInvalidatedEvent = "glyph:directory-tree-invalidated";
+
+export function notifyDirectoryTreeChanged(): void {
+    window.dispatchEvent(new Event(directoryTreeInvalidatedEvent));
+}
 
 export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): FileTreeController {
     host = nextHost;
@@ -81,8 +88,19 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
     root.append(frame.element);
 
     const closeFrame = (): void => {
-        stopDirectoryPolling();
+        directoryTreeDirty = Boolean(tree);
         frame.hide(() => clearSearch(treeRoot, search));
+    };
+
+    const refreshIfVisible = (): void => {
+        if (
+            directoryTreeDirty &&
+            frame.isOpen() &&
+            document.visibilityState === "visible" &&
+            document.hasFocus()
+        ) {
+            void refreshOpenDirectoryTree();
+        }
     };
 
     const chooseAndOpenDirectory = async (): Promise<void> => {
@@ -97,13 +115,12 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
         await openDirectoryPath(selectedDirectoryPath, treeRoot, search);
         frame.show();
         search.focus({ preventScroll: true });
-        startDirectoryPolling();
     };
 
     search.addEventListener("input", () => {
         query = search.value.trim().toLowerCase();
         selectedPath = null;
-        renderTree(treeRoot);
+        scheduleSearchRender(treeRoot);
     });
 
     document.addEventListener(
@@ -124,6 +141,22 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
         if (frame.isOpen() && !frame.element.contains(event.target as Node | null)) {
             closeFrame();
         }
+    });
+
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+            directoryTreeDirty = Boolean(tree);
+            return;
+        }
+        refreshIfVisible();
+    });
+    window.addEventListener("blur", () => {
+        directoryTreeDirty = Boolean(tree);
+    });
+    window.addEventListener("focus", refreshIfVisible);
+    window.addEventListener(directoryTreeInvalidatedEvent, () => {
+        directoryTreeDirty = Boolean(tree);
+        refreshIfVisible();
     });
 
     treeRoot.addEventListener("click", (event) => {
@@ -162,12 +195,21 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
 
             frame.show();
             search.focus({ preventScroll: true });
-            startDirectoryPolling();
+            if (tree) {
+                directoryTreeDirty = true;
+                refreshIfVisible();
+                return;
+            }
+
+            treeRoot.setAttribute("aria-busy", "true");
+            void restoreLastOpenDirectory().finally(() => {
+                treeRoot.removeAttribute("aria-busy");
+            });
         },
     };
 }
 
-export async function restoreLastOpenDirectory(): Promise<void> {
+async function restoreLastOpenDirectory(): Promise<void> {
     const path = getLastOpenDirectoryPath();
     if (!path || !treeRootElement) {
         return;
@@ -186,8 +228,34 @@ async function refreshOpenDirectoryTree(): Promise<void> {
         return;
     }
 
+    if (directoryRefreshPromise) {
+        refreshAgainAfterCurrent = true;
+        return directoryRefreshPromise;
+    }
+
+    directoryRefreshPromise = refreshDirectoryTreeUntilCurrent();
+    try {
+        await directoryRefreshPromise;
+    } finally {
+        directoryRefreshPromise = null;
+    }
+}
+
+async function refreshDirectoryTreeUntilCurrent(): Promise<void> {
+    do {
+        refreshAgainAfterCurrent = false;
+        await refreshDirectoryTreeOnce();
+    } while (refreshAgainAfterCurrent && tree);
+}
+
+async function refreshDirectoryTreeOnce(): Promise<void> {
+    if (!tree?.path || !treeRootElement) {
+        return;
+    }
+
     const requestId = ++directoryRequestId;
     const path = tree.path;
+    directoryTreeDirty = false;
     try {
         const previousScrollTop = treeRootElement.scrollTop;
         const nextTree = await readDirectoryTree(path);
@@ -208,6 +276,7 @@ async function refreshOpenDirectoryTree(): Promise<void> {
         if (requestId !== directoryRequestId) {
             return;
         }
+        directoryTreeDirty = true;
         consecutiveDirectoryRefreshFailures += 1;
         if (consecutiveDirectoryRefreshFailures >= maxDirectoryRefreshFailures) {
             clearRemovedDirectoryTree();
@@ -218,7 +287,6 @@ async function refreshOpenDirectoryTree(): Promise<void> {
 }
 
 async function openDirectoryPath(path: string, treeRoot: HTMLElement, search?: HTMLInputElement): Promise<void> {
-    stopDirectoryPolling();
     const requestId = ++directoryRequestId;
     const nextTree = await readDirectoryTree(path);
     if (requestId !== directoryRequestId) {
@@ -226,6 +294,8 @@ async function openDirectoryPath(path: string, treeRoot: HTMLElement, search?: H
     }
     tree = nextTree;
     treeSignature = createDirectoryTreeSignature(nextTree);
+    directoryTreeDirty = false;
+    refreshAgainAfterCurrent = false;
     consecutiveDirectoryRefreshFailures = 0;
     resetCollapsedDirectories();
     query = "";
@@ -237,41 +307,12 @@ async function openDirectoryPath(path: string, treeRoot: HTMLElement, search?: H
     renderTree(treeRoot);
 }
 
-function startDirectoryPolling(): void {
-    stopDirectoryPolling();
-    const generation = directoryPollingGeneration;
-    void pollOpenDirectory(generation);
-}
-
-function stopDirectoryPolling(): void {
-    directoryPollingGeneration += 1;
-    if (directoryPollTimer) {
-        window.clearTimeout(directoryPollTimer);
-        directoryPollTimer = 0;
-    }
-}
-
-async function pollOpenDirectory(generation: number): Promise<void> {
-    if (generation !== directoryPollingGeneration || !tree) {
-        return;
-    }
-
-    await refreshOpenDirectoryTree();
-    if (generation !== directoryPollingGeneration || !tree) {
-        return;
-    }
-
-    directoryPollTimer = window.setTimeout(() => {
-        directoryPollTimer = 0;
-        void pollOpenDirectory(generation);
-    }, directoryPollIntervalMs);
-}
-
 function clearRemovedDirectoryTree(): void {
     directoryRequestId += 1;
-    stopDirectoryPolling();
     tree = null;
     treeSignature = "";
+    directoryTreeDirty = false;
+    refreshAgainAfterCurrent = false;
     query = "";
     selectedPath = null;
     collapsedDirectories.clear();
@@ -401,6 +442,7 @@ function renderTree(root: HTMLElement): void {
         collapsedDirectories,
         maxSearchResults,
     });
+    renderedSelectedPath = null;
     selectFirstSearchResult(root);
     syncSelection(root);
     syncTreeContext();
@@ -445,7 +487,8 @@ function moveSelection(root: HTMLElement, direction: 1 | -1): void {
 }
 
 function syncSelection(root: HTMLElement): void {
-    selectedPath = syncFileTreeSelection(root, selectedPath);
+    selectedPath = syncFileTreeSelectionChange(root, selectedPath, renderedSelectedPath);
+    renderedSelectedPath = selectedPath;
 }
 
 function selectFirstSearchResult(root: HTMLElement): void {
@@ -516,6 +559,16 @@ function clearSearch(root: HTMLElement, search: HTMLInputElement): void {
     selectedPath = null;
     search.value = "";
     renderTree(root);
+}
+
+function scheduleSearchRender(root: HTMLElement): void {
+    if (searchRenderTimer !== null) {
+        window.clearTimeout(searchRenderTimer);
+    }
+    searchRenderTimer = window.setTimeout(() => {
+        searchRenderTimer = null;
+        renderTree(root);
+    }, searchRenderDelayMs);
 }
 
 function renderPendingSearch(root: HTMLElement): void {
