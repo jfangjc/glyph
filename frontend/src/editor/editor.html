@@ -1,8 +1,13 @@
 <section id="document-surface" class="document-surface" aria-label="Editor">
-    <input id="document-title" class="document-title" aria-label="Filename" value="Untitled" />
-    <div id="editor" class="block-editor" contenteditable="true" role="textbox" aria-label="Document blocks">
+    <div class="document-title-row">
+        <input id="document-title" class="document-title" aria-label="Document name" aria-describedby="document-extension" value="Untitled" />
+        <span id="document-extension" class="document-extension" aria-label="File extension">.md</span>
+        <button id="markdown-mode-toggle" class="markdown-mode-toggle" type="button" aria-pressed="false" title="Switch to Markdown source mode">
+            Live Preview
+        </button>
+    </div>
+    <div id="editor" class="block-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Document blocks">
         <article class="block" data-block data-type="paragraph">
-            <input class="todo-checkbox" type="checkbox" aria-label="Todo complete" contenteditable="false" />
             <div class="block-content" aria-label="Paragraph block"></div>
         </article>
     </div>
@@ -51,7 +56,6 @@
 
 <template id="block-template">
     <article class="block" data-block data-type="paragraph">
-        <input class="todo-checkbox" type="checkbox" aria-label="Todo complete" contenteditable="false" />
         <div class="block-content" aria-label="Paragraph block"></div>
     </article>
 </template>

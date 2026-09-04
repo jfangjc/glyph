@@ -64,6 +64,10 @@
                 View
             </button>
             <div class="app-menu-panel" role="menu" data-menu-panel="view" hidden>
+                <button class="app-menu-item" type="button" role="menuitemcheckbox" aria-checked="false" data-app-command="view:toggle-markdown-source">
+                    <span>Markdown Source Mode</span>
+                </button>
+                <div class="app-menu-separator" role="separator"></div>
                 <button class="app-menu-item" type="button" role="menuitem" data-app-command="view:toggle-file-tree">
                     <span>Toggle File Tree</span>
                 </button>
@@ -77,6 +81,39 @@
                 <button class="app-menu-item" type="button" role="menuitem" data-app-command="view:zoom-reset">
                     <span>Reset Zoom</span>
                 </button>
+            </div>
+        </div>
+        <div class="app-menu" data-app-menu>
+            <button class="app-menu-button" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" data-menu-button="format">
+                Format
+            </button>
+            <div class="app-menu-panel" role="menu" data-menu-panel="format" hidden>
+                <button class="app-menu-item" type="button" role="menuitemcheckbox" data-app-command="format:bold" data-editor-command="bold"><span>Bold</span></button>
+                <button class="app-menu-item" type="button" role="menuitemcheckbox" data-app-command="format:italic" data-editor-command="italic"><span>Italic</span></button>
+                <button class="app-menu-item" type="button" role="menuitemcheckbox" data-app-command="format:strike" data-editor-command="strike"><span>Strikethrough</span></button>
+                <button class="app-menu-item" type="button" role="menuitemcheckbox" data-app-command="format:inline-code" data-editor-command="inline-code"><span>Inline Code</span></button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="format:link" data-editor-command="link"><span>Link</span></button>
+                <div class="app-menu-separator" role="separator"></div>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:paragraph" data-editor-command="block:paragraph"><span>Paragraph</span></button>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:heading-1" data-editor-command="block:heading-1"><span>Heading 1</span></button>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:heading-2" data-editor-command="block:heading-2"><span>Heading 2</span></button>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:heading-3" data-editor-command="block:heading-3"><span>Heading 3</span></button>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:list" data-editor-command="block:list"><span>Bulleted List</span></button>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:ordered-list" data-editor-command="block:ordered-list"><span>Numbered List</span></button>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:todo" data-editor-command="block:todo"><span>Todo</span></button>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:quote" data-editor-command="block:quote"><span>Quote</span></button>
+                <button class="app-menu-item" type="button" role="menuitemradio" data-app-command="format:block:code" data-editor-command="block:code"><span>Code Block</span></button>
+            </div>
+        </div>
+        <div class="app-menu" data-app-menu>
+            <button class="app-menu-button" type="button" role="menuitem" aria-haspopup="true" aria-expanded="false" data-menu-button="insert">
+                Insert
+            </button>
+            <div class="app-menu-panel" role="menu" data-menu-panel="insert" hidden>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="insert:table" data-editor-command="insert:table"><span>Table</span></button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="insert:image" data-editor-command="insert:image"><span>Image</span></button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="insert:math" data-editor-command="insert:math"><span>Math</span></button>
+                <button class="app-menu-item" type="button" role="menuitem" data-app-command="insert:rule" data-editor-command="insert:rule"><span>Horizontal Rule</span></button>
             </div>
         </div>
         <div class="app-menu" data-app-menu>

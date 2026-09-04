@@ -134,7 +134,9 @@ function sourceBlocksEquivalent(
         block.ruleMarker === previousBlock.ruleMarker &&
         block.mathSource === previousBlock.mathSource &&
         block.headingId === previousBlock.headingId &&
-        block.headingIdExplicit === previousBlock.headingIdExplicit
+        block.headingIdExplicit === previousBlock.headingIdExplicit &&
+        block.headingSourcePrefix === previousBlock.headingSourcePrefix &&
+        block.headingSourceSuffix === previousBlock.headingSourceSuffix
     );
 }
 
@@ -155,7 +157,9 @@ function projectedBlockNeedsUpdate(element: HTMLElement, block: ParsedBlock): bo
         (type === "todo" && getTodoCheckbox(element).checked !== Boolean(block.checked)) ||
         (type === "math" && element.dataset.mathSource !== block.mathSource) ||
         readBlockHeadingId(element) !== block.headingId ||
-        readBlockHeadingIdExplicit(element) !== Boolean(block.headingIdExplicit)
+        readBlockHeadingIdExplicit(element) !== Boolean(block.headingIdExplicit) ||
+        element.dataset.headingSourcePrefix !== block.headingSourcePrefix ||
+        element.dataset.headingSourceSuffix !== block.headingSourceSuffix
     );
 }
 
@@ -239,6 +243,8 @@ function readParsedBlockFromSourceState(state: EditorState, block: SourceBlock):
         mathSource: block.mathSource,
         headingId: block.headingId,
         headingIdExplicit: block.headingIdExplicit,
+        headingSourcePrefix: block.headingSourcePrefix,
+        headingSourceSuffix: block.headingSourceSuffix,
     };
 }
 

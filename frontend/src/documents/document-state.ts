@@ -1,7 +1,10 @@
+export type DocumentEditingMode = "live-preview" | "source";
+
 type DocumentState = {
     sessionId: number;
     activeFilePath: string | null;
     activeFormatId: string;
+    editingMode: DocumentEditingMode;
     fileName: string;
     committedFileName: string;
     fileNameDirty: boolean;
@@ -20,6 +23,7 @@ export const documentState: DocumentState = {
     sessionId: 0,
     activeFilePath: null,
     activeFormatId: "markdown",
+    editingMode: "live-preview",
     fileName: "Untitled.md",
     committedFileName: "Untitled.md",
     fileNameDirty: false,
@@ -42,6 +46,7 @@ export function beginDocumentSession(options: {
     documentState.sessionId += 1;
     documentState.activeFilePath = options.path;
     documentState.activeFormatId = options.formatId;
+    documentState.editingMode = "live-preview";
     documentState.fileName = options.fileName;
     documentState.committedFileName = options.fileName;
     documentState.fileNameDirty = false;

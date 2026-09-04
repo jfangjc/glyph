@@ -5,15 +5,8 @@ import { titleFromFileName } from "../../formats/file-names";
 import type { DocumentFormat } from "../../formats/types";
 import { getElement } from "../../utils/dom";
 import { flushSourceHistoryBatch } from "../core/store";
+import { clearSourceReveal } from "../core/projection";
 import { reportEditorError } from "../editor-status";
-
-export type TitleController = {
-    handleTitleBeforeInput: (event: InputEvent) => void;
-    handleTitleKeydown: (event: KeyboardEvent) => void;
-    handleTitleInput: () => void;
-    handleTitleFocus: () => void;
-    handleTitleBlur: () => void;
-};
 
 type TitleControllerOptions = {
     getActiveDocumentFormat: () => DocumentFormat;
@@ -21,10 +14,9 @@ type TitleControllerOptions = {
     hasActiveFileWithUnsavedChanges: () => boolean;
     saveDocument: () => Promise<boolean>;
     syncActiveBlockIndicator: (block: HTMLElement | null) => void;
-    syncBlockSourceReveal: (block: HTMLElement | null) => void;
 };
 
-export function createTitleController(options: TitleControllerOptions): TitleController {
+export function createTitleController(options: TitleControllerOptions) {
     return {
         handleTitleBeforeInput: () => undefined,
         handleTitleKeydown,
@@ -50,28 +42,27 @@ export function createTitleController(options: TitleControllerOptions): TitleCon
             if (!commitInputValue()) {
                 return;
             }
+            notifyDocumentStateChanged();
+            syncDocumentWindowTitle();
             void options.saveDocument();
         }
     }
 
     function handleTitleInput(): void {
         const input = getTitleInput();
-        const value = sanitizeFileNameStem(input.value, false);
+        const value = stripCurrentExtension(sanitizeFileNameStem(input.value, false));
         if (value !== input.value) {
             const start = input.selectionStart ?? value.length;
             input.value = value;
             input.setSelectionRange(Math.min(start, value.length), Math.min(start, value.length));
         }
-
-        documentState.fileName = buildFileName(value);
-        documentState.fileNameDirty = documentState.fileName !== documentState.committedFileName;
-        syncEditorDirtyState();
+        input.removeAttribute("aria-invalid");
     }
 
     function handleTitleFocus(): void {
         flushSourceHistoryBatch();
         options.syncActiveBlockIndicator(null);
-        options.syncBlockSourceReveal(null);
+        clearSourceReveal();
     }
 
     function handleTitleBlur(): void {
@@ -104,6 +95,14 @@ export function createTitleController(options: TitleControllerOptions): TitleCon
         const currentExtension = documentState.committedFileName.match(/\.([^./\\\s]+)$/)?.[1]
             ?? options.getActiveDocumentFormat().descriptor.defaultExtension;
         return `${stem || "Untitled"}.${currentExtension}`;
+    }
+
+    function stripCurrentExtension(value: string): string {
+        const extension = documentState.committedFileName.match(/\.([^./\\\s]+)$/)?.[1]
+            ?? options.getActiveDocumentFormat().descriptor.defaultExtension;
+        return value.toLowerCase().endsWith(`.${extension.toLowerCase()}`)
+            ? value.slice(0, -(extension.length + 1))
+            : value;
     }
 }
 

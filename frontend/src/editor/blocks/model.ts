@@ -37,6 +37,8 @@ export type ParsedBlock = {
     mathSource?: string;
     headingId?: string;
     headingIdExplicit?: boolean;
+    headingSourcePrefix?: string;
+    headingSourceSuffix?: string;
 };
 
 export const blockLabels: Record<BlockType, string> = {

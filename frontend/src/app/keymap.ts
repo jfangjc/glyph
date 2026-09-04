@@ -14,16 +14,35 @@ export type AppMenuCommand =
     | "edit:find"
     | "edit:replace"
     | "view:toggle-file-tree"
+    | "view:toggle-markdown-source"
     | "view:zoom-in"
     | "view:zoom-out"
     | "view:zoom-reset"
+    | "format:bold"
+    | "format:italic"
+    | "format:strike"
+    | "format:inline-code"
+    | "format:link"
+    | "format:block:paragraph"
+    | "format:block:heading-1"
+    | "format:block:heading-2"
+    | "format:block:heading-3"
+    | "format:block:list"
+    | "format:block:ordered-list"
+    | "format:block:todo"
+    | "format:block:quote"
+    | "format:block:code"
+    | "insert:table"
+    | "insert:image"
+    | "insert:math"
+    | "insert:rule"
     | "help:about";
 
-export type AppCommand = AppMenuCommand | "format:bold" | "format:italic";
+export type AppCommand = AppMenuCommand;
 export type ShortcutScope = "global" | "editor" | "title" | "markdown" | "menu";
 export type ShortcutAvailability = "always" | "native-file-system";
 export type ModifierRequirement = boolean | "any";
-export type InlineFormat = "bold" | "italic";
+export type InlineFormat = "bold" | "italic" | "strike" | "inline-code" | "link";
 export type ZoomShortcut = "in" | "out" | "reset";
 export type ShortcutLabelPlatform = "windows" | "mac" | "linux";
 
@@ -58,7 +77,7 @@ export const shortcutKeymap = [
         command: "file:open",
         scopes: ["global", "menu"],
         availability: "native-file-system",
-        bindings: [],
+        bindings: [{ key: "o", primary: true }],
     },
     {
         command: "file:open-directory",
@@ -109,7 +128,7 @@ export const shortcutKeymap = [
     {
         command: "edit:select-all",
         scopes: ["editor", "markdown", "menu"],
-        bindings: [{ key: "a", primary: true, shift: "any", alt: "any" }],
+        bindings: [{ key: "a", primary: true }],
     },
     {
         command: "edit:find",
@@ -124,7 +143,7 @@ export const shortcutKeymap = [
     {
         command: "view:toggle-file-tree",
         scopes: ["global", "menu"],
-        bindings: [{ key: "o", primary: true }],
+        bindings: [{ key: "e", primary: true, shift: true }],
     },
     {
         command: "view:zoom-in",
@@ -155,12 +174,22 @@ export const shortcutKeymap = [
     {
         command: "format:bold",
         scopes: ["editor", "markdown"],
-        bindings: [{ key: "b", primary: true, shift: "any" }],
+        bindings: [{ key: "b", primary: true }],
+    },
+    {
+        command: "view:toggle-markdown-source",
+        scopes: ["global", "menu"],
+        bindings: [{ key: "/", primary: true }],
     },
     {
         command: "format:italic",
         scopes: ["editor", "markdown"],
-        bindings: [{ key: "i", primary: true, shift: "any" }],
+        bindings: [{ key: "i", primary: true }],
+    },
+    {
+        command: "format:link",
+        scopes: ["editor", "markdown"],
+        bindings: [{ key: "k", primary: true }],
     },
 ] as const satisfies readonly ShortcutDefinition[];
 
@@ -223,6 +252,10 @@ export function readInlineFormatShortcut(
 
     if (command === "format:italic") {
         return "italic";
+    }
+
+    if (command === "format:link") {
+        return "link";
     }
 
     return null;

@@ -38,6 +38,15 @@ export function parseMarkdownBlocksWithRanges(content: string): ParsedMarkdownBl
     const ranges = readMarkdownBlockRanges(lines);
     const fallbackRanges = ranges.length === parsed.blocks.length ? ranges : readFallbackMarkdownBlockRanges(lines);
 
+    if (parsed.blocks.length === 0) {
+        const emptyRange = createEmptyMarkdownBlockRange(content.length);
+        return [{
+            type: "paragraph",
+            text: "",
+            ...emptyRange,
+        }];
+    }
+
     return parsed.blocks.map((block, index) => {
         const sourceRange = fallbackRanges[index] ?? createEmptyMarkdownBlockRange(content.length);
         const contentRange = readMarkdownBlockContentRange(block, sourceRange, lines);
@@ -202,6 +211,10 @@ function readMarkdownBlockRanges(lines: MarkdownLineRecord[]): MarkdownBlockRang
             ranges.push(createMarkdownBlockRange(lines, index, endIndex));
             parsedBlocksBeforeCurrent.push({ type: hasClosingFence ? "code" : "paragraph", text: "" });
             index = endIndex;
+            continue;
+        }
+
+        if (line.trim() === "") {
             continue;
         }
 
@@ -463,6 +476,10 @@ function parseMarkdownLines(lines: string[], startLine: number): { blocks: Parse
             continue;
         }
 
+        if (line.trim() === "") {
+            continue;
+        }
+
         if (isIndentedCodeLine(
             line,
             getPreviousNonBlankBlock(blocks),
@@ -574,14 +591,17 @@ function isReferenceTitleContinuationLine(line: string): boolean {
 }
 
 function parseMarkdownLine(line: string): ParsedBlock {
-    const headingMatch = line.match(/^ {0,3}(#{1,6})\s+(.*)$/);
+    const headingMatch = line.match(/^( {0,3}(#{1,6})\s+)(.*)$/);
     if (headingMatch) {
-        const heading = readHeadingTextAndId(headingMatch[2].replace(/\s+#+\s*$/, ""));
+        const heading = readHeadingTextAndId(headingMatch[3].replace(/\s+#+\s*$/, ""));
+        const sourceParts = readHeadingSourceParts(line, heading.text, headingMatch[1].length);
         return {
-            type: `heading-${headingMatch[1].length}` as BlockType,
+            type: `heading-${headingMatch[2].length}` as BlockType,
             text: heading.text,
             headingId: heading.id,
             headingIdExplicit: Boolean(heading.id),
+            headingSourcePrefix: sourceParts.prefix,
+            headingSourceSuffix: sourceParts.suffix,
         };
     }
 
@@ -756,15 +776,48 @@ function readSetextHeading(lines: string[], index: number): { block: ParsedBlock
 
     if (isSetextHeadingUnderline(underline, "=")) {
         const heading = readHeadingTextAndId(line.trim());
-        return { block: { type: "heading-1", text: heading.text, headingId: heading.id, headingIdExplicit: Boolean(heading.id) } };
+        const sourceParts = readHeadingSourceParts(line, heading.text);
+        return {
+            block: {
+                type: "heading-1",
+                text: heading.text,
+                headingId: heading.id,
+                headingIdExplicit: Boolean(heading.id),
+                headingSourcePrefix: sourceParts.prefix,
+                headingSourceSuffix: `${sourceParts.suffix}\n${underline}`,
+            },
+        };
     }
 
     if (isSetextHeadingUnderline(underline, "-")) {
         const heading = readHeadingTextAndId(line.trim());
-        return { block: { type: "heading-2", text: heading.text, headingId: heading.id, headingIdExplicit: Boolean(heading.id) } };
+        const sourceParts = readHeadingSourceParts(line, heading.text);
+        return {
+            block: {
+                type: "heading-2",
+                text: heading.text,
+                headingId: heading.id,
+                headingIdExplicit: Boolean(heading.id),
+                headingSourcePrefix: sourceParts.prefix,
+                headingSourceSuffix: `${sourceParts.suffix}\n${underline}`,
+            },
+        };
     }
 
     return null;
+}
+
+function readHeadingSourceParts(
+    line: string,
+    text: string,
+    searchFrom = 0,
+): { prefix: string; suffix: string } {
+    const contentFrom = line.indexOf(text, searchFrom);
+    const safeContentFrom = contentFrom >= 0 ? contentFrom : searchFrom;
+    return {
+        prefix: line.slice(0, safeContentFrom),
+        suffix: line.slice(safeContentFrom + text.length),
+    };
 }
 
 function isPlainParagraphLine(line: string): boolean {

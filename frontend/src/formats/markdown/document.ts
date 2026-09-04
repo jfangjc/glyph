@@ -1,5 +1,6 @@
 import { buildBlockIndex } from "./block-index";
 import {
+    createBlockFormatTransaction,
     createCheckboxToggleTransaction,
     createDeleteTransaction,
     createEnterTransaction,
@@ -7,12 +8,15 @@ import {
     createIndentListTransaction,
     createInsertTextTransaction,
     createInlineFormatTransaction,
+    createInsertContentTransaction,
     createPasteTransaction,
+    readMarkdownVisualSelectionRange,
+    readMarkdownVisualHiddenRanges,
     readSelectedSourceRange,
     createTableTabTransaction,
 } from "./commands";
 import type { DocumentFormat, DocumentFormatDescriptor } from "../types";
-import { hasMarkdownBlockSource, readMarkdownBlockSource } from "./block-source";
+import { readMarkdownBlockSource } from "./block-source";
 import { hydrateMarkdownImagePreviews } from "./images";
 import { renderInlineMarkdown } from "./inline";
 import { readMarkdownReferences } from "./parse";
@@ -40,7 +44,6 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
             readRenderContext: readMarkdownRenderContext,
             applyRenderContext: applyMarkdownRenderContext,
             renderDocumentFooter: renderMarkdownDocumentFooter,
-            hasBlockSource: hasMarkdownBlockSource,
             readBlockSource: readMarkdownBlockSource,
             readInteractiveBlockText: (type, source) => type === "math" ? readMathSourceText(source) : source,
             renderInline: renderInlineMarkdown,
@@ -59,6 +62,8 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
                 ?? createIndentListTransaction(state, delta)
                 ?? createIndentCodeTransaction(state, delta),
             createInlineFormatTransaction,
+            createBlockFormatTransaction,
+            createInsertContentTransaction,
             createCheckboxToggleTransaction,
             createPastedImageSource: (relativePath, originalName) =>
                 `![${escapeImageAlt(originalName)}](${relativePath})`,
@@ -73,7 +78,8 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
             convertHtml: htmlToMarkdown,
         },
         projection: {
-            resolveSelectionRange: readSelectedSourceRange,
+            resolveSelectionRange: readMarkdownVisualSelectionRange,
+            readVisualHiddenRanges: readMarkdownVisualHiddenRanges,
             shouldUseNativePointer: (target) => {
                 if (target.closest("button, input, textarea, select")) {
                     return true;
@@ -82,7 +88,7 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
                     return true;
                 }
                 if (target.closest(".format-block-preview, .markdown-image-token, .markdown-math-token")) {
-                    return false;
+                    return true;
                 }
                 return null;
             },
@@ -92,5 +98,8 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
 }
 
 function escapeImageAlt(value: string): string {
-    return value.replace(/\.[^/.\\]+$/, "").replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+    return value
+        .replace(/\.[^/.\\]+$/, "")
+        .replace(/[\u0000-\u001f\u007f]+/g, " ")
+        .replace(/([\\[\]])/g, "\\$1");
 }

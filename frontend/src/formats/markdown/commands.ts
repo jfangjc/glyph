@@ -1,4 +1,4 @@
-import { findSourceBlockAtOffset, readVisibleListPrefixLength, type Change, type EditorState, type SourceBlock, type Transaction } from "../../editor/core/types";
+import { findSourceBlockAtOffset, isSourceSelection, readVisibleListPrefixLength, type Change, type EditorState, type SourceBlock, type Transaction } from "../../editor/core/types";
 import {
     nextGraphemeBoundary,
     nextLineBoundary,
@@ -8,12 +8,14 @@ import {
     previousWordBoundary,
 } from "../../utils/text-boundaries";
 import {
+    createEmptyMarkdownTableRow,
     readMarkdownTableCellAtOffset,
     readMarkdownTableCellFocusOffset,
     readMarkdownTableColumnCount,
 } from "./table";
 import { isCompleteInlineFormatToken, readInlineSourceTokenRanges } from "./inline";
 import { mapOffset } from "../../editor/core/transaction";
+import type { BlockFormatCommand, InlineFormatCommand, InsertContentCommand } from "../types";
 
 export type DeleteDirection = "backward" | "forward";
 export type DeleteGranularity = "grapheme" | "word" | "soft-line" | "hard-line";
@@ -26,7 +28,12 @@ export function createInsertTextTransaction(state: EditorState, text: string): T
 }
 
 export function createPasteTransaction(state: EditorState, text: string): Transaction {
-    const normalizedText = normalizeInsertedText(text);
+    const insertedText = normalizeInsertedText(text);
+    const linkPaste = createUrlOverSelectionTransaction(state, insertedText);
+    if (linkPaste) {
+        return linkPaste;
+    }
+    const normalizedText = normalizeBlockPasteForContext(state, insertedText);
     return createCodeBodyReplaceTransaction(state, normalizedText, "paste", "discrete")
         ?? createIndentedCodeReplaceTransaction(state, normalizedText, "paste", "discrete")
         ?? createReplaceSelectionTransaction(state, normalizedText, "paste");
@@ -42,7 +49,7 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
         const semanticRange = expandInlineVisualSelectionRange(state, range);
         return createReplaceSelectionTransaction(
             { ...state, selection: { anchor: semanticRange.from, head: semanticRange.to } },
-            "\n",
+            options.shiftKey ? "  \n" : "\n\n",
             "input",
         );
     }
@@ -86,7 +93,7 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
             return createReplaceSelectionTransaction(state, "\n", "input");
         }
 
-        const insert = options.shiftKey ? "  \n" : "\n";
+        const insert = options.shiftKey ? "  \n" : "\n\n";
         return createReplaceSelectionTransaction(state, insert, "input");
     }
 
@@ -127,7 +134,18 @@ export function createTableTabTransaction(state: EditorState, delta: -1 | 1): Tr
 
     const lines = source.split("\n");
     if (targetLineIndex >= lines.length) {
-        return createTableExitTransaction(state, block, false);
+        if (delta < 0) {
+            return createSelectionTransaction(range.from);
+        }
+        const row = createEmptyMarkdownTableRow(columnCount);
+        const separator = source.endsWith("\n") ? "" : "\n";
+        const rowCellOffset = readMarkdownTableCellFocusOffset(row, 0, 0) ?? 0;
+        const target = block.sourceTo + separator.length + rowCellOffset;
+        return {
+            changes: [{ from: block.sourceTo, to: block.sourceTo, insert: `${separator}${row}` }],
+            selection: { anchor: target, head: target },
+            annotations: { userEvent: "input", historyMode: "discrete" },
+        };
     }
 
     const targetOffset = readMarkdownTableCellFocusOffset(source, targetLineIndex, targetCellIndex);
@@ -136,6 +154,54 @@ export function createTableTabTransaction(state: EditorState, delta: -1 | 1): Tr
     }
 
     return createSelectionTransaction(block.sourceFrom + targetOffset);
+}
+
+function createUrlOverSelectionTransaction(state: EditorState, text: string): Transaction | null {
+    const url = text.trim();
+    if (!/^(?:https?:\/\/|mailto:)[^\s<>]+$/i.test(url)) {
+        return null;
+    }
+
+    const selected = orderedSelection(state);
+    if (selected.from === selected.to) {
+        return null;
+    }
+    const range = expandVisualSelectionRange(state, selected);
+    const block = findSourceBlockAtOffset(state.blocks, range.from);
+    if (
+        !block ||
+        !isRichMarkdownBlock(block.type) ||
+        range.to > block.contentTo ||
+        state.doc.slice(range.from, range.to).includes("\n")
+    ) {
+        return null;
+    }
+
+    const label = state.doc.slice(selected.from, selected.to).replace(/([\\\]])/g, "\\$1");
+    const destination = url.replace(/([\\()])/g, "\\$1");
+    const source = `[${label}](${destination})`;
+    const head = range.from + source.length;
+    return {
+        changes: [{ from: range.from, to: range.to, insert: source }],
+        selection: { anchor: head, head },
+        annotations: { userEvent: "paste", historyMode: "discrete" },
+    };
+}
+
+function normalizeBlockPasteForContext(state: EditorState, text: string): string {
+    if (!/(^|\n)(?:#{1,6}\s|[-+*]\s|\d+[.)]\s|>\s|```|~~~|\$\$\s*$|\|.+\||<[A-Za-z])/m.test(text)) {
+        return text;
+    }
+
+    const range = orderedSelection(state);
+    const block = findSourceBlockAtOffset(state.blocks, range.from);
+    if (!block || block.type !== "paragraph" || range.from < block.contentFrom || range.to > block.contentTo) {
+        return text;
+    }
+
+    const before = range.from > block.contentFrom ? "\n\n" : "";
+    const after = range.to < block.contentTo ? "\n\n" : "";
+    return `${before}${text.replace(/^\n+|\n+$/g, "")}${after}`;
 }
 
 function isOpenFencedCodeParagraph(source: string): boolean {
@@ -187,7 +253,9 @@ export function createIndentListTransaction(state: EditorState, delta: number): 
     }
 
     const blocks = readSelectedListBlocks(state);
+    const selectedIds = new Set(blocks.map((block) => block.id));
     const changes = blocks
+        .filter((block) => step < 0 || canIndentListBlock(state, block, selectedIds))
         .map((block) => createIndentListBlockChange(state.doc, block, step))
         .filter((change): change is Change => change !== null);
 
@@ -263,14 +331,6 @@ export function createIndentCodeTransaction(state: EditorState, delta: number): 
     };
 }
 
-export function createDeleteBackwardTransaction(state: EditorState): Transaction | null {
-    return createDeleteTransaction(state, "backward", "grapheme");
-}
-
-export function createDeleteForwardTransaction(state: EditorState): Transaction | null {
-    return createDeleteTransaction(state, "forward", "grapheme");
-}
-
 export function createDeleteTransaction(
     state: EditorState,
     direction: DeleteDirection,
@@ -278,8 +338,13 @@ export function createDeleteTransaction(
 ): Transaction | null {
     const range = orderedSelection(state);
     if (range.from !== range.to) {
-        const semanticRange = expandVisualSelectionRange(state, range);
-        const deletionRange = expandStandaloneImageDeletionRange(state, semanticRange);
+        // A WYSIWYG text selection owns the visible text, not a block's hidden
+        // Markdown prefix. Explicit block/source selections already include
+        // those source offsets and therefore still delete the whole block.
+        const deletionRange = resolveMarkdownSemanticSelection(state, range, {
+            includeBlockSource: false,
+            includeAtomicObjects: true,
+        });
         return createDeleteRangeTransaction(deletionRange.from, deletionRange.to, "delete");
     }
 
@@ -293,7 +358,12 @@ export function createDeleteTransaction(
         return codeBoundaryNavigation;
     }
 
-    if (direction === "backward") {
+    if (direction === "backward" && !isSourceSelection(state.selection)) {
+        const listStartBackspace = createListStartBackspaceTransaction(state, offset);
+        if (listStartBackspace) {
+            return listStartBackspace;
+        }
+
         const hiddenIndentRange = readHiddenListIndentRange(state, offset);
         if (hiddenIndentRange && offset > hiddenIndentRange.from && offset <= hiddenIndentRange.to) {
             if (offset === hiddenIndentRange.to) {
@@ -315,6 +385,34 @@ export function createDeleteTransaction(
         : createDeleteRangeTransaction(offset, boundary, "delete", "typing");
 }
 
+function createListStartBackspaceTransaction(state: EditorState, offset: number): Transaction | null {
+    const block = findSourceBlockAtOffset(state.blocks, offset);
+    if (
+        !block ||
+        !isListBlock(block) ||
+        offset !== block.contentFrom
+    ) {
+        return null;
+    }
+
+    if (block.contentFrom < block.contentTo) {
+        const blockIndex = state.blocks.blocks.findIndex((candidate) => candidate.id === block.id);
+        const previous = blockIndex > 0 ? state.blocks.blocks[blockIndex - 1] : null;
+        const separator = previous ? state.doc.slice(previous.sourceTo, block.sourceFrom) : "";
+        if (
+            previous &&
+            isListBlock(previous) &&
+            previous.type === block.type &&
+            (previous.indent ?? 0) === (block.indent ?? 0) &&
+            /^\r?\n$/.test(separator)
+        ) {
+            return createDeleteRangeTransaction(previous.contentTo, block.contentFrom, "delete", "typing");
+        }
+    }
+
+    return block.indent ? createIndentListTransaction(state, -1) : null;
+}
+
 export function createCheckboxToggleTransaction(state: EditorState, blockId: string): Transaction | null {
     const block = state.blocks.blocks.find((candidate) => candidate.id === blockId);
     if (!block || block.type !== "todo") {
@@ -334,18 +432,22 @@ export function createCheckboxToggleTransaction(state: EditorState, blockId: str
     };
 }
 
-export function createInlineFormatTransaction(state: EditorState, marker: "*" | "**"): Transaction | null {
+export function createInlineFormatTransaction(state: EditorState, command: InlineFormatCommand): Transaction | null {
+    if (command === "link") {
+        return createLinkTransaction(state);
+    }
+    if (command === "code") {
+        return createInlineCodeTransaction(state);
+    }
+
+    const marker = command === "bold" ? "**" : command === "italic" ? "*" : "~~";
+    return createInlineMarkerTransaction(state, marker);
+}
+
+function createInlineMarkerTransaction(state: EditorState, marker: "*" | "**" | "~~"): Transaction | null {
     const range = orderedSelection(state);
     if (range.from === range.to) {
-        const block = findSourceBlockAtOffset(state.blocks, range.from);
-        if (block && !isRichMarkdownBlock(block.type)) {
-            return null;
-        }
-        return {
-            changes: [{ from: range.from, to: range.to, insert: marker + marker }],
-            selection: { anchor: range.from + marker.length, head: range.from + marker.length },
-            annotations: { userEvent: "format" },
-        };
+        return null;
     }
 
     const segments = readFormattableSegments(state, range);
@@ -388,6 +490,115 @@ export function createInlineFormatTransaction(state: EditorState, marker: "*" | 
     };
 }
 
+function createInlineCodeTransaction(state: EditorState): Transaction | null {
+    const range = orderedSelection(state);
+    if (range.from === range.to) return null;
+    const segments = readFormattableSegments(state, range);
+    if (segments.length === 0) return null;
+
+    const removeFormatting = segments.every((segment) => readInlineCodeRemoval(state.doc, segment) !== null);
+    const changes = segments.flatMap((segment): Change[] => {
+        const removal = readInlineCodeRemoval(state.doc, segment);
+        if (removeFormatting && removal) return removal;
+        if (removal) return [];
+
+        const selected = state.doc.slice(segment.from, segment.to);
+        const marker = readPendingFormatMarker("code", selected);
+        const needsPadding = selected.startsWith("`") || selected.endsWith("`") || (
+            selected.startsWith(" ") && selected.endsWith(" ") && selected.trim() !== ""
+        );
+        const padding = needsPadding ? " " : "";
+        return [
+            { from: segment.from, to: segment.from, insert: `${marker}${padding}` },
+            { from: segment.to, to: segment.to, insert: `${padding}${marker}` },
+        ];
+    });
+
+    return {
+        changes,
+        selection: {
+            anchor: mapOffset(
+                state.selection.anchor,
+                changes,
+                state.selection.anchor <= state.selection.head ? "downstream" : "upstream",
+            ),
+            head: mapOffset(
+                state.selection.head,
+                changes,
+                state.selection.anchor <= state.selection.head ? "upstream" : "downstream",
+            ),
+            anchorAffinity: state.selection.anchorAffinity,
+            headAffinity: state.selection.headAffinity,
+        },
+        annotations: { userEvent: "format" },
+    };
+}
+
+function readInlineCodeRemoval(doc: string, segment: { from: number; to: number }): Change[] | null {
+    const token = readInlineSourceTokenRanges(doc).find((candidate) => (
+        doc[candidate.from] === "`" &&
+        candidate.contentFrom !== null &&
+        candidate.contentTo !== null &&
+        (candidate.from === segment.from && candidate.to === segment.to ||
+            candidate.contentFrom === segment.from && candidate.contentTo === segment.to)
+    ));
+    if (!token || token.contentFrom === null || token.contentTo === null) return null;
+    return [
+        { from: token.from, to: token.contentFrom, insert: "" },
+        { from: token.contentTo, to: token.to, insert: "" },
+    ];
+}
+
+export function createPendingInlineFormatInsertTransaction(
+    state: EditorState,
+    text: string,
+    commands: readonly Exclude<InlineFormatCommand, "link">[],
+): Transaction | null {
+    const range = orderedSelection(state);
+    const block = findSourceBlockAtOffset(state.blocks, range.from);
+    if (
+        range.from !== range.to ||
+        !block ||
+        !isRichMarkdownBlock(block.type) ||
+        text === "" ||
+        /^[\s\p{P}\p{S}]+$/u.test(text)
+    ) {
+        return null;
+    }
+
+    const requested = new Set(commands);
+    const activeCommands: Exclude<InlineFormatCommand, "link">[] = requested.has("code")
+        ? ["code"]
+        : (["bold", "italic", "strike"] as const).filter((command) => requested.has(command));
+    if (activeCommands.length === 0) {
+        return null;
+    }
+
+    const markers = activeCommands.map((command) => readPendingFormatMarker(command, text));
+    const codePadding = activeCommands[0] === "code" && (
+        text.startsWith("`") || text.endsWith("`") ||
+        (text.startsWith(" ") && text.endsWith(" ") && text.trim() !== "")
+    ) ? " " : "";
+    const opening = `${markers.join("")}${codePadding}`;
+    const closing = `${codePadding}${[...markers].reverse().join("")}`;
+    const insert = `${opening}${text}${closing}`;
+    const caret = range.from + opening.length + text.length;
+    return {
+        changes: [{ from: range.from, to: range.to, insert }],
+        selection: { anchor: caret, head: caret },
+        annotations: { userEvent: "input", historyMode: "typing", typingBoundary: false },
+    };
+}
+
+function readPendingFormatMarker(command: Exclude<InlineFormatCommand, "link">, text: string): string {
+    if (command === "bold") return "**";
+    if (command === "italic") return "*";
+    if (command === "strike") return "~~";
+
+    const longestRun = Math.max(0, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length));
+    return "`".repeat(longestRun + 1);
+}
+
 function readFormattableSegments(
     state: EditorState,
     range: { from: number; to: number },
@@ -404,10 +615,10 @@ function readFormattableSegments(
 function readFormatRemoval(
     doc: string,
     segment: { from: number; to: number },
-    marker: "*" | "**",
+    marker: "*" | "**" | "~~",
 ): Change[] | null {
     const selected = doc.slice(segment.from, segment.to);
-    if (isCompleteInlineFormatToken(selected, marker)) {
+    if (isCompleteMarkerToken(selected, marker)) {
         return [
             { from: segment.from, to: segment.from + marker.length, insert: "" },
             { from: segment.to - marker.length, to: segment.to, insert: "" },
@@ -416,7 +627,7 @@ function readFormatRemoval(
 
     const surroundingFrom = Math.max(0, segment.from - marker.length);
     const surrounding = doc.slice(surroundingFrom, segment.to + marker.length);
-    if (isCompleteInlineFormatToken(surrounding, marker)) {
+    if (isCompleteMarkerToken(surrounding, marker)) {
         return [
             { from: segment.from - marker.length, to: segment.from, insert: "" },
             { from: segment.to, to: segment.to + marker.length, insert: "" },
@@ -437,33 +648,175 @@ function isRichMarkdownBlock(type: SourceBlock["type"]): boolean {
     );
 }
 
-export function readSelectedSourceText(state: EditorState): string | null {
-    const range = readSelectedSourceRange(state);
-    return range ? state.doc.slice(range.from, range.to) : null;
+function isCompleteMarkerToken(source: string, marker: "*" | "**" | "~~"): boolean {
+    if (marker === "*" || marker === "**") {
+        return isCompleteInlineFormatToken(source, marker);
+    }
+    return source.length >= marker.length * 2 && source.startsWith(marker) && source.endsWith(marker);
+}
+
+function createLinkTransaction(state: EditorState): Transaction | null {
+    const range = orderedSelection(state);
+    const block = findSourceBlockAtOffset(state.blocks, range.from);
+    if (!block || !isRichMarkdownBlock(block.type) || range.to > block.contentTo) {
+        return null;
+    }
+
+    const label = range.from === range.to ? "link text" : state.doc.slice(range.from, range.to);
+    const source = `[${label}](https://)`;
+    const urlFrom = range.from + label.length + 3;
+    return {
+        changes: [{ from: range.from, to: range.to, insert: source }],
+        selection: { anchor: urlFrom, head: urlFrom + "https://".length },
+        annotations: { userEvent: "format" },
+    };
+}
+
+export function createBlockFormatTransaction(state: EditorState, command: BlockFormatCommand): Transaction | null {
+    const range = orderedSelection(state);
+    const blocks = state.blocks.blocks.filter((block) => (
+        range.from === range.to
+            ? range.from >= block.sourceFrom && range.from <= block.sourceTo
+            : range.from <= block.sourceTo && range.to >= block.sourceFrom
+    )).filter((block) => block.type !== "source" && block.type !== "table" && block.type !== "math" && block.type !== "html");
+    if (blocks.length === 0) {
+        return null;
+    }
+
+    const changes = blocks.map((block, index): Change => ({
+        from: block.sourceFrom,
+        to: block.sourceTo,
+        insert: serializeBlockAs(command, state.doc.slice(block.contentFrom, block.contentTo), index),
+    }));
+    return { changes, annotations: { userEvent: "format" } };
+}
+
+export function createInsertContentTransaction(state: EditorState, command: InsertContentCommand): Transaction | null {
+    const range = orderedSelection(state);
+    const source = readInsertedContentSource(command);
+    const blockInsertion = command === "table" || command === "rule";
+    const before = blockInsertion && range.from > 0 && !state.doc.slice(0, range.from).endsWith("\n\n") ? "\n\n" : "";
+    const after = blockInsertion && range.to < state.doc.length && !state.doc.slice(range.to).startsWith("\n\n") ? "\n\n" : "";
+    const insert = `${before}${source}${after}`;
+    const placeholder = command === "image" ? "Alt text" : command === "math" ? "x" : command === "table" ? "Column 1" : "";
+    const placeholderFrom = range.from + before.length + (placeholder ? source.indexOf(placeholder) : source.length);
+    return {
+        changes: [{ from: range.from, to: range.to, insert }],
+        selection: placeholder
+            ? { anchor: placeholderFrom, head: placeholderFrom + placeholder.length }
+            : { anchor: range.from + insert.length, head: range.from + insert.length },
+        annotations: { userEvent: "format" },
+    };
+}
+
+function readInsertedContentSource(command: InsertContentCommand): string {
+    if (command === "table") return "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |";
+    if (command === "image") return "![Alt text](image-url){width=auto align=center}";
+    if (command === "math") return "$x$";
+    return "---";
+}
+
+function serializeBlockAs(command: BlockFormatCommand, text: string, index: number): string {
+    if (command === "paragraph") return text;
+    if (command.startsWith("heading-")) {
+        const level = Number(command.slice("heading-".length));
+        return `${"#".repeat(Math.max(1, Math.min(6, level)))} ${text}`;
+    }
+    if (command === "list") return `- ${text}`;
+    if (command === "ordered-list") return `${index + 1}. ${text}`;
+    if (command === "todo") return `- [ ] ${text}`;
+    if (command === "quote") return text.split("\n").map((line) => `> ${line}`).join("\n");
+    return `\`\`\`\n${text}\n\`\`\``;
 }
 
 export function readSelectedSourceRange(state: EditorState): { from: number; to: number } | null {
     const selected = orderedSelection(state);
     if (selected.from === selected.to) return null;
-    const range = expandVisualSelectionRange(state, selected);
+    const range = resolveMarkdownSemanticSelection(state, selected, {
+        includeBlockSource: true,
+        includeAtomicObjects: false,
+    });
     return range.from === range.to ? null : range;
 }
 
-export function createCutTransaction(state: EditorState): Transaction | null {
+export function readMarkdownVisualSelectionRange(state: EditorState): { from: number; to: number } | null {
     const selected = orderedSelection(state);
-    if (selected.from === selected.to) return null;
-    const range = expandStandaloneImageDeletionRange(
-        state,
-        expandVisualSelectionRange(state, selected),
-    );
+    if (isSourceSelection(state.selection)) {
+        return null;
+    }
 
-    return createDeleteRangeTransaction(range.from, range.to, "delete");
+    const from = normalizeVisualSelectionBoundary(state, selected.from, "start");
+    const to = normalizeVisualSelectionBoundary(state, selected.to, "end");
+    if (selected.from === selected.to) {
+        return from !== selected.from || to !== selected.to ? { from, to } : null;
+    }
+
+    return from <= to ? { from, to } : null;
+}
+
+export function readMarkdownVisualHiddenRanges(state: EditorState): Array<{
+    from: number;
+    to: number;
+    visibleFrom: number;
+    visibleTo: number;
+    atomic?: boolean;
+}> {
+    return state.blocks.blocks.flatMap((block) => {
+        if (!isRichMarkdownBlock(block.type)) return [];
+        return readInlineSourceTokenRanges(state.doc.slice(block.contentFrom, block.contentTo)).map((token) => {
+            const from = block.contentFrom + token.from;
+            const to = block.contentFrom + token.to;
+            return token.contentFrom === null || token.contentTo === null
+                ? { from, to, visibleFrom: from, visibleTo: to, atomic: true }
+                : {
+                    from,
+                    to,
+                    visibleFrom: block.contentFrom + token.contentFrom,
+                    visibleTo: block.contentFrom + token.contentTo,
+                };
+        });
+    });
+}
+
+function normalizeVisualSelectionBoundary(
+    state: EditorState,
+    offset: number,
+    boundary: "start" | "end",
+): number {
+    const block = findSourceBlockAtOffset(
+        state.blocks,
+        offset,
+        boundary === "start" ? "downstream" : "upstream",
+    );
+    if (!block || !canResetBlockPrefix(block)) {
+        return offset;
+    }
+
+    const insideHiddenPrefix = boundary === "start"
+        ? offset >= block.sourceFrom && offset < block.contentFrom
+        : offset >= block.sourceFrom && offset <= block.contentFrom;
+    return insideHiddenPrefix ? block.contentFrom : offset;
+}
+
+function resolveMarkdownSemanticSelection(
+    state: EditorState,
+    selected: { from: number; to: number },
+    options: { includeBlockSource: boolean; includeAtomicObjects: boolean },
+): { from: number; to: number } {
+    let range = options.includeBlockSource
+        ? expandVisualSelectionRange(state, selected)
+        : expandInlineVisualSelectionRange(state, selected);
+    if (options.includeAtomicObjects) {
+        range = expandStandaloneImageDeletionRange(state, range);
+    }
+    return range;
 }
 
 function expandVisualSelectionRange(
     state: EditorState,
     range: { from: number; to: number },
 ): { from: number; to: number } {
+    if (isSourceSelection(state.selection)) return range;
     let expanded = expandInlineVisualSelectionRange(state, range);
     let changed = true;
 
@@ -497,6 +850,7 @@ function expandInlineVisualSelectionRange(
     state: EditorState,
     range: { from: number; to: number },
 ): { from: number; to: number } {
+    if (isSourceSelection(state.selection)) return range;
     let expanded = { ...range };
     for (const block of state.blocks.blocks) {
         if (
@@ -525,12 +879,16 @@ function expandInlineVisualSelectionRange(
                 ) {
                     continue;
                 }
+                const coversVisibleContent = expanded.from <= token.contentFrom &&
+                    expanded.to >= token.contentTo;
                 const next = {
-                    from: expanded.from === token.contentFrom && expanded.to >= token.contentTo
-                        ? Math.min(expanded.from, token.from)
+                    from: coversVisibleContent &&
+                        expanded.from >= token.from && expanded.from <= token.contentFrom
+                        ? token.from
                         : expanded.from,
-                    to: expanded.to === token.contentTo && expanded.from <= token.contentFrom
-                        ? Math.max(expanded.to, token.to)
+                    to: coversVisibleContent &&
+                        expanded.to >= token.contentTo && expanded.to <= token.to
+                        ? token.to
                         : expanded.to,
                 };
                 if (next.from !== expanded.from || next.to !== expanded.to) {
@@ -933,6 +1291,24 @@ function createIndentListBlockChange(doc: string, block: SourceBlock, delta: -1 
         to: block.sourceFrom + leadingWhitespaceLength,
         insert: serializeIndent(indent - 1),
     };
+}
+
+function canIndentListBlock(state: EditorState, block: SourceBlock, selectedIds: Set<string>): boolean {
+    const index = state.blocks.blocks.findIndex((candidate) => candidate.id === block.id);
+    if (index <= 0) {
+        return false;
+    }
+
+    const previous = state.blocks.blocks[index - 1];
+    if (selectedIds.has(previous.id)) {
+        return true;
+    }
+    if (!isListBlock(previous)) {
+        return false;
+    }
+
+    const indent = Math.max(0, block.indent ?? 0);
+    return Math.max(0, previous.indent ?? 0) >= indent;
 }
 
 function readLeadingWhitespaceLength(doc: string, block: SourceBlock): number {

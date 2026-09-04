@@ -12,6 +12,7 @@ type FileTreeHost = {
 type FileTreeController = {
     openDirectory: () => Promise<void>;
     toggle: () => void;
+    close: () => void;
 };
 
 let host: FileTreeHost | null = null;
@@ -23,6 +24,7 @@ let searchRenderTimer: number | null = null;
 let treeRootElement: HTMLElement | null = null;
 let treeContextElement: HTMLElement | null = null;
 let treeContextNameElement: HTMLElement | null = null;
+let fileTreeFrameElement: HTMLElement | null = null;
 let directoryRequestId = 0;
 let treeSignature = "";
 let directoryTreeDirty = false;
@@ -133,15 +135,12 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
         true,
     );
 
-    frame.element.addEventListener("keydown", (event) => {
-        handleFileTreeKeydown(event, treeRoot, closeFrame);
-    });
-
     document.addEventListener("mousedown", (event) => {
         if (frame.isOpen() && !frame.element.contains(event.target as Node | null)) {
             closeFrame();
         }
     });
+    fileTreeFrameElement = frame.element;
 
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "hidden") {
@@ -187,6 +186,7 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
 
     return {
         openDirectory: chooseAndOpenDirectory,
+        close: closeFrame,
         toggle: () => {
             if (frame.isOpen()) {
                 closeFrame();
@@ -194,7 +194,11 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
             }
 
             frame.show();
-            search.focus({ preventScroll: true });
+            if (tree) {
+                search.focus({ preventScroll: true });
+            } else {
+                treeRoot.querySelector<HTMLButtonElement>("[data-file-tree-open-directory]")?.focus({ preventScroll: true });
+            }
             if (tree) {
                 directoryTreeDirty = true;
                 refreshIfVisible();
@@ -418,11 +422,6 @@ function handleFileTreeKeydown(event: KeyboardEvent, treeRoot: HTMLElement, clos
         return;
     }
 
-    if (event.key.toLowerCase() === "o" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
-        event.preventDefault();
-        event.stopPropagation();
-        closeFrame();
-    }
 }
 
 function renderTree(root: HTMLElement): void {
@@ -442,6 +441,7 @@ function renderTree(root: HTMLElement): void {
         collapsedDirectories,
         maxSearchResults,
     });
+    if (fileTreeFrameElement) fileTreeFrameElement.dataset.hasTree = String(Boolean(tree));
     renderedSelectedPath = null;
     selectFirstSearchResult(root);
     syncSelection(root);

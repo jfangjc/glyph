@@ -7,8 +7,8 @@ html {
 }
 
 :root {
-    color: #1f1f1f;
-    background: #ffffff;
+    color: var(--glyph-text);
+    background: var(--glyph-surface);
     font-family: var(
         --glyph-font-text,
         ui-sans-serif,
@@ -39,7 +39,8 @@ body {
     margin: 0;
     min-width: 320px;
     min-height: 100vh;
-    background: #ffffff;
+    background: var(--glyph-surface);
+    color: var(--glyph-text);
     overscroll-behavior-x: none;
     overscroll-behavior-y: none;
     overscroll-behavior: none;
@@ -47,6 +48,62 @@ body {
 
 input {
     font: inherit;
+}
+
+.about-glyph-dialog {
+    width: min(360px, calc(100vw - 32px));
+    padding: 0;
+    border: 1px solid var(--glyph-border);
+    border-radius: 18px;
+    background: var(--glyph-surface-elevated);
+    color: var(--glyph-text);
+    box-shadow: var(--glyph-glass-shadow);
+}
+
+.about-glyph-dialog::backdrop {
+    background: rgb(10 12 16 / 24%);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+}
+
+.about-glyph-dialog form {
+    display: grid;
+    justify-items: center;
+    padding: 26px;
+    text-align: center;
+}
+
+.about-glyph-mark {
+    display: grid;
+    place-items: center;
+    width: 46px;
+    height: 46px;
+    margin-bottom: 12px;
+    border-radius: 13px;
+    background: var(--glyph-accent);
+    color: white;
+    font-size: 1.5rem;
+    font-weight: 750;
+}
+
+.about-glyph-dialog h2,
+.about-glyph-dialog p {
+    margin: 0;
+}
+
+.about-glyph-dialog p {
+    margin-top: 7px;
+    color: var(--glyph-text-muted);
+}
+
+.about-glyph-dialog button {
+    min-width: 86px;
+    min-height: 34px;
+    margin-top: 22px;
+    border: 1px solid var(--glyph-border);
+    border-radius: 8px;
+    background: var(--glyph-control-fill);
+    color: var(--glyph-text);
 }
 
 .unsaved-document-dialog {
@@ -66,15 +123,16 @@ input {
     width: min(440px, calc(100vw - 40px));
     padding: 24px;
     overflow: hidden;
-    border: 1px solid rgb(72 72 78 / 12%);
+    border: 1px solid transparent;
     border-radius: 20px;
-    background: rgb(255 255 255 / 82%);
+    background:
+        var(--glyph-glass-fill-strong) padding-box,
+        var(--glyph-glass-rim) border-box;
     box-shadow:
-        0 22px 52px rgb(30 30 36 / 14%),
-        0 6px 18px rgb(30 30 36 / 7%),
-        inset 0 1px 0 rgb(255 255 255 / 90%);
-    -webkit-backdrop-filter: blur(28px) saturate(115%) brightness(106%);
-    backdrop-filter: blur(28px) saturate(115%) brightness(106%);
+        var(--glyph-glass-shadow),
+        var(--glyph-glass-inset);
+    -webkit-backdrop-filter: var(--glyph-glass-backdrop);
+    backdrop-filter: var(--glyph-glass-backdrop);
 }
 
 .unsaved-document-dialog h2 {
@@ -115,7 +173,7 @@ input {
 
 .unsaved-document-dialog button:hover {
     border-color: rgb(72 72 78 / 16%);
-    background: rgb(229 229 233 / 86%);
+    background: var(--glyph-control-active);
 }
 
 .unsaved-document-dialog button:active {
@@ -123,7 +181,7 @@ input {
 }
 
 .unsaved-document-dialog button:focus-visible {
-    outline: 2px solid rgb(0 122 255 / 44%);
+    outline: 2px solid var(--glyph-focus-ring);
     outline-offset: 2px;
 }
 
@@ -133,7 +191,7 @@ input {
 
 .unsaved-document-dialog .unsaved-document-dialog-save {
     border-color: rgb(0 104 220 / 70%);
-    background: #0879e8;
+    background: var(--glyph-accent);
     color: #ffffff;
 }
 

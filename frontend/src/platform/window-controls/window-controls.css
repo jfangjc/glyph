@@ -7,15 +7,7 @@
     --windows-caption-hover-bg: rgb(0 0 0 / 9%);
     --windows-caption-close-hover-bg: #e90924;
     --windows-caption-close-hover-fg: #fffcff;
-    --app-menu-panel-width: 288px;
-}
-
-body.mac-host {
-    --glyph-titlebar-height: 50px;
-}
-
-body.mac-host .app-titlebar {
-    pointer-events: none;
+    --app-menu-panel-width: 276px;
 }
 
 .app-titlebar {
@@ -27,7 +19,8 @@ body.mac-host .app-titlebar {
     display: flex;
     align-items: stretch;
     height: var(--glyph-titlebar-height);
-    background: transparent;
+    border-bottom: 1px solid #eceef1;
+    background: #ffffff;
     color: var(--windows-caption-fg);
     pointer-events: auto;
     user-select: none;
@@ -46,38 +39,28 @@ body.mac-host .app-titlebar {
     height: 100%;
     max-width: calc(100vw - (var(--windows-caption-button-width) * 3) - 8px);
     overflow: visible;
-    padding: 0 8px 0 14px;
-    pointer-events: auto;
+    padding: 0 8px 0 12px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-3px);
     transition:
         opacity 110ms cubic-bezier(0.4, 0, 1, 1),
         transform 130ms cubic-bezier(0.4, 0, 1, 1);
     --wails-draggable: no-drag;
 }
 
-body.mac-host .app-menu-bar {
-    max-width: calc(100vw - 90px);
-    margin-left: 88px;
-}
-
-body.windows-host .app-menu-bar,
-body.linux-host .app-menu-bar {
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(-4px);
-}
-
-body.windows-host .app-titlebar:hover .app-menu-bar,
-body.windows-host .app-titlebar:focus-within .app-menu-bar,
-body.windows-host .app-titlebar[data-menu-open="true"] .app-menu-bar,
-body.linux-host .app-titlebar:hover .app-menu-bar,
-body.linux-host .app-titlebar:focus-within .app-menu-bar,
-body.linux-host .app-titlebar[data-menu-open="true"] .app-menu-bar {
+.app-titlebar:hover .app-menu-bar,
+.app-titlebar:focus-within .app-menu-bar,
+.app-titlebar[data-menu-open="true"] .app-menu-bar {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0);
-    transition:
-        opacity 150ms cubic-bezier(0, 0, 0.2, 1),
-        transform 180ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+body.mac-host .app-menu-bar {
+    max-width: calc(100vw - 76px);
+    margin-left: 72px;
+    padding-left: 0;
 }
 
 .app-menu {
@@ -86,62 +69,58 @@ body.linux-host .app-titlebar[data-menu-open="true"] .app-menu-bar {
 
 .app-menu-button {
     min-width: 0;
-    min-height: 26px;
-    padding: 0 9px;
+    min-height: 29px;
+    padding: 0 8px;
     border: 0;
-    border-radius: 4px;
+    border-radius: 3px;
     background: transparent;
     color: inherit;
     cursor: default;
-    font: 500 13px/1 var(--glyph-font-text);
+    font: 400 13px/1 var(--glyph-font-text);
     white-space: nowrap;
 }
 
 .app-menu-button:hover,
 .app-menu-button:focus-visible,
 .app-menu-button[aria-expanded="true"] {
-    background: rgb(0 0 0 / 9%);
+    background: var(--glyph-control-hover);
     outline: 0;
 }
 
 .app-menu-panel {
     position: absolute;
-    top: 100%;
+    top: calc(100% - 1px);
     left: 0;
     display: grid;
     width: min(var(--app-menu-panel-width), calc(100vw - 16px));
     max-height: calc(100vh - var(--glyph-titlebar-height) - 10px);
-    padding: 5px;
+    padding: 4px;
     overflow-x: hidden;
     overflow-y: auto;
-    border: 1px solid #d8d8d8;
-    border-radius: 6px;
+    border: 1px solid var(--glyph-border);
+    border-radius: 8px;
     background: #ffffff;
-    box-shadow: 0 14px 36px rgb(15 18 22 / 15%);
+    box-shadow: 0 10px 28px rgb(31 35 41 / 14%), 0 2px 7px rgb(31 35 41 / 8%);
     color: #202124;
     opacity: 0;
-    filter: saturate(0.96);
-    transform: translateY(-7px) scale(0.975);
+    transform: translateY(-4px);
     transform-origin: top left;
     visibility: hidden;
-    will-change: opacity, transform, filter;
+    will-change: opacity, transform;
     transition:
         opacity 110ms cubic-bezier(0.4, 0, 1, 1),
         transform 130ms cubic-bezier(0.4, 0, 1, 1),
-        filter 130ms cubic-bezier(0.4, 0, 1, 1),
         visibility 0s linear 130ms;
     --wails-draggable: no-drag;
 }
 
 .app-menu-panel[data-menu-panel-state="open"] {
-    filter: saturate(1);
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
     visibility: visible;
     transition:
         opacity 150ms cubic-bezier(0, 0, 0.2, 1),
         transform 180ms cubic-bezier(0, 0, 0.2, 1),
-        filter 180ms cubic-bezier(0, 0, 0.2, 1),
         visibility 0s;
 }
 
@@ -165,12 +144,13 @@ body.linux-host .app-titlebar[data-menu-open="true"] .app-menu-bar {
 }
 
 .app-menu-item {
+    position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    min-height: 28px;
+    min-height: 30px;
     gap: 14px;
-    padding: 0 8px;
+    padding: 0 9px 0 27px;
     border: 0;
     border-radius: 4px;
     background: transparent;
@@ -178,6 +158,15 @@ body.linux-host .app-titlebar[data-menu-open="true"] .app-menu-bar {
     cursor: default;
     font: 400 13px/1.2 var(--glyph-font-text);
     text-align: left;
+}
+
+.app-menu-item[role="menuitemcheckbox"][aria-checked="true"]::before,
+.app-menu-item[role="menuitemradio"][aria-checked="true"]::before {
+    content: "✓";
+    position: absolute;
+    left: 9px;
+    color: var(--glyph-accent);
+    font-weight: 700;
 }
 
 .app-menu-item > span:first-child {
@@ -189,7 +178,7 @@ body.linux-host .app-titlebar[data-menu-open="true"] .app-menu-bar {
 
 .app-menu-item:hover,
 .app-menu-item:focus-visible {
-    background: #f1f3f4;
+    background: var(--glyph-control-hover);
     outline: 0;
 }
 
@@ -214,8 +203,8 @@ body.linux-host .app-titlebar[data-menu-open="true"] .app-menu-bar {
 
 .app-menu-separator {
     height: 1px;
-    margin: 4px;
-    background: #e4e4e4;
+    margin: 4px 5px;
+    background: rgb(72 76 84 / 13%);
 }
 
 .app-drag-region {
@@ -274,7 +263,8 @@ body.linux-host .window-control-icon {
 }
 
 .window-control:hover {
-    background: var(--windows-caption-hover-bg);
+    background: var(--glyph-control-hover);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 40%);
 }
 
 .window-control:active {

@@ -8,13 +8,6 @@ import {
 } from "./core/projection";
 import { dispatch, getEditorState } from "./core/store";
 
-export type FindReplaceController = {
-    openFind: () => void;
-    openReplace: () => void;
-    close: () => void;
-    refresh: () => void;
-};
-
 type FindMatch = { from: number; to: number };
 type FindOptions = { caseSensitive: boolean; wholeWord: boolean };
 type FindReplaceElements = {
@@ -39,7 +32,7 @@ const wordCharacterPattern = /[\p{L}\p{N}_]/u;
 export function installFindReplaceController(options: {
     editor: HTMLElement;
     shell: HTMLElement;
-}): FindReplaceController {
+}) {
     const elements = readElements();
     let matches: FindMatch[] = [];
     let activeIndex = -1;
@@ -48,6 +41,7 @@ export function installFindReplaceController(options: {
     let focusOwnerBeforeOpen: HTMLElement | null = null;
 
     elements.findInput.addEventListener("input", () => scan());
+    elements.panel.addEventListener("keydown", handlePanelKeydown);
     elements.findInput.addEventListener("keydown", handleFindKeydown);
     elements.replaceInput.addEventListener("keydown", handleReplaceKeydown);
     elements.previousButton.addEventListener("click", () => navigate(-1));
@@ -86,6 +80,7 @@ export function installFindReplaceController(options: {
         syncStateSelectionFromDom();
         seedQueryFromSelection();
         elements.panel.hidden = false;
+        document.body.classList.add("find-replace-active");
         setReplaceExpanded(replace);
         scan();
         const input = replace ? elements.replaceInput : elements.findInput;
@@ -94,7 +89,11 @@ export function installFindReplaceController(options: {
     }
 
     function close(): void {
+        if (elements.panel.hidden) {
+            return;
+        }
         elements.panel.hidden = true;
+        document.body.classList.remove("find-replace-active");
         elements.highlightLayer.replaceChildren();
         setPinnedSourceRevealRange(null);
         const focusOwner = focusOwnerBeforeOpen;
@@ -190,21 +189,21 @@ export function installFindReplaceController(options: {
         scan();
     }
 
+    function handlePanelKeydown(event: KeyboardEvent): void {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        close();
+    }
+
     function handleFindKeydown(event: KeyboardEvent): void {
-        if (event.key === "Escape") {
-            event.preventDefault();
-            close();
-        } else if (event.key === "Enter") {
+        if (event.key === "Enter") {
             event.preventDefault();
             navigate(event.shiftKey ? -1 : 1);
         }
     }
 
     function handleReplaceKeydown(event: KeyboardEvent): void {
-        if (event.key === "Escape") {
-            event.preventDefault();
-            close();
-        } else if (event.key === "Enter") {
+        if (event.key === "Enter") {
             event.preventDefault();
             replaceCurrent();
         }
@@ -246,12 +245,10 @@ export function installFindReplaceController(options: {
             try {
                 if (!range) {
                     const start = sourceOffsetToDomPoint(match.from, {
-                        activateBlockSource: active,
-                        activateSourceTokens: active,
+                        revealSource: active,
                     });
                     const end = sourceOffsetToDomPoint(match.to, {
-                        activateBlockSource: active,
-                        activateSourceTokens: active,
+                        revealSource: active,
                     });
                     fallbackRange.setStart(start.node, start.offset);
                     fallbackRange.setEnd(end.node, end.offset);

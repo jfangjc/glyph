@@ -3,6 +3,7 @@ import { canUseDesktopFileSystem } from "../documents/document-actions";
 import { documentState } from "../documents/document-state";
 import { getElement } from "../utils/dom";
 import { fileNameFromPath } from "../utils/text";
+import { getDocumentFormatById } from "../formats/registry";
 
 export function syncDocumentWindowTitle(): void {
     const fileName = documentState.fileName || (
@@ -28,5 +29,8 @@ export function getSuggestedFileName(): string {
         .slice(0, 80)
         .trim();
 
-    return safeName ? safeName : "Untitled";
+    const stem = safeName || "Untitled";
+    const extension = documentState.committedFileName.match(/\.([^./\\\s]+)$/)?.[1]
+        ?? getDocumentFormatById(documentState.activeFormatId).descriptor.defaultExtension;
+    return stem.toLowerCase().endsWith(`.${extension.toLowerCase()}`) ? stem : `${stem}.${extension}`;
 }

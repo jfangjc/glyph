@@ -11,6 +11,7 @@ type GlobalShortcutOptions = {
     openDirectory: () => void | Promise<void>;
     saveDocument: (promptForPath?: boolean) => void | Promise<void>;
     toggleFileTree: () => void;
+    toggleMarkdownEditingMode: () => void;
 };
 
 type GlobalShortcutCommand =
@@ -22,6 +23,7 @@ type GlobalShortcutCommand =
     | "edit:find"
     | "edit:replace"
     | "view:toggle-file-tree"
+    | "view:toggle-markdown-source"
     | "view:zoom-in"
     | "view:zoom-out"
     | "view:zoom-reset";
@@ -54,6 +56,9 @@ export function handleGlobalKeydown(event: KeyboardEvent, options: GlobalShortcu
         case "view:toggle-file-tree":
             options.toggleFileTree();
             return;
+        case "view:toggle-markdown-source":
+            options.toggleMarkdownEditingMode();
+            return;
         case "file:open-directory":
             void options.openDirectory();
             return;
@@ -85,6 +90,7 @@ function readGlobalShortcutCommand(event: KeyboardEvent): GlobalShortcutCommand 
         case "edit:find":
         case "edit:replace":
         case "view:toggle-file-tree":
+        case "view:toggle-markdown-source":
         case "view:zoom-in":
         case "view:zoom-out":
         case "view:zoom-reset":

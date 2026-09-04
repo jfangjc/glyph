@@ -20,11 +20,14 @@ export function applyTransactionToDoc(
 }
 
 export function normalizeSelection(selection: SelectionRange, docLength: number): SelectionRange {
+    const anchor = clampOffset(selection.anchor, docLength);
+    const head = clampOffset(selection.head, docLength);
     return {
-        anchor: clampOffset(selection.anchor, docLength),
-        head: clampOffset(selection.head, docLength),
+        anchor,
+        head,
         anchorAffinity: selection.anchorAffinity ?? "downstream",
         headAffinity: selection.headAffinity ?? "downstream",
+        source: selection.source === true,
     };
 }
 
@@ -34,6 +37,7 @@ export function mapSelection(selection: SelectionRange, changes: Change[]): Sele
         head: mapOffset(selection.head, changes, selection.headAffinity),
         anchorAffinity: selection.anchorAffinity,
         headAffinity: selection.headAffinity,
+        source: selection.source,
     };
 }
 
@@ -67,7 +71,7 @@ export function mapOffset(
     return offset + delta;
 }
 
-export function normalizeChanges(changes: Change[], docLength: number): Change[] {
+function normalizeChanges(changes: Change[], docLength: number): Change[] {
     const normalized = changes
         .map((change) => ({
             from: clampOffset(change.from, docLength),

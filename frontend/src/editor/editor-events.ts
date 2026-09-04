@@ -15,7 +15,6 @@ type EditorEventHandlers = {
     onEditorKeydown: (event: KeyboardEvent) => void;
     onEditorMouseDown: (event: PointerEvent) => void;
     onEditorBeforeInput: (event: InputEvent) => void;
-    onEditorInput: (event: Event) => void;
     onEditorCopy: (event: ClipboardEvent) => void;
     onEditorCut: (event: ClipboardEvent) => void;
     onEditorPaste: (event: ClipboardEvent) => void;
@@ -56,7 +55,6 @@ export function installEditorEventListeners(
     targets.editor.addEventListener("keydown", handlers.onEditorKeydown);
     targets.editor.addEventListener("pointerdown", handlers.onEditorMouseDown);
     targets.editor.addEventListener("beforeinput", handlers.onEditorBeforeInput);
-    targets.editor.addEventListener("input", handlers.onEditorInput);
     targets.editor.addEventListener("copy", handlers.onEditorCopy);
     targets.editor.addEventListener("cut", handlers.onEditorCut);
     targets.editor.addEventListener("paste", handlers.onEditorPaste);

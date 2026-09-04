@@ -13,6 +13,8 @@ type InlineToken = {
     label: string;
     destination: string;
     title?: string;
+    imageWidth?: "auto" | "25%" | "50%" | "75%" | "100%";
+    imageAlign?: "left" | "center" | "right";
 };
 
 type InlineCodeToken = {
@@ -136,6 +138,11 @@ function renderInlineTokenAt(
 ): { html: string; length: number } | null {
     const character = text[index];
 
+    if (character === " ") {
+        const hardBreak = readHardBreakToken(text, index);
+        return hardBreak ? { html: renderHardBreakToken(hardBreak), length: hardBreak.raw.length } : null;
+    }
+
     if (character === "`") {
         const inlineCode = readInlineCodeToken(text, index);
         return inlineCode ? { html: renderInlineCodeToken(inlineCode), length: inlineCode.raw.length } : null;
@@ -229,6 +236,7 @@ function isInlineSpecialCharacter(text: string, index: number): boolean {
         character === "~" ||
         character === "=" ||
         character === "^" ||
+        (character === " " && readHardBreakToken(text, index) !== null) ||
         character === "\n" ||
         isPotentialBareUrlStart(text, index)
     );
@@ -384,15 +392,17 @@ function readHardBreakToken(text: string, index: number): HardBreakToken | null 
         return { raw: "\\\n" };
     }
 
-    if (text[index] !== "\n") {
+    if (text[index] !== " " || text[index + 1] !== " " || text[index - 1] === " ") {
         return null;
     }
 
-    let precedingSpaces = 0;
-    for (let cursor = index - 1; cursor >= 0 && text[cursor] === " "; cursor -= 1) {
-        precedingSpaces += 1;
+    let end = index;
+    while (text[end] === " ") {
+        end += 1;
     }
-    return precedingSpaces >= 2 ? { raw: "\n" } : null;
+    return end - index >= 2 && text[end] === "\n"
+        ? { raw: text.slice(index, end + 1) }
+        : null;
 }
 
 /**
@@ -506,11 +516,18 @@ function readInlineToken(text: string, index: number, image: boolean): InlineTok
         return null;
     }
 
+    const attributeMatch = image ? text.slice(destinationEnd + 1).match(/^\{([^}]*)\}/) : null;
+    const attributes = attributeMatch?.[1] ?? "";
+    const width = attributes.match(/(?:^|\s)width=(auto|25%|50%|75%|100%)(?:\s|$)/)?.[1] as InlineToken["imageWidth"];
+    const align = attributes.match(/(?:^|\s)align=(left|center|right)(?:\s|$)/)?.[1] as InlineToken["imageAlign"];
+    const rawEnd = destinationEnd + 1 + (attributeMatch?.[0].length ?? 0);
     return {
-        raw: text.slice(index, destinationEnd + 1),
+        raw: text.slice(index, rawEnd),
         label: text.slice(labelStart, labelEnd),
         destination: destination.destination,
         title: destination.title,
+        imageWidth: width,
+        imageAlign: align,
     };
 }
 
@@ -852,7 +869,7 @@ function renderFootnoteReferenceToken(token: FootnoteReferenceToken): string {
         token.raw,
         "markdown-token markdown-footnote-reference-token",
         "footnote-reference",
-        `<sup class="markdown-footnote-reference" data-source-ignore="true" id="${escapeHtml(token.id)}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}" tabindex="-1">${token.number}</a></sup>`,
+        `<sup class="markdown-footnote-reference" data-source-ignore="true" id="${escapeHtml(token.id)}"><a class="markdown-link" href="#fn-${label}" data-href="#fn-${label}">${token.number}</a></sup>`,
         null,
     );
 }
@@ -893,19 +910,21 @@ function renderImageToken(token: InlineToken): string {
     const source = escapeHtml(token.destination);
     const alt = escapeHtml(unescapeMarkdownText(token.label));
     const title = token.title ? ` data-image-title="${escapeHtml(token.title)}"` : "";
+    const width = ` data-image-width="${token.imageWidth ?? "auto"}"`;
+    const align = ` data-image-align="${token.imageAlign ?? "center"}"`;
     const preserveKey = escapeHtml(createImagePreviewPreserveKey(token));
 
     return renderAtomicInlineToken(
         token.raw,
         "markdown-token markdown-image-token",
         "image",
-        `<span class="markdown-image-preview" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title} data-state="loading" aria-label="${alt || "Image"}"></span>`,
+        `<span class="markdown-image-preview" data-source-ignore="true" data-render-preserve-key="${preserveKey}" data-image-source="${source}" data-image-alt="${alt}"${title}${width}${align} data-state="loading" aria-label="${alt || "Image"}"></span>`,
         null,
     );
 }
 
 function createImagePreviewPreserveKey(token: InlineToken): string {
-    return JSON.stringify(["markdown-image", token.destination, unescapeMarkdownText(token.label), token.title ?? ""]);
+    return JSON.stringify(["markdown-image", token.destination, unescapeMarkdownText(token.label), token.title ?? "", token.imageWidth ?? "auto", token.imageAlign ?? "center"]);
 }
 
 function renderLinkToken(token: InlineToken, context: DocumentRenderContext, depth: number): string {
@@ -913,7 +932,7 @@ function renderLinkToken(token: InlineToken, context: DocumentRenderContext, dep
     const title = token.title ? ` title="${escapeHtml(token.title)}"` : "";
     const labelHtml = renderInlineMarkdown(token.label, context, depth);
     const label = href
-        ? `<a class="markdown-link" data-source-ignore="true" tabindex="-1" href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"${title} rel="noreferrer">${labelHtml}</a>`
+        ? `<a class="markdown-link" data-source-ignore="true" href="${escapeHtml(href)}" data-href="${escapeHtml(href)}"${title} rel="noreferrer">${labelHtml}</a>`
         : `<span class="markdown-link markdown-link-label" data-source-ignore="true"${title}>${labelHtml}</span>`;
 
     return renderAtomicInlineToken(
@@ -944,7 +963,7 @@ function renderRawLink(label: string, destination: string, raw: string, kind: "a
         raw,
         "markdown-token markdown-link-token markdown-url-token",
         kind,
-        `<a class="markdown-link" data-source-ignore="true" tabindex="-1" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a>`,
+        `<a class="markdown-link" data-source-ignore="true" href="${escapedHref}" data-href="${escapedHref}" rel="noreferrer">${escapeHtml(label)}</a>`,
         kind === "autolink" ? { from: 1, to: raw.length - 1 } : { from: 0, to: raw.length },
     );
 }

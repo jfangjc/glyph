@@ -19,14 +19,6 @@ export function createPasteTransaction(state: EditorState, text: string): Transa
     return createReplaceSelectionTransaction(state, normalizeInsertedText(text), "paste", "discrete");
 }
 
-export function createDeleteBackwardTransaction(state: EditorState): Transaction | null {
-    return createDeleteTransaction(state, "backward", "grapheme");
-}
-
-export function createDeleteForwardTransaction(state: EditorState): Transaction | null {
-    return createDeleteTransaction(state, "forward", "grapheme");
-}
-
 export function createDeleteTransaction(
     state: EditorState,
     direction: DeleteDirection,
@@ -46,16 +38,6 @@ export function createDeleteTransaction(
     return direction === "backward"
         ? createDeleteRangeTransaction(boundary, offset)
         : createDeleteRangeTransaction(offset, boundary);
-}
-
-export function readSelectedSourceText(state: EditorState): string | null {
-    const range = orderedSelection(state);
-    return range.from === range.to ? null : state.doc.slice(range.from, range.to);
-}
-
-export function createCutTransaction(state: EditorState): Transaction | null {
-    const range = orderedSelection(state);
-    return range.from === range.to ? null : createDeleteRangeTransaction(range.from, range.to);
 }
 
 function createReplaceSelectionTransaction(

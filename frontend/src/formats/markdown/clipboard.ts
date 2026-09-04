@@ -34,7 +34,13 @@ export function readMarkdownClipboardInsert(clipboard: DataTransfer | null | und
     }
 
     if (clipboard.types.includes("text/markdown")) {
-        return { kind: "markdown", value: normalizeLines(clipboard.getData("text/markdown")) };
+        const value = normalizeLines(clipboard.getData("text/markdown"));
+        if (
+            value !== "" ||
+            (!clipboard.types.includes("text/html") && !clipboard.types.includes("text/plain"))
+        ) {
+            return { kind: "markdown", value };
+        }
     }
 
     if (clipboard.types.includes("text/html")) {
@@ -46,7 +52,10 @@ export function readMarkdownClipboardInsert(clipboard: DataTransfer | null | und
                 warning: "Rich clipboard content exceeded 5 MB and was pasted as plain text.",
             };
         }
-        return { kind: "html", value: htmlToMarkdown(html) };
+        const value = htmlToMarkdown(html);
+        if (value !== "" || !clipboard.types.includes("text/plain")) {
+            return { kind: "html", value };
+        }
     }
 
     return clipboard.types.includes("text/plain")
@@ -61,10 +70,11 @@ export function htmlToMarkdown(html: string): string {
     }
 
     const result = Array.from(document.body.childNodes).map((node) => convertBlockNode(node, 0)).join("");
-    return normalizeLines(result)
+    const normalized = normalizeLines(result)
         .replace(/[ \t]+\n/g, "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
+        .replace(/\n{3,}/g, "\n\n");
+    const withoutBoundaryLineBreaks = normalized.replace(/^\n+|\n+$/g, "");
+    return withoutBoundaryLineBreaks || (normalized.includes("\n") ? "\n" : normalized);
 }
 
 function renderClipboardHtml(selection: ClipboardSelectionContext): string {
@@ -462,7 +472,9 @@ function serializeMarkdownDestination(destination: string, title: string): strin
 }
 
 function escapeMarkdownText(value: string): string {
-    return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+    return value
+        .replace(/[\t\n\f\r ]+/g, " ")
+        .replace(/([\\[\]])/g, "\\$1");
 }
 
 function serializeInlineCode(value: string): string {

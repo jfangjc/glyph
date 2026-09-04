@@ -15,22 +15,16 @@ import {
 } from "../../editor/blocks/view";
 import { createCodeFence } from "./code-fence";
 
-export function hasMarkdownBlockSource(type: BlockType): boolean {
-    return (
-        headingTypes.has(type) ||
-        ["list", "ordered-list", "todo", "quote", "code", "rule", "table", "math", "html", "definition-list"].includes(
-            type,
-        )
-    );
-}
-
 export function readMarkdownBlockSource(block: HTMLElement, type: BlockType, text: string): BlockSource {
     if (headingTypes.has(type)) {
-        const suffix =
+        const canonicalSuffix =
             readBlockHeadingIdExplicit(block) && readBlockHeadingId(block)
                 ? ` {#${readBlockHeadingId(block)}}`
                 : undefined;
-        return { prefix: `${"#".repeat(readHeadingLevel(type))} `, suffix };
+        return {
+            prefix: block.dataset.headingSourcePrefix ?? `${"#".repeat(readHeadingLevel(type))} `,
+            suffix: block.dataset.headingSourceSuffix ?? canonicalSuffix,
+        };
     }
 
     if (type === "list") {

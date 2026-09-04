@@ -1,4 +1,4 @@
-import { handleGlobalKeydown as handleGlobalKeydownCommand } from "../app/global-shortcuts";
+import { handleGlobalKeydown } from "../app/global-shortcuts";
 import { getSuggestedFileName, syncDocumentWindowTitle } from "../app/window-title";
 import {
     bindDocumentActions,
@@ -19,24 +19,23 @@ import {
 } from "../documents/document-state";
 import {
     getActiveDocumentFormat,
+    isMarkdownSourceMode,
     commitSavedDocument,
     installSourceStateDocumentIntegration,
     loadDocument,
     serializeDocument,
     syncBlockViewContext,
     syncDocumentFormatUi,
+    toggleMarkdownEditingMode,
 } from "../documents/document-session";
 import { installFileTree } from "../documents/file-tree";
-import type { DocumentEditorHooks } from "./core/types";
 import {
     appMenuCommandEvent,
 } from "../platform/window-controls/window-controls";
 import {
     createAppMenuController,
 } from "./controllers/app-menu-controller";
-import {
-    createEditorInputController,
-} from "./controllers/editor-input-controller";
+import { createEditorInputController } from "./controllers/editor-input-controller";
 import {
     createSelectionController,
 } from "./controllers/selection-controller";
@@ -45,15 +44,13 @@ import {
 } from "./controllers/title-controller";
 import {
     installDocumentOutline,
+    refreshDocumentOutline,
     syncDocumentOutlineToBlock,
 } from "./document-outline";
 import { readEditorDom } from "./editor-dom";
 import { installEditorEventListeners } from "./editor-events";
 import {
-    configureEditorUiState,
     syncActiveBlockIndicator,
-    syncBlockSourceReveal,
-    syncBlockSourceRevealBlocks,
 } from "./editor-ui-state";
 import {
     clearGutterHoverBlock,
@@ -71,13 +68,11 @@ import { configureCaret } from "./selection/caret";
 import {
     installFindReplaceController,
 } from "./find-replace";
-import { installNativeSourceNavigationTracker } from "./core/projection";
 
 export function installEditorController(): void {
     const dom = readEditorDom();
-    const editorHooks = createDocumentEditorHooks();
 
-    installDocumentOutline(dom.shell, dom.editor);
+    installDocumentOutline(dom.shell);
     const fileTree = installFileTree(dom.shell, {
         openDocumentPath,
     });
@@ -85,11 +80,25 @@ export function installEditorController(): void {
         editor: dom.editor,
         shell: dom.shell,
     });
+    const openFind = (): void => {
+        fileTree.close();
+        findReplaceController.openFind();
+    };
+    const openReplace = (): void => {
+        fileTree.close();
+        findReplaceController.openReplace();
+    };
+    const toggleFileTree = (): void => {
+        findReplaceController.close();
+        fileTree.toggle();
+    };
     const inputController = createEditorInputController({
-        hooks: editorHooks,
+        syncActiveBlockIndicator: syncFocusedBlockUi,
         getActiveDocumentFormat,
         getActiveFilePath: () => documentState.activeFilePath,
+        isSourceMode: isMarkdownSourceMode,
     });
+    dom.markdownModeToggle.addEventListener("click", toggleMarkdownEditingMode);
     const titleController = createTitleController({
         getActiveDocumentFormat,
         isComposingText: inputController.isComposingText,
@@ -97,25 +106,31 @@ export function installEditorController(): void {
             Boolean(documentState.activeFilePath && documentState.hasUnsavedChanges),
         saveDocument: () => saveCurrentDocument({ promptForPath: !documentState.activeFilePath }),
         syncActiveBlockIndicator,
-        syncBlockSourceReveal,
     });
     const selectionController = createSelectionController({
-        hooks: editorHooks,
+        syncActiveBlockIndicator: syncFocusedBlockUi,
         isComposingText: inputController.isComposingText,
     });
     const appMenuController = createAppMenuController({
         editor: dom.editor,
         surface: dom.surface,
-        findReplaceController,
+        openFind,
+        openReplace,
         createNewDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
         openDocument,
         openDirectory: fileTree.openDirectory,
         saveDocument: saveDocumentFromEditor,
         ensureExportSaved,
-        toggleFileTree: fileTree.toggle,
+        toggleFileTree,
+        toggleMarkdownEditingMode,
+        canToggleMarkdownEditingMode: () => getActiveDocumentFormat().descriptor.id === "markdown",
+        isMarkdownSourceMode,
         canExport: () => Boolean(getActiveDocumentFormat().export),
         executeEditorCommand: inputController.executeCommand,
+        canExecuteEditorCommand: inputController.canExecuteCommand,
+        isEditorCommandActive: inputController.isCommandActive,
     });
+    document.addEventListener("selectionchange", () => appMenuController.syncMenuState());
 
     installEditorEventListeners(
         { surface: dom.surface, editor: dom.editor, title: dom.title },
@@ -130,7 +145,6 @@ export function installEditorController(): void {
             onEditorKeydown: inputController.handleEditorKeydown,
             onEditorMouseDown: inputController.handleEditorMouseDown,
             onEditorBeforeInput: inputController.handleEditorBeforeInput,
-            onEditorInput: inputController.handleEditorInput,
             onEditorCopy: inputController.handleEditorCopy,
             onEditorCut: inputController.handleEditorCut,
             onEditorPaste: inputController.handleEditorPaste,
@@ -143,7 +157,10 @@ export function installEditorController(): void {
             onEditorCompositionStart: inputController.handleEditorCompositionStart,
             onEditorCompositionEnd: inputController.handleEditorCompositionEnd,
             onEditorFocusOut: (event) => {
-                if (!(event.relatedTarget instanceof Node) || !dom.editor.contains(event.relatedTarget)) {
+                if (
+                    (!(event.relatedTarget instanceof Node) || !dom.editor.contains(event.relatedTarget)) &&
+                    !inputController.containsExternalInteractionTarget(event.relatedTarget)
+                ) {
                     inputController.deactivate();
                 }
             },
@@ -152,16 +169,20 @@ export function installEditorController(): void {
             onTitleInput: titleController.handleTitleInput,
             onTitleFocus: titleController.handleTitleFocus,
             onTitleBlur: titleController.handleTitleBlur,
-            onSelectionChange: selectionController.handleEditorSelectionChange,
+            onSelectionChange: () => {
+                selectionController.handleEditorSelectionChange();
+                inputController.handleEditorSelectionChange();
+            },
             onWindowKeydown: (event) =>
                 handleGlobalKeydown(event, {
-                    openFind: () => findReplaceController.openFind(),
-                    openReplace: () => findReplaceController.openReplace(),
+                    openFind,
+                    openReplace,
                     newDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
                     openDocument,
                     openDirectory: fileTree.openDirectory,
                     saveDocument: saveDocumentFromEditor,
-                    toggleFileTree: fileTree.toggle,
+                    toggleFileTree,
+                    toggleMarkdownEditingMode,
                 }),
             onWindowKeyup: syncLinkOpenIntentFromKeyboard,
             onWindowBlur: () => {
@@ -169,11 +190,12 @@ export function installEditorController(): void {
                 inputController.deactivate();
             },
             onDocumentStateChanged: () => {
-                selectionController.resetSelectionSignature();
+                selectionController.refresh();
+                refreshDocumentOutline();
                 syncDocumentFormatUi();
                 syncBlockViewContext();
                 syncDocumentWindowTitle();
-                appMenuController.syncExportMenuState();
+                appMenuController.syncMenuState();
                 findReplaceController.refresh();
             },
         },
@@ -182,18 +204,12 @@ export function installEditorController(): void {
     window.addEventListener(appMenuCommandEvent, appMenuController.handleAppMenuCommand as EventListener);
     configureCaret({
         onBlockFocused: (block) => {
-            syncActiveBlockIndicator(block);
-            syncBlockSourceReveal(block);
-            syncDocumentOutlineToBlock(block);
+            syncFocusedBlockUi(block);
         },
     });
     configurePointerInteractions({
         onBlockActivated: syncActiveBlockIndicator,
         getProjectionCapability: () => getActiveDocumentFormat().projection,
-    });
-    installNativeSourceNavigationTracker(dom.editor);
-    configureEditorUiState({
-        hasBlockSource: (type) => Boolean(getActiveDocumentFormat().render.hasBlockSource?.(type)),
     });
     installSourceStateDocumentIntegration();
     if (documentState.sessionId === 0) {
@@ -212,7 +228,7 @@ export function installEditorController(): void {
     syncDocumentFormatUi();
     syncBlockViewContext();
     syncDocumentWindowTitle();
-    appMenuController.syncExportMenuState();
+    appMenuController.syncMenuState();
 }
 
 async function restoreStartupDocument(): Promise<void> {
@@ -221,19 +237,9 @@ async function restoreStartupDocument(): Promise<void> {
     }
 }
 
-function createDocumentEditorHooks(): DocumentEditorHooks {
-    return {
-        syncActiveBlockIndicator,
-        syncBlockSourceReveal,
-        syncBlockSourceRevealBlocks,
-    };
-}
-
-function handleGlobalKeydown(
-    event: KeyboardEvent,
-    options: Parameters<typeof handleGlobalKeydownCommand>[1],
-): void {
-    handleGlobalKeydownCommand(event, options);
+function syncFocusedBlockUi(block: HTMLElement | null): void {
+    syncActiveBlockIndicator(block);
+    syncDocumentOutlineToBlock(block);
 }
 
 async function saveDocumentFromEditor(promptForPath = false): Promise<void> {

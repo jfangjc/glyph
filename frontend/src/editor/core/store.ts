@@ -247,6 +247,14 @@ function restoreSnapshot(snapshot: EditorSnapshot): void {
     });
 }
 
+export function canUndoSourceHistory(): boolean {
+    return Boolean(pendingTypingHistory || undoStack.length > 0);
+}
+
+export function canRedoSourceHistory(): boolean {
+    return redoStack.length > 0;
+}
+
 function rewriteSnapshot(
     snapshot: EditorSnapshot,
     replacements: Array<{ source: string; replacement: string }>,
@@ -328,6 +336,9 @@ function clearTypingBatchTimer(): void {
 }
 
 function isTypingBoundaryTransaction(transaction: Transaction): boolean {
+    if (transaction.annotations?.typingBoundary !== undefined) {
+        return transaction.annotations.typingBoundary;
+    }
     return transaction.changes.some((change) => change.insert !== "" && /[\s\p{P}]/u.test(change.insert));
 }
 
@@ -358,7 +369,8 @@ function selectionsEqual(left: SelectionRange, right: SelectionRange): boolean {
         left.anchor === right.anchor &&
         left.head === right.head &&
         left.anchorAffinity === right.anchorAffinity &&
-        left.headAffinity === right.headAffinity
+        left.headAffinity === right.headAffinity &&
+        Boolean(left.source) === Boolean(right.source)
     );
 }
 

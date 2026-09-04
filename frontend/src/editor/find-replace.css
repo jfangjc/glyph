@@ -7,13 +7,19 @@
     width: min(640px, calc(100vw - 36px));
     gap: 6px;
     padding: 8px;
-    border: 1px solid #d8d8d8;
-    border-radius: 8px;
-    background: #ffffff;
-    box-shadow: 0 12px 32px rgba(15, 18, 22, 0.14);
-    color: #202124;
+    border: 1px solid transparent;
+    border-radius: 13px;
+    background:
+        var(--glyph-glass-fill-strong) padding-box,
+        var(--glyph-glass-rim) border-box;
+    box-shadow:
+        var(--glyph-glass-shadow),
+        var(--glyph-glass-inset);
+    color: var(--glyph-text);
     font: 400 13px/1.2 var(--glyph-font-text);
     --wails-draggable: no-drag;
+    -webkit-backdrop-filter: var(--glyph-glass-backdrop);
+    backdrop-filter: var(--glyph-glass-backdrop);
 }
 
 body.app-titlebar-host .find-replace-panel {
@@ -44,22 +50,25 @@ body.app-titlebar-host .find-replace-panel {
     min-width: 0;
     height: 30px;
     padding: 0 9px;
-    border: 1px solid #d5d8dc;
-    border-radius: 5px;
+    border: 1px solid rgb(75 79 87 / 14%);
+    border-radius: 8px;
     outline: 0;
-    background: #ffffff;
-    color: #202124;
+    background: var(--glyph-control-fill);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 74%);
+    color: var(--glyph-text);
     font: inherit;
 }
 
 .find-replace-input:focus {
-    border-color: #8ab4f8;
-    box-shadow: 0 0 0 2px rgb(138 180 248 / 28%);
+    border-color: rgb(8 121 232 / 48%);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 82%),
+        0 0 0 2px var(--glyph-focus-ring);
 }
 
 .find-counter {
     min-width: 46px;
-    color: #6f7377;
+    color: var(--glyph-text-muted);
     font-size: 12px;
     text-align: center;
     white-space: nowrap;
@@ -72,9 +81,9 @@ body.app-titlebar-host .find-replace-panel {
     min-height: 30px;
     padding: 0 9px;
     border: 1px solid transparent;
-    border-radius: 5px;
+    border-radius: 8px;
     background: transparent;
-    color: #202124;
+    color: var(--glyph-text);
     cursor: default;
     font: inherit;
     white-space: nowrap;
@@ -88,7 +97,8 @@ body.app-titlebar-host .find-replace-panel {
 
 .find-replace-button:hover,
 .find-replace-button:focus-visible {
-    background: #f1f3f4;
+    background: var(--glyph-control-hover);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 52%);
     outline: 0;
 }
 
@@ -102,9 +112,9 @@ body.app-titlebar-host .find-replace-panel {
 }
 
 .find-replace-toggle[aria-pressed="true"] {
-    border-color: #c9dcff;
-    background: #e8f0fe;
-    color: #174ea6;
+    border-color: rgb(8 121 232 / 20%);
+    background: var(--glyph-accent-soft);
+    color: var(--glyph-accent);
 }
 
 .find-highlight-layer {
@@ -131,6 +141,13 @@ body.app-titlebar-host .find-replace-panel {
 }
 
 @media (max-width: 640px) {
+    body.find-replace-active .document-surface {
+        padding-top: 156px;
+    }
+
+    body.app-titlebar-host.find-replace-active .document-surface {
+        padding-top: 154px;
+    }
     .find-replace-panel {
         right: 12px;
         left: 12px;
@@ -138,14 +155,100 @@ body.app-titlebar-host .find-replace-panel {
     }
 
     .find-replace-row {
-        grid-template-columns: minmax(0, 1fr) auto auto auto;
+        position: relative;
+        grid-template-areas:
+            "toggle query query close"
+            "previous next case word";
+        grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 
     .find-counter {
-        justify-self: end;
+        position: absolute;
+        z-index: 1;
+        top: 8px;
+        right: calc(25% + 9px);
+        min-width: 42px;
+        pointer-events: none;
+    }
+
+    #find-replace-toggle {
+        grid-area: toggle;
+    }
+
+    #find-query {
+        grid-area: query;
+        padding-right: 50px;
+    }
+
+    #find-previous {
+        grid-area: previous;
+    }
+
+    #find-next {
+        grid-area: next;
+    }
+
+    #find-case-sensitive {
+        grid-area: case;
+    }
+
+    #find-whole-word {
+        grid-area: word;
+    }
+
+    #find-close {
+        grid-area: close;
+    }
+
+    #find-replace-toggle,
+    #find-previous,
+    #find-next,
+    #find-whole-word,
+    #find-close {
+        font-size: 0;
+    }
+
+    #find-replace-toggle::before,
+    #find-previous::before,
+    #find-next::before,
+    #find-whole-word::before,
+    #find-close::before {
+        font-size: 16px;
+        line-height: 1;
+    }
+
+    #find-replace-toggle::before {
+        content: "\203A";
+        transform: rotate(90deg);
+        transition: transform 120ms ease;
+    }
+
+    .find-replace-panel[data-replace-expanded="true"] #find-replace-toggle::before {
+        transform: rotate(-90deg);
+    }
+
+    #find-previous::before {
+        content: "\2191";
+    }
+
+    #find-next::before {
+        content: "\2193";
+    }
+
+    #find-whole-word::before {
+        content: "W";
+        font-size: 13px;
+        font-weight: 650;
+    }
+
+    #find-close::before {
+        content: "\00D7";
+        font-size: 20px;
     }
 
     .find-replace-replace-row {
+        position: static;
+        grid-template-areas: none;
         grid-template-columns: minmax(0, 1fr) auto auto;
     }
 }

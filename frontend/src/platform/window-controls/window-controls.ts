@@ -60,6 +60,7 @@ export function installWindowControls(): void {
 
     document.body.classList.add("window-focused");
     document.addEventListener("mousedown", handleDocumentMouseDown, true);
+    document.addEventListener("keydown", handleDocumentKeydown, true);
     document.addEventListener("focusin", (event) => {
         const target = event.target;
         if (target instanceof HTMLElement && !target.closest("#app-titlebar")) {
@@ -232,7 +233,11 @@ function handleMenuButtonKeydown(event: KeyboardEvent, button: HTMLButtonElement
 
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
-        focusAdjacentMenuButton(button, event.key === "ArrowRight" ? 1 : -1);
+        const nextButton = focusAdjacentMenuButton(button, event.key === "ArrowRight" ? 1 : -1);
+        const menuId = nextButton?.dataset.menuButton;
+        if (activeMenuId && menuId) {
+            openMenu(menuId);
+        }
     }
 }
 
@@ -353,6 +358,32 @@ function closeMenus(options: {
         activeButton?.focus();
     } else if (options.blurFocus) {
         blurTitlebarFocus(titlebar);
+    }
+}
+
+function handleDocumentKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented) {
+        return;
+    }
+
+    if (event.key === "F10" || (event.key === "Alt" && hostPlatform !== "mac")) {
+        event.preventDefault();
+        document.querySelector<HTMLButtonElement>("#app-titlebar [data-menu-button]")?.focus();
+        return;
+    }
+
+    if (!activeMenuId) return;
+
+    const titlebar = document.getElementById("app-titlebar");
+    if (event.key === "Escape") {
+        if (!titlebar?.contains(event.target as Node | null)) {
+            closeMenus({ blurFocus: true });
+        }
+        return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        closeMenus({ blurFocus: true });
     }
 }
 

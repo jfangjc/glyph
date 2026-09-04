@@ -36,6 +36,24 @@ export type PlainTextHighlightPolicy = {
     delayMs: number;
 };
 
+export type InlineFormatCommand = "bold" | "italic" | "strike" | "code" | "link";
+
+export type BlockFormatCommand =
+    | "paragraph"
+    | "heading-1"
+    | "heading-2"
+    | "heading-3"
+    | "heading-4"
+    | "heading-5"
+    | "heading-6"
+    | "list"
+    | "ordered-list"
+    | "todo"
+    | "quote"
+    | "code";
+
+export type InsertContentCommand = "table" | "image" | "math" | "rule";
+
 export type DocumentFormatDescriptor = {
     id: string;
     label: string;
@@ -50,7 +68,6 @@ export type RenderCapability = {
     readRenderContext?: (blocks: ParsedBlock[]) => DocumentRenderContext;
     applyRenderContext?: (blocks: HTMLElement[], context: DocumentRenderContext) => void;
     renderDocumentFooter?: (context: DocumentRenderContext) => string;
-    hasBlockSource?: (type: BlockType) => boolean;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
     readInteractiveBlockText?: (type: BlockType, source: string) => string;
     renderInline?: (text: string, context: DocumentRenderContext) => string;
@@ -70,7 +87,9 @@ export type EditingCapability = {
     ) => Transaction | null;
     createEnterTransaction?: (state: EditorState, options?: { shiftKey?: boolean }) => Transaction;
     createTabTransaction?: (state: EditorState, delta: -1 | 1) => Transaction | null;
-    createInlineFormatTransaction?: (state: EditorState, marker: "*" | "**") => Transaction | null;
+    createInlineFormatTransaction?: (state: EditorState, command: InlineFormatCommand) => Transaction | null;
+    createBlockFormatTransaction?: (state: EditorState, command: BlockFormatCommand) => Transaction | null;
+    createInsertContentTransaction?: (state: EditorState, command: InsertContentCommand) => Transaction | null;
     createCheckboxToggleTransaction?: (state: EditorState, blockId: string) => Transaction | null;
     createPastedImageSource?: (relativePath: string, originalName: string) => string;
 };

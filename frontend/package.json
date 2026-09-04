@@ -11,7 +11,7 @@
         "preview": "vite preview"
     },
     "dependencies": {
-        "@wailsio/runtime": "latest",
+        "@wailsio/runtime": "3.0.0-beta.16",
         "katex": "^0.16.47"
     },
     "devDependencies": {

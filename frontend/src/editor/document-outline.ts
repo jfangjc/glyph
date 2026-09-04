@@ -3,20 +3,19 @@ import { syncDomSelectionFromState } from "./core/projection";
 import { getEditorBlocks } from "./blocks/view";
 
 type OutlineEntry = {
-    block: HTMLElement;
     id: string;
-    level: 1 | 2;
+    level: 1 | 2 | 3 | 4 | 5 | 6;
     text: string;
 };
 
 let outline: HTMLElement | null = null;
 let list: HTMLUListElement | null = null;
 let scrollContainer: HTMLElement | null = null;
-let pendingSync = 0;
+let outlineSyncPending = false;
 let pendingActiveOutlineFrame = 0;
 let activeId: string | null = null;
 
-export function installDocumentOutline(container: HTMLElement, editor: HTMLElement): void {
+export function installDocumentOutline(container: HTMLElement): void {
     scrollContainer = container;
     outline = document.createElement("nav");
     outline.className = "document-outline";
@@ -27,35 +26,27 @@ export function installDocumentOutline(container: HTMLElement, editor: HTMLEleme
     outline.append(list);
     container.append(outline);
 
-    const observer = new MutationObserver(scheduleOutlineSync);
-    observer.observe(editor, {
-        attributes: true,
-        attributeFilter: ["data-type"],
-        childList: true,
-        subtree: true,
-    });
-
     container.addEventListener("scroll", () => scheduleActiveOutlineItemUpdate(), { passive: true });
     window.addEventListener("resize", () => scheduleActiveOutlineItemUpdate());
     scheduleOutlineSync();
-}
-
-export function syncDocumentOutlineToSelection(): void {
-    // The outline is a scroll-position indicator. Selection changes are handled
-    // by the active block indicator instead.
 }
 
 export function syncDocumentOutlineToBlock(block: HTMLElement | null): void {
     setActiveOutlineId(block?.dataset.blockId ?? null, { scrollActiveItem: false });
 }
 
+export function refreshDocumentOutline(): void {
+    scheduleOutlineSync();
+}
+
 function scheduleOutlineSync(): void {
-    if (pendingSync) {
+    if (outlineSyncPending) {
         return;
     }
 
-    pendingSync = window.requestAnimationFrame(() => {
-        pendingSync = 0;
+    outlineSyncPending = true;
+    queueMicrotask(() => {
+        outlineSyncPending = false;
         syncDocumentOutline();
     });
 }
@@ -81,20 +72,18 @@ function readOutlineEntries(): OutlineEntry[] {
     const state = getEditorState();
     return state.blocks.blocks
         .map((sourceBlock): OutlineEntry | null => {
-            if (sourceBlock.type !== "heading-1" && sourceBlock.type !== "heading-2") {
+            if (!sourceBlock.type.startsWith("heading-")) {
                 return null;
             }
 
             const text = state.doc.slice(sourceBlock.contentFrom, sourceBlock.contentTo).trim();
-            const block = document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(sourceBlock.id)}"]`);
-            if (!text || !block) {
+            if (!text) {
                 return null;
             }
 
             return {
-                block,
                 id: sourceBlock.id,
-                level: sourceBlock.type === "heading-1" ? 1 : 2,
+                level: Number(sourceBlock.type.slice("heading-".length)) as OutlineEntry["level"],
                 text,
             };
         })
@@ -112,7 +101,9 @@ function renderOutlineEntry(entry: OutlineEntry): HTMLLIElement {
     button.type = "button";
     button.title = entry.text;
     button.addEventListener("click", () => {
-        entry.block.scrollIntoView({ block: "start", behavior: readOutlineScrollBehavior() });
+        document
+            .querySelector<HTMLElement>(`#editor [data-block-id="${CSS.escape(entry.id)}"]`)
+            ?.scrollIntoView({ block: "start", behavior: readOutlineScrollBehavior() });
         const state = getEditorState();
         const sourceBlock = state.blocks.blocks.find((block) => block.id === entry.id);
         if (sourceBlock) {
@@ -223,7 +214,7 @@ function isVisibleInContainer(elementRect: DOMRect, containerRect: DOMRect): boo
 
 function isOutlineHeadingBlock(block: HTMLElement): boolean {
     const type = block.dataset.type;
-    return (type === "heading-1" || type === "heading-2") && Boolean(block.dataset.blockId);
+    return Boolean(type?.startsWith("heading-") && block.dataset.blockId);
 }
 
 function setActiveOutlineId(nextActive: string | null, options: { force?: boolean; scrollActiveItem?: boolean } = {}): void {
@@ -252,6 +243,12 @@ function applyActiveOutlineId(): HTMLElement | null {
             item.dataset.active = isActive ? "true" : "false";
             if (isActive) {
                 activeItem = item;
+            }
+            const button = item.querySelector<HTMLButtonElement>(".document-outline-button");
+            if (isActive) {
+                button?.setAttribute("aria-current", "location");
+            } else {
+                button?.removeAttribute("aria-current");
             }
         }
     }

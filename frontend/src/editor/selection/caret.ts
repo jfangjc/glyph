@@ -5,30 +5,10 @@ import {
     getRenderedContentText,
 } from "./rendered-content-dom";
 import {
-    findBlock,
     getBlockContent,
-    getEditorBlockRange,
     getBlockText,
-    getEditorBlocks,
 } from "../blocks/view";
-import { getElement, getPlainTextBoundaryOffset } from "../../utils/dom";
-import {
-    findBlockSourceElement,
-    focusBlockSourceAtOffset as focusBlockSourceElementAtOffset,
-    getBlockSourceOffset,
-    isEditableBlockSourceElement,
-    readBlockSourcePosition,
-} from "../blocks/rendering";
-import type { DocumentSourceSelectionTarget } from "../core/types";
-
-export type SelectedBlockRange = {
-    blocks: HTMLElement[];
-    startBlock: HTMLElement;
-    endBlock: HTMLElement;
-    startOffset: number;
-    endOffset: number;
-    range: Range;
-};
+import { getElement } from "../../utils/dom";
 
 type CaretHooks = {
     onBlockFocused?: (block: HTMLElement) => void;
@@ -68,92 +48,6 @@ export function focusBlockAtOffset(
     if (options.scroll !== "none") {
         scrollBlockIntoComfortableView(block, options.scroll ?? "comfortable");
     }
-}
-
-export function focusPlainTextElement(element: HTMLElement, offset: number): void {
-    const selection = document.getSelection();
-    const range = document.createRange();
-    const text = element.firstChild ?? element.appendChild(document.createTextNode(""));
-
-    element.closest<HTMLElement>("#editor")?.focus({ preventScroll: true });
-    range.setStart(text, Math.min(Math.max(0, offset), text.textContent?.length ?? 0));
-    range.collapse(true);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-}
-
-export function readCurrentSourceSelectionTarget(): DocumentSourceSelectionTarget | null {
-    const selection = document.getSelection();
-    const focusNode = selection?.focusNode;
-    if (!selection?.isCollapsed || !focusNode) {
-        return null;
-    }
-
-    const blockSource = findBlockSourceElement(focusNode);
-    if (blockSource && isEditableBlockSourceElement(blockSource)) {
-        const target = createBlockSourceSelectionTarget(
-            blockSource,
-            getBlockSourceOffset(blockSource, focusNode, selection.focusOffset),
-        );
-        if (target) {
-            return target;
-        }
-    }
-
-    const focusElement = focusNode instanceof Element ? focusNode : focusNode.parentElement;
-    const inlineSource = focusElement?.closest<HTMLElement>(".markdown-token-editing") ?? null;
-    const token = inlineSource;
-    const block = token ? findBlock(token) : null;
-    if (
-        inlineSource &&
-        token instanceof HTMLElement &&
-        token.classList.contains("markdown-token") &&
-        block &&
-        token.dataset.active === "true"
-    ) {
-        return {
-            kind: "inline-source",
-            block,
-            token,
-            source: inlineSource,
-            sourceOffset: getPlainTextBoundaryOffset(inlineSource, focusNode, selection.focusOffset),
-        };
-    }
-
-    return null;
-}
-
-export function focusSourceSelectionTarget(target: DocumentSourceSelectionTarget): void {
-    if (!target.source.isConnected) {
-        focusBlockAtOffset(target.block, Math.min(target.sourceOffset, getBlockText(target.block).length));
-        return;
-    }
-
-    if (target.kind === "block-source") {
-        focusBlockSourceElementAtOffset(target.source, target.sourceOffset);
-        return;
-    }
-
-    focusPlainTextElement(target.source, target.sourceOffset);
-}
-
-function createBlockSourceSelectionTarget(
-    source: HTMLElement,
-    sourceOffset: number,
-): Extract<DocumentSourceSelectionTarget, { kind: "block-source" }> | null {
-    const block = findBlock(source);
-    const sourcePosition = readBlockSourcePosition(source);
-    if (!block || !sourcePosition) {
-        return null;
-    }
-
-    return {
-        kind: "block-source",
-        block,
-        source,
-        sourcePosition,
-        sourceOffset: Math.min(Math.max(0, sourceOffset), source.textContent?.length ?? 0),
-    };
 }
 
 export function getCaretPositionFromPoint(clientX: number, clientY: number): { node: Node; offset: number } | null {
@@ -207,77 +101,7 @@ export function getTextPosition(root: HTMLElement, offset: number): { node: Node
     return { node: root, offset: root.childNodes.length };
 }
 
-export function getActiveBlock(target: EventTarget | Node | null): HTMLElement | null {
-    return findBlock(target) ?? findBlock(document.getSelection()?.focusNode ?? null);
-}
-
-export function getSelectedBlockRange(): SelectedBlockRange | null {
-    const selection = document.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-        return null;
-    }
-
-    const range = selection.getRangeAt(0);
-    const startBlock = findBlockFromBoundary(range.startContainer, range.startOffset, "start");
-    const endBlock = findBlockFromBoundary(range.endContainer, range.endOffset, "end");
-    const blocks = startBlock && endBlock ? getEditorBlockRange(startBlock, endBlock) : [];
-
-    if (!startBlock || !endBlock || blocks.length === 0) {
-        return null;
-    }
-
-    return {
-        blocks,
-        startBlock,
-        endBlock,
-        startOffset: getBoundaryOffset(startBlock, range.startContainer, range.startOffset, "start"),
-        endOffset: getBoundaryOffset(endBlock, range.endContainer, range.endOffset, "end"),
-        range: range.cloneRange(),
-    };
-}
-
-export function isCaretAtBlockEdge(block: HTMLElement, edge: "start" | "end"): boolean {
-    const selection = document.getSelection();
-    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed || !selection.focusNode) {
-        return false;
-    }
-
-    const content = getBlockContent(block);
-    if (selection.focusNode !== content && !content.contains(selection.focusNode)) {
-        return false;
-    }
-
-    const offset = getCaretOffset(content, selection.focusNode, selection.focusOffset);
-    return edge === "start" ? offset === 0 : offset === getBlockText(block).length;
-}
-
-export function selectEditorContents(editor: HTMLElement): void {
-    const blocks = getEditorBlocks();
-    const firstBlock = blocks[0];
-    const lastBlock = blocks[blocks.length - 1];
-
-    if (!firstBlock || !lastBlock) {
-        return;
-    }
-
-    const firstContent = getBlockContent(firstBlock);
-    const lastContent = getBlockContent(lastBlock);
-    const selection = document.getSelection();
-    const range = document.createRange();
-
-    editor.focus({ preventScroll: true });
-    range.setStart(firstContent, 0);
-    range.setEnd(lastContent, lastContent.childNodes.length);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-}
-
-export function readLineHeight(element: HTMLElement): number {
-    const computedLineHeight = Number.parseFloat(window.getComputedStyle(element).lineHeight);
-    return Number.isFinite(computedLineHeight) ? computedLineHeight : 24;
-}
-
-export function getCollapsedSelectionRect(selection: Selection): DOMRect | null {
+function getCollapsedSelectionRect(selection: Selection): DOMRect | null {
     if (selection.rangeCount === 0) {
         return null;
     }
@@ -291,33 +115,6 @@ export function getCollapsedSelectionRect(selection: Selection): DOMRect | null 
 
     const boundingRect = range.getBoundingClientRect();
     return boundingRect.width > 0 || boundingRect.height > 0 ? boundingRect : null;
-}
-
-function findBlockFromBoundary(container: Node, offset: number, edge: "start" | "end"): HTMLElement | null {
-    const directBlock = findBlock(container);
-    if (directBlock) {
-        return directBlock;
-    }
-
-    if (!(container instanceof HTMLElement) || container.id !== "editor") {
-        return null;
-    }
-
-    const blocks = getEditorBlocks();
-    if (edge === "start") {
-        return blocks[offset] ?? blocks[blocks.length - 1] ?? null;
-    }
-
-    return blocks[offset - 1] ?? blocks[0] ?? null;
-}
-
-function getBoundaryOffset(block: HTMLElement, container: Node, offset: number, edge: "start" | "end"): number {
-    const content = getBlockContent(block);
-    if (container === content || content.contains(container)) {
-        return getCaretOffset(content, container, offset);
-    }
-
-    return edge === "start" ? 0 : getBlockText(block).length;
 }
 
 function scrollBlockIntoComfortableView(block: HTMLElement, mode: "comfortable" | "minimal"): void {

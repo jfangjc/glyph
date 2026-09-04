@@ -1,199 +1,71 @@
-import type { DocumentEditorHooks, DocumentEditorSelectionState } from "../core/types";
 import {
     findBlock,
-    getBlockContent,
-    getBlockIndex,
 } from "../blocks/view";
 import {
+    clearSourceReveal,
     syncDomSelectionFromState,
-    syncInlineSourceRevealFromSelection,
     syncStateSelectionFromDom,
 } from "../core/projection";
-import {
-    syncDocumentOutlineToSelection,
-} from "../document-outline";
-import {
-    focusSourceSelectionTarget,
-    getCaretOffset,
-    getSelectedBlockRange,
-    readCurrentSourceSelectionTarget,
-} from "../selection/caret";
-
-export type SelectionController = {
-    handleEditorSelectionChange: () => void;
-    resetSelectionSignature: () => void;
-};
+import { getEditorState } from "../core/store";
 
 type SelectionControllerOptions = {
-    hooks: DocumentEditorHooks;
+    syncActiveBlockIndicator: (block: HTMLElement | null) => void;
     isComposingText: () => boolean;
 };
 
-export function createSelectionController(options: SelectionControllerOptions): SelectionController {
+export function createSelectionController(options: SelectionControllerOptions) {
     let lastSelectionSignature = "";
 
     return {
         handleEditorSelectionChange,
-        resetSelectionSignature,
+        refresh,
     };
 
     function handleEditorSelectionChange(): void {
-        let selectionState = readSelectionState();
-        if (normalizeSourceSelection(selectionState)) {
-            lastSelectionSignature = "";
-            return;
-        }
-
         if (!options.isComposingText()) {
             syncStateSelectionFromDom();
-            selectionState = readSelectionState();
         }
-
-        const inlineRevealReconciled = !options.isComposingText() && syncInlineSourceRevealFromSelection();
-        if (inlineRevealReconciled) {
-            lastSelectionSignature = "";
-            selectionState = readSelectionState();
-        }
+        const selectionState = readSelectionState();
 
         if (selectionState.signature === lastSelectionSignature) {
             return;
         }
 
         lastSelectionSignature = selectionState.signature;
-        options.hooks.syncActiveBlockIndicator(selectionState.focusBlock);
-        syncBlockSourceReveal(selectionState);
-        syncDocumentOutlineToSelection();
-    }
-
-    function resetSelectionSignature(): void {
-        lastSelectionSignature = "";
-    }
-
-    function syncBlockSourceReveal(selectionState: DocumentEditorSelectionState): void {
-        if (selectionState.isCollapsed) {
-            options.hooks.syncBlockSourceReveal(readCollapsedBlockSourceRevealTarget(selectionState));
-            return;
+        options.syncActiveBlockIndicator(selectionState.focusBlock);
+        if (selectionState.focusBlock) {
+            syncDomSelectionFromState({ focus: "preserve" });
+        } else {
+            clearSourceReveal();
         }
+    }
 
-        options.hooks.syncBlockSourceRevealBlocks(selectionState.selectedBlocks);
-        syncDomSelectionFromState({ focus: "preserve" });
+    function refresh(): void {
+        lastSelectionSignature = "";
+        handleEditorSelectionChange();
     }
 }
 
-type SelectionStateWithSignature = DocumentEditorSelectionState & {
-    signature: string;
-};
-
-function readSelectionState(): SelectionStateWithSignature {
+function readSelectionState() {
     const selection = document.getSelection();
     if (!selection || selection.rangeCount === 0) {
         return {
             signature: "none",
-            selection: null,
-            isCollapsed: true,
-            anchorNode: null,
-            focusNode: null,
-            anchorOffset: 0,
-            focusOffset: 0,
-            anchorBlock: null,
             focusBlock: null,
-            anchorBlockOffset: null,
-            focusBlockOffset: null,
-            selectedBlocks: [],
-            sourceTarget: null,
         };
     }
 
-    const selectedRange = getSelectedBlockRange();
-    const sourceTarget = readCurrentSourceSelectionTarget();
-    const anchorBlock = findBlock(selection.anchorNode ?? null);
+    const state = getEditorState();
     const focusBlock = findBlock(selection.focusNode ?? null);
-    const anchorBlockOffset = readSelectionBoundaryOffset(anchorBlock, selection.anchorNode, selection.anchorOffset);
-    const focusBlockOffset = readSelectionBoundaryOffset(focusBlock, selection.focusNode, selection.focusOffset);
-    const selectedBlocks = selection.isCollapsed
-        ? []
-        : selectedRange?.blocks ?? readSelectedBoundaryBlocks(anchorBlock, focusBlock);
     const signature = [
-        selection.isCollapsed ? "caret" : "range",
-        anchorBlock ? getBlockIndex(anchorBlock) : -1,
-        focusBlock ? getBlockIndex(focusBlock) : -1,
-        anchorBlockOffset,
-        focusBlockOffset,
-        sourceTarget ? sourceTarget.kind : "content",
-        sourceTarget ? readSourceTargetSignature(sourceTarget) : "",
-        sourceTarget ? sourceTarget.sourceOffset : "",
+        state.selection.anchor,
+        state.selection.head,
+        state.selection.source ? "source" : "visual",
+        focusBlock?.dataset.blockId ?? "",
     ].join(":");
 
     return {
         signature,
-        selection,
-        isCollapsed: selection.isCollapsed,
-        anchorNode: selection.anchorNode,
-        focusNode: selection.focusNode,
-        anchorOffset: selection.anchorOffset,
-        focusOffset: selection.focusOffset,
-        anchorBlock,
         focusBlock,
-        anchorBlockOffset,
-        focusBlockOffset,
-        selectedBlocks,
-        sourceTarget,
     };
-}
-
-function readSourceTargetSignature(sourceTarget: DocumentEditorSelectionState["sourceTarget"]): string {
-    if (!sourceTarget) {
-        return "";
-    }
-
-    if (sourceTarget.kind === "block-source") {
-        return sourceTarget.sourcePosition;
-    }
-
-    return String(
-        Array.from(sourceTarget.block.querySelectorAll<HTMLElement>(".markdown-token")).indexOf(sourceTarget.token),
-    );
-}
-
-function normalizeSourceSelection(selectionState: DocumentEditorSelectionState): boolean {
-    const sourceTarget = selectionState.sourceTarget;
-    const focusNode = selectionState.focusNode;
-    if (
-        !selectionState.isCollapsed ||
-        sourceTarget?.kind !== "block-source" ||
-        !focusNode ||
-        focusNode === sourceTarget.source ||
-        sourceTarget.source.contains(focusNode)
-    ) {
-        return false;
-    }
-
-    focusSourceSelectionTarget(sourceTarget);
-    return true;
-}
-
-function readCollapsedBlockSourceRevealTarget(selectionState: DocumentEditorSelectionState): HTMLElement | null {
-    return selectionState.focusBlock;
-}
-
-function readSelectionBoundaryOffset(block: HTMLElement | null, node: Node | null, offset: number): number {
-    if (!block || !node) {
-        return offset;
-    }
-
-    const content = getBlockContent(block);
-    if (node !== content && !content.contains(node)) {
-        return offset;
-    }
-
-    return getCaretOffset(content, node, offset);
-}
-
-function readSelectedBoundaryBlocks(
-    anchorBlock: HTMLElement | null,
-    focusBlock: HTMLElement | null,
-): HTMLElement[] {
-    return Array.from(new Set([anchorBlock, focusBlock])).filter(
-        (block): block is HTMLElement => Boolean(block),
-    );
 }

@@ -27,6 +27,20 @@ export function createSourceDocumentFormat(
     };
 }
 
+/**
+ * Creates a source-only projection for a richer format without introducing a
+ * second document model. Saving and exporting remain owned by the base format;
+ * only indexing, rendering, editing affordances, and clipboard presentation
+ * switch to their literal-source variants.
+ */
+export function createSourceViewDocumentFormat(base: DocumentFormat): DocumentFormat {
+    const source = createSourceDocumentFormat(base.descriptor);
+    return {
+        ...source,
+        export: base.export,
+    };
+}
+
 function buildSourceBlockIndex(source: string, context?: BlockIndexBuildContext): BlockIndex {
     const previous = context?.previous.blocks[0];
     return {

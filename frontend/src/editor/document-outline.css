@@ -1,17 +1,32 @@
 .document-outline {
     position: fixed;
     z-index: 20;
-    top: 44%;
-    right: 36px;
-    width: 112px;
-    max-height: 268px;
-    padding: 8px 0;
+    top: 112px;
+    right: auto;
+    left: calc(50% + 464px);
+    width: 184px;
+    max-height: calc(100vh - 144px);
+    padding: 9px 7px;
     overflow-x: hidden;
     overflow-y: auto;
-    color: #777b80;
+    border: 1px solid var(--glyph-border);
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 5px 18px rgb(31 34 40 / 5%);
+    color: var(--glyph-text-muted);
     pointer-events: auto;
     scrollbar-width: none;
-    transform: translateY(-50%);
+    transform: none;
+    transition:
+        width 180ms cubic-bezier(0.16, 1, 0.3, 1),
+        background-color 150ms ease,
+        box-shadow 150ms ease;
+}
+
+.document-outline:hover,
+.document-outline:focus-within {
+    background: #ffffff;
+    box-shadow: var(--glyph-glass-shadow-compact);
 }
 
 .document-outline::-webkit-scrollbar {
@@ -25,7 +40,7 @@
 
 .document-outline-list {
     display: grid;
-    gap: 8px;
+    gap: 6px;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -37,12 +52,13 @@
 
 .document-outline-button {
     display: grid;
-    grid-template-columns: 26px minmax(0, 1fr);
+    grid-template-columns: 24px minmax(0, 1fr);
     align-items: center;
     width: 100%;
-    min-height: 18px;
-    padding: 0;
+    min-height: 24px;
+    padding: 0 3px;
     border: 0;
+    border-radius: 7px;
     background: transparent;
     color: inherit;
     cursor: pointer;
@@ -51,10 +67,11 @@
 }
 
 .document-outline-marker {
-    width: 20px;
+    width: 18px;
     height: 4px;
     border-radius: 999px;
-    background: #dedfe0;
+    background: rgb(77 83 91 / 20%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%);
     transition:
         background-color 180ms ease,
         width 180ms ease;
@@ -63,14 +80,17 @@
 .document-outline-text {
     min-width: 0;
     overflow: hidden;
-    opacity: 0;
-    color: #6f7377;
+    opacity: 1;
+    color: var(--glyph-text-muted);
     font-size: 0.78rem;
     font-weight: 700;
     line-height: 1.25;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transition: opacity 220ms ease;
+    transform: none;
+    transition:
+        opacity 140ms ease,
+        transform 170ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .document-outline-item[data-level="2"] .document-outline-marker {
@@ -81,25 +101,56 @@
     font-weight: 400;
 }
 
-.document-outline-item[data-active="true"] .document-outline-marker {
-    background: #73787c;
+.document-outline-item[data-level="3"] .document-outline-marker { width: 9px; }
+.document-outline-item[data-level="4"] .document-outline-marker { width: 7px; }
+.document-outline-item[data-level="5"] .document-outline-marker { width: 5px; }
+.document-outline-item[data-level="6"] .document-outline-marker { width: 4px; }
+
+.document-outline-item[data-level="3"] .document-outline-text,
+.document-outline-item[data-level="4"] .document-outline-text,
+.document-outline-item[data-level="5"] .document-outline-text,
+.document-outline-item[data-level="6"] .document-outline-text {
+    font-weight: 400;
 }
 
-.document-outline:hover .document-outline-text {
+.document-outline-item[data-active="true"] .document-outline-marker {
+    background: var(--glyph-accent);
+    box-shadow:
+        0 0 0 1px rgb(255 255 255 / 72%),
+        0 2px 7px rgb(8 121 232 / 26%);
+}
+
+.document-outline:hover .document-outline-text,
+.document-outline:focus-within .document-outline-text {
     opacity: 1;
+    transform: translateX(0);
+    transition-delay: 25ms;
 }
 
 .document-outline-button:hover .document-outline-marker,
 .document-outline-button:focus-visible .document-outline-marker {
-    background: #5f6368;
+    background: #656b73;
 }
 
 .document-outline-button:hover .document-outline-text,
 .document-outline-button:focus-visible .document-outline-text {
-    color: #202124;
+    color: var(--glyph-text);
 }
 
-@media (max-width: 1060px) {
+.document-outline-button:hover,
+.document-outline-button:focus-visible {
+    background: var(--glyph-control-hover);
+    outline: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .document-outline,
+    .document-outline-text {
+        transition-duration: 0.01ms;
+    }
+}
+
+@media (max-width: 1319px) {
     .document-outline {
         display: none;
     }

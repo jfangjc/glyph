@@ -115,6 +115,7 @@ export function applyBlockProperties(block: HTMLElement, options: Partial<Parsed
     setRuleMarker(block, options.ruleMarker);
     setMathSource(block, options.mathSource);
     setBlockHeadingId(block, options.headingId, options.headingIdExplicit);
+    setBlockHeadingSource(block, options.headingSourcePrefix, options.headingSourceSuffix);
 }
 
 export function setBlockType(block: HTMLElement, type: BlockType): void {
@@ -122,6 +123,18 @@ export function setBlockType(block: HTMLElement, type: BlockType): void {
 
     block.dataset.type = type;
     content.setAttribute("aria-label", `${blockLabels[type]} block`);
+
+    const checkbox = block.querySelector<HTMLInputElement>(".todo-checkbox");
+    if (type === "todo" && !checkbox) {
+        const todoCheckbox = document.createElement("input");
+        todoCheckbox.className = "todo-checkbox";
+        todoCheckbox.type = "checkbox";
+        todoCheckbox.setAttribute("aria-label", "Todo complete");
+        todoCheckbox.setAttribute("contenteditable", "false");
+        block.insertBefore(todoCheckbox, content);
+    } else if (type !== "todo") {
+        checkbox?.remove();
+    }
 
     if (!isIndentableListBlockType(type)) {
         setBlockIndent(block, 0);
@@ -160,6 +173,8 @@ export function setBlockType(block: HTMLElement, type: BlockType): void {
     if (!headingTypes.has(type)) {
         delete block.dataset.headingId;
         delete block.dataset.headingIdExplicit;
+        delete block.dataset.headingSourcePrefix;
+        delete block.dataset.headingSourceSuffix;
         block.removeAttribute("id");
     }
 }
@@ -211,7 +226,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
         return;
     }
 
-    const html = renderBlockInnerHtml(block, type, text, source);
+    const html = renderBlockInnerHtml(type, text, source);
 
     const cache = getRenderCache(content);
     if (
@@ -247,63 +262,6 @@ export function ensureBlockSourceRendered(block: HTMLElement): void {
 
     clearRenderCache(content);
     setBlockText(block, text);
-}
-
-export function rerenderInlineBlockContent(block: HTMLElement, offset: number): number | null {
-    const type = readBlockType(block.dataset.type);
-    const text = getBlockText(block);
-
-    if (!isRichTextBlockType(type)) {
-        return null;
-    }
-
-    if (isOpenFencedCodeParagraph(type, text)) {
-        setBlockText(block, text);
-        return Math.min(offset, text.length);
-    }
-
-    const content = getBlockContent(block);
-    const html = renderBlockInnerHtml(block, type, text, renderContext.readBlockSource?.(block, type, text) ?? {});
-    const cache = getRenderCache(content);
-
-    if (cache.inlineHtml === html && cache.inlineRevision === renderRevision) {
-        return null;
-    }
-
-    replaceRenderedHtml(content, html);
-    cache.inlineHtml = html;
-    cache.inlineRevision = renderRevision;
-    renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
-
-    return Math.min(offset, getBlockText(block).length);
-}
-
-export function rerenderPlainTextBlockContent(block: HTMLElement, offset: number): number | null {
-    const type = readBlockType(block.dataset.type);
-    if (!isPlainTextBlockType(type)) {
-        return null;
-    }
-
-    const content = getBlockContent(block);
-    const text = getBlockText(block);
-    const source = renderContext.readBlockSource?.(block, type, text) ?? {};
-    const highlight = readPlainTextHighlight(type, text, block, content, source);
-    const cache = getRenderCache(content);
-    if (
-        !highlight.delayed &&
-        (highlight.html === null ||
-            (cache.plainText?.text === text &&
-                cache.plainText.highlightedHtml === highlight.html &&
-                cache.plainText.revision === renderRevision))
-    ) {
-        return null;
-    }
-
-    renderPlainTextBlockContent(content, text, source, highlight.html);
-    syncPlainTextHighlightCache(content, text, highlight.html, highlight.delayed);
-    clearInlineAndPreviewCache(content);
-
-    return Math.min(offset, text.length);
 }
 
 function readPlainTextHighlight(
@@ -648,7 +606,7 @@ function focusBlockContentAtOffset(block: HTMLElement, offset: number): void {
     selection?.addRange(range);
 }
 
-function renderBlockInnerHtml(block: HTMLElement, type: BlockType, text: string, source: BlockSource): string {
+function renderBlockInnerHtml(type: BlockType, text: string, source: BlockSource): string {
     const bodyHtml = renderBlockEditableTextHtml(text, source);
     return (
         renderBlockSourceHtml(source.prefix, "prefix", source.prefixEditable ?? true) +
@@ -755,7 +713,9 @@ function setBlockQuoteLevel(block: HTMLElement, level: number | undefined): void
 }
 
 function setTodoChecked(block: HTMLElement, checked: boolean): void {
-    getTodoCheckbox(block).checked = checked;
+    if (readBlockType(block.dataset.type) === "todo") {
+        getTodoCheckbox(block).checked = checked;
+    }
 }
 
 export function setCodeFence(block: HTMLElement, codeFence: string | undefined): void {
@@ -812,6 +772,30 @@ export function setBlockHeadingId(block: HTMLElement, headingId: string | undefi
     delete block.dataset.headingId;
     delete block.dataset.headingIdExplicit;
     block.removeAttribute("id");
+}
+
+function setBlockHeadingSource(
+    block: HTMLElement,
+    prefix: string | undefined,
+    suffix: string | undefined,
+): void {
+    if (!headingTypes.has(readBlockType(block.dataset.type))) {
+        delete block.dataset.headingSourcePrefix;
+        delete block.dataset.headingSourceSuffix;
+        return;
+    }
+
+    if (prefix !== undefined) {
+        block.dataset.headingSourcePrefix = prefix;
+    } else {
+        delete block.dataset.headingSourcePrefix;
+    }
+
+    if (suffix !== undefined) {
+        block.dataset.headingSourceSuffix = suffix;
+    } else {
+        delete block.dataset.headingSourceSuffix;
+    }
 }
 
 function normalizeHeadingId(value: string | undefined): string {
@@ -892,11 +876,6 @@ export function readBlockCodeFenceClosed(block: HTMLElement): boolean | undefine
         : block.dataset.codeFenceClosed === "false" ? false : undefined;
 }
 
-export function readNextListNumber(block: HTMLElement): string {
-    const number = Number(readBlockListNumber(block) ?? "1");
-    return Number.isFinite(number) ? String(number + 1) : "1";
-}
-
 export function readBlockQuoteLevel(block: HTMLElement): number | undefined {
     const level = Number(block.dataset.quoteLevel ?? 1);
     return Number.isFinite(level) && level > 1 ? level : undefined;
@@ -935,30 +914,9 @@ export function readEditorBlock(block: HTMLElement): ParsedBlock {
         mathSource: type === "math" ? block.dataset.mathSource : undefined,
         headingId: headingTypes.has(type) ? readBlockHeadingId(block) : undefined,
         headingIdExplicit: headingTypes.has(type) ? readBlockHeadingIdExplicit(block) : undefined,
+        headingSourcePrefix: headingTypes.has(type) ? block.dataset.headingSourcePrefix : undefined,
+        headingSourceSuffix: headingTypes.has(type) ? block.dataset.headingSourceSuffix : undefined,
     };
-}
-
-export function getSerializableEditorBlocks(): HTMLElement[] {
-    const blocks = getEditorBlocks();
-    let endIndex = blocks.length;
-
-    while (endIndex > 1 && isEmptyTransientParagraph(blocks[endIndex - 1])) {
-        endIndex -= 1;
-    }
-
-    return blocks.slice(0, endIndex);
-}
-
-function isEmptyTransientParagraph(block: HTMLElement): boolean {
-    return (
-        block.dataset.transient === "true" &&
-        readBlockType(block.dataset.type) === "paragraph" &&
-        getBlockText(block) === ""
-    );
-}
-
-export function readSplitContinuationType(type: BlockType): BlockType {
-    return headingTypes.has(type) || readBlockEditingKind(type) !== "rich" ? "paragraph" : type;
 }
 
 export function isRichTextBlockType(type: BlockType): boolean {
@@ -981,16 +939,8 @@ export function readBlockEditingKind(type: BlockType): BlockEditingKind {
     return "rich";
 }
 
-export function canMergeBlockText(leftType: BlockType, rightType: BlockType): boolean {
-    return readBlockEditingKind(leftType) === "rich" && readBlockEditingKind(rightType) === "rich";
-}
-
 function isPlainTextBlockType(type: BlockType): boolean {
     return type === "code" || type === "source" || type === "reference" || type === "footnote-definition";
-}
-
-export function isMultilinePlainTextBlockType(type: BlockType): boolean {
-    return type === "code" || type === "source";
 }
 
 function isAtomicBlockType(type: BlockType): boolean {
@@ -1003,19 +953,6 @@ export function isIndentableListBlockType(type: BlockType): boolean {
 
 function usesBulletListMarker(type: BlockType): boolean {
     return type === "list" || type === "todo";
-}
-
-export function shouldResetEmptyBlock(type: BlockType): boolean {
-    return (
-        isIndentableListBlockType(type) ||
-        type === "quote" ||
-        type === "reference" ||
-        type === "table" ||
-        type === "math" ||
-        type === "html" ||
-        type === "definition-list" ||
-        type === "footnote-definition"
-    );
 }
 
 export function getBlockContent(block: HTMLElement): HTMLElement {
@@ -1101,49 +1038,4 @@ function flushOrderedListRun(blocks: HTMLElement[]): void {
     for (const block of blocks) {
         block.dataset.listMaxDigits = value;
     }
-}
-
-export function getBlockIndex(block: HTMLElement): number {
-    return getEditorBlocks().indexOf(block);
-}
-
-export function getEditorBlockRange(startBlock: HTMLElement, endBlock: HTMLElement): HTMLElement[] {
-    const blocks = getEditorBlocks();
-    const startIndex = blocks.indexOf(startBlock);
-    const endIndex = blocks.indexOf(endBlock);
-
-    if (startIndex < 0 || endIndex < 0) {
-        return [];
-    }
-
-    const rangeStart = Math.min(startIndex, endIndex);
-    const rangeEnd = Math.max(startIndex, endIndex);
-    return blocks.slice(rangeStart, rangeEnd + 1);
-}
-
-export function getSiblingBlock(block: HTMLElement, direction: "previous" | "next"): HTMLElement | null {
-    const sibling = direction === "previous" ? block.previousElementSibling : block.nextElementSibling;
-    return sibling instanceof HTMLElement && sibling.matches("[data-block]") ? sibling : null;
-}
-
-export function clearBlockProperties(block: HTMLElement): void {
-    const text = getBlockText(block);
-
-    setBlockType(block, "paragraph");
-    setTodoChecked(block, false);
-    setBlockText(block, text);
-}
-
-export function ensureEditableBlockAfter(block: HTMLElement): void {
-    if (getSiblingBlock(block, "next")) {
-        return;
-    }
-
-    const nextBlock = createBlock("paragraph");
-    nextBlock.dataset.transient = "true";
-    block.after(nextBlock);
-}
-
-export function commitTransientBlock(block: HTMLElement): void {
-    delete block.dataset.transient;
 }

@@ -81,15 +81,27 @@ body.app-titlebar-host .document-surface[data-document-format="latex"][data-late
 
 .latex-preview-status {
     position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    padding: 48px;
+    z-index: 1;
+    top: 50%;
+    left: 50%;
+    max-width: min(28rem, calc(100% - 48px));
+    padding: 12px 16px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background:
+        var(--glyph-glass-fill-strong) padding-box,
+        var(--glyph-glass-rim) border-box;
+    box-shadow:
+        var(--glyph-glass-shadow-compact),
+        var(--glyph-glass-inset);
     color: #777b80;
     font-size: 0.92rem;
     line-height: 1.35;
     text-align: center;
+    transform: translate(-50%, -50%);
     pointer-events: none;
+    -webkit-backdrop-filter: var(--glyph-glass-backdrop);
+    backdrop-filter: var(--glyph-glass-backdrop);
 }
 
 .latex-preview[data-state="ready"] .latex-preview-status {

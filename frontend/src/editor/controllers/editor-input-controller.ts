@@ -7,23 +7,34 @@ import {
     stagePendingImages,
 } from "../../formats/markdown/pending-images";
 import {
+    createPendingInlineFormatInsertTransaction,
+    createTableTabTransaction,
+} from "../../formats/markdown/commands";
+import {
+    readMarkdownTableColumnCount,
+    readMarkdownTableCellRange,
+} from "../../formats/markdown/table";
+import {
     matchesShortcutCommand,
     readInlineFormatShortcut,
 } from "../../app/keymap";
 import type {
+    BlockFormatCommand,
     ClipboardPayload,
     ClipboardReadResult,
     ClipboardSelectionContext,
     DocumentFormat,
+    InlineFormatCommand,
+    InsertContentCommand,
 } from "../../formats/types";
 import {
     findSourceBlockAtOffset,
-    readVisibleListPrefixLength,
-    type DocumentEditorHooks,
-    type EditorState,
+    isSourceSelection,
+    type SourceBlock,
 } from "../core/types";
 import {
     findBlock,
+    getEditorBlocks,
 } from "../blocks/view";
 import {
     createDeleteTransaction,
@@ -32,6 +43,8 @@ import {
 } from "../core/commands";
 import {
     createSelectionBookmark,
+    canRedoSourceHistory,
+    canUndoSourceHistory,
     dispatch,
     flushSourceHistoryBatch,
     getEditorState,
@@ -39,10 +52,14 @@ import {
     undoSourceHistory,
 } from "../core/store";
 import {
-    clearInlineSourceReveal,
+    activateSourceToken,
+    clearSourceReveal,
+    clearInlineTypingSourceReveal,
     domPointToSourceOffset,
     moveSourceSelectionVertically,
+    selectionTouchesSource,
     resetVerticalNavigationAffinity,
+    readSourceTokenDocumentRange,
     syncDomSelectionFromState,
     syncStateSelectionFromDom,
 } from "../core/projection";
@@ -61,25 +78,28 @@ import {
 const supportedPastedImageMimeTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 const maxRichClipboardHtmlLength = 5 * 1024 * 1024;
 
-export type EditorInputController = {
-    deactivate: () => void;
-    handleEditorMouseDown: (event: PointerEvent) => void;
-    handleEditorChange: (event: Event) => void;
-    handleEditorKeydown: (event: KeyboardEvent) => void;
-    handleEditorBeforeInput: (event: InputEvent) => void;
-    handleEditorCompositionStart: () => void;
-    handleEditorCompositionEnd: (event: CompositionEvent) => void;
-    handleEditorInput: (event: Event) => void;
-    handleEditorPaste: (event: ClipboardEvent) => void;
-    handleEditorCopy: (event: ClipboardEvent) => void;
-    handleEditorCut: (event: ClipboardEvent) => void;
-    handleEditorDragStart: (event: DragEvent) => void;
-    handleEditorDragEnd: () => void;
-    handleEditorDragOver: (event: DragEvent) => void;
-    handleEditorDrop: (event: DragEvent) => void;
-    handleEditorClick: (event: MouseEvent) => void;
-    isComposingText: () => boolean;
-    executeCommand: (command: EditorCommand, focusOwner?: Element | null) => Promise<void>;
+type ActiveTableCellEditor = {
+    input: HTMLInputElement;
+    cell: HTMLTableCellElement;
+    blockId: string;
+    row: number;
+    column: number;
+    from: number;
+    to: number;
+    finishing: boolean;
+};
+
+type TableCellAddress = {
+    tableIndex: number;
+    row: number;
+    column: number;
+};
+
+type ActiveInlineObjectSelection = {
+    token: HTMLElement;
+    toolbar: HTMLElement;
+    from: number;
+    to: number;
 };
 
 export type EditorCommand =
@@ -88,17 +108,23 @@ export type EditorCommand =
     | "select-all"
     | "bold"
     | "italic"
+    | "strike"
+    | "inline-code"
+    | "link"
+    | `block:${BlockFormatCommand}`
+    | `insert:${InsertContentCommand}`
     | "copy"
     | "cut"
     | "paste";
 
 type EditorInputControllerOptions = {
-    hooks: DocumentEditorHooks;
+    syncActiveBlockIndicator: (block: HTMLElement | null) => void;
     getActiveDocumentFormat: () => DocumentFormat;
     getActiveFilePath: () => string | null;
+    isSourceMode: () => boolean;
 };
 
-export function createEditorInputController(options: EditorInputControllerOptions): EditorInputController {
+export function createEditorInputController(options: EditorInputControllerOptions) {
     let isComposingText = false;
     let preCompositionSourceSelection = getEditorState().selection;
     let compositionLease: { sessionId: number; revision: number } | null = null;
@@ -110,16 +136,21 @@ export function createEditorInputController(options: EditorInputControllerOption
         to: number;
         source: string;
     } | null = null;
+    let activeTableCellEditor: ActiveTableCellEditor | null = null;
+    let scheduledTableCellTimer: number | null = null;
+    let activeInlineObject: ActiveInlineObjectSelection | null = null;
+    const pendingInlineFormats = new Set<Exclude<InlineFormatCommand, "link">>();
+    let pendingInlineFormatOffset: number | null = null;
 
     return {
         deactivate,
+        containsExternalInteractionTarget,
         handleEditorMouseDown,
         handleEditorChange,
         handleEditorKeydown,
         handleEditorBeforeInput,
         handleEditorCompositionStart,
         handleEditorCompositionEnd,
-        handleEditorInput,
         handleEditorPaste,
         handleEditorCopy,
         handleEditorCut,
@@ -128,15 +159,16 @@ export function createEditorInputController(options: EditorInputControllerOption
         handleEditorDragOver,
         handleEditorDrop,
         handleEditorClick,
+        handleEditorSelectionChange,
         isComposingText: () => isComposingText,
         executeCommand,
+        canExecuteCommand,
+        isCommandActive,
     };
 
     async function executeCommand(command: EditorCommand, focusOwner?: Element | null): Promise<void> {
         const commandFocusOwner = focusOwner ?? document.activeElement;
-        const activeTextInput = commandFocusOwner instanceof HTMLInputElement || commandFocusOwner instanceof HTMLTextAreaElement
-            ? commandFocusOwner
-            : null;
+        const activeTextInput = isTextEntryElement(commandFocusOwner) ? commandFocusOwner : null;
 
         if (command === "undo" || command === "redo") {
             if (activeTextInput) {
@@ -149,14 +181,26 @@ export function createEditorInputController(options: EditorInputControllerOption
             return;
         }
 
-        if (command === "bold" || command === "italic") {
+        if (isInlineFormatCommand(command)) {
             if (!supportsRichSourceEditing() || activeTextInput) {
                 return;
             }
             syncSourceSelectionForCommand();
+            const formatCommand = readInlineFormatCommand(command);
+            const state = getEditorState();
+            if (
+                formatCommand !== "link" &&
+                state.selection.anchor === state.selection.head &&
+                canUsePendingInlineFormat(state)
+            ) {
+                togglePendingInlineFormat(formatCommand, state.selection.head);
+                syncDomSelectionFromState({ focus: "editor" });
+                return;
+            }
+            clearPendingInlineFormats();
             const transaction = options.getActiveDocumentFormat().editing?.createInlineFormatTransaction?.(
-                getEditorState(),
-                command === "bold" ? "**" : "*",
+                state,
+                formatCommand,
             );
             if (transaction) {
                 dispatch(transaction);
@@ -166,15 +210,40 @@ export function createEditorInputController(options: EditorInputControllerOption
             return;
         }
 
+        if (command.startsWith("block:") || command.startsWith("insert:")) {
+            if (!supportsRichSourceEditing() || activeTextInput) {
+                return;
+            }
+            clearPendingInlineFormats();
+            syncSourceSelectionForCommand();
+            const state = getEditorState();
+            const transaction = command.startsWith("block:")
+                ? options.getActiveDocumentFormat().editing?.createBlockFormatTransaction?.(
+                    state,
+                    command.slice("block:".length) as BlockFormatCommand,
+                )
+                : options.getActiveDocumentFormat().editing?.createInsertContentTransaction?.(
+                    state,
+                    command.slice("insert:".length) as InsertContentCommand,
+                );
+            if (transaction) {
+                dispatch(transaction);
+                syncDomSelectionFromState({ focus: "editor" });
+            }
+            return;
+        }
+
         if (activeTextInput) {
-            await executeTextInputClipboardCommand(activeTextInput, command);
+            if (isTextInputCommand(command)) {
+                await executeTextInputClipboardCommand(activeTextInput, command);
+            }
             return;
         }
 
         if (command === "select-all") {
             dispatch({
                 changes: [],
-                selection: { anchor: 0, head: getEditorState().doc.length },
+                selection: { anchor: 0, head: getEditorState().doc.length, source: true },
                 annotations: { userEvent: "programmatic", addToHistory: false },
             });
             syncDomSelectionFromState();
@@ -219,6 +288,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (!clipboardSelection) {
             return;
         }
+
         const selectedText = state.doc.slice(clipboardSelection.anchor, clipboardSelection.head);
         const bookmark = createSelectionBookmark(clipboardSelection);
         const clipboardLease = {
@@ -324,7 +394,15 @@ export function createEditorInputController(options: EditorInputControllerOption
                 const item = items[0];
                 if (item) {
                     const imageTypes = item.types.filter((type) => supportedPastedImageMimeTypes.has(type.toLowerCase()));
-                    if (imageTypes.length > 0 && !item.types.some((type) => type.startsWith("text/"))) {
+                    const hasMarkdown = item.types.includes("text/markdown");
+                    const html = imageTypes.length > 0 && item.types.includes("text/html")
+                        ? await (await item.getType("text/html")).text()
+                        : "";
+                    if (
+                        imageTypes.length > 0 &&
+                        !hasMarkdown &&
+                        (!html || !hasMeaningfulNonImageClipboardHtml(html))
+                    ) {
                         const files = await Promise.all(imageTypes.map(async (type, index) => {
                             const blob = await item.getType(type);
                             return new File([blob], `clipboard-image-${index + 1}.${extensionForImageMimeType(type)}`, { type });
@@ -372,16 +450,75 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function deactivate(): void {
+        cancelScheduledTableCellEditor();
+        clearPendingInlineFormats();
+        clearInlineObjectSelection();
+        finishTableCellEditor(true);
         flushSourceHistoryBatch();
         resetVerticalNavigationAffinity();
-        clearInlineSourceReveal();
-        options.hooks.syncBlockSourceReveal(null);
-        options.hooks.syncActiveBlockIndicator(null);
+        clearSourceReveal();
+        options.syncActiveBlockIndicator(null);
+    }
+
+    function containsExternalInteractionTarget(target: EventTarget | null): boolean {
+        return target instanceof Node && Boolean(
+            activeTableCellEditor?.input.contains(target) ||
+            activeInlineObject?.toolbar.contains(target)
+        );
     }
 
     function handleEditorMouseDown(event: PointerEvent): void {
+        clearPendingInlineFormats();
+        clearInlineTypingSourceReveal();
         resetVerticalNavigationAffinity();
         flushSourceHistoryBatch();
+        const target = event.target as Element | null;
+        const tableCell = target?.closest<HTMLTableCellElement>(".markdown-table th, .markdown-table td");
+        if (
+            tableCell &&
+            event.button === 0 &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.detail > 1) {
+                const block = findBlock(tableCell);
+                finishTableCellEditor(true);
+                if (block) {
+                    editBlockObjectSource(block, true);
+                }
+                return;
+            }
+            if (activeTableCellEditor?.cell === tableCell) {
+                activeTableCellEditor.input.focus({ preventScroll: true });
+            } else {
+                startTableCellEditor(tableCell);
+            }
+            return;
+        }
+
+        const inlineObject = target?.closest<HTMLElement>(".markdown-image-token, .markdown-math-token");
+        if (
+            inlineObject &&
+            event.button === 0 &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (activeInlineObject?.token === inlineObject) {
+                editInlineObjectSource(inlineObject);
+            } else {
+                selectInlineObject(inlineObject);
+            }
+            return;
+        }
+        clearInlineObjectSelection();
         handleEditorMouseDownCommand(event);
     }
 
@@ -390,11 +527,27 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (target instanceof HTMLInputElement && target.classList.contains("todo-checkbox")) {
             const block = findBlock(target);
             const blockId = block?.dataset.blockId;
+            const blockIndex = block ? getEditorBlocks().indexOf(block) : -1;
+            const editor = block?.closest<HTMLElement>(".block-editor");
             const transaction = blockId
                 ? options.getActiveDocumentFormat().editing?.createCheckboxToggleTransaction?.(getEditorState(), blockId)
                 : null;
             if (transaction) {
                 dispatch(transaction);
+                window.requestAnimationFrame(() => {
+                    const activeElement = document.activeElement;
+                    if (
+                        activeElement !== document.body &&
+                        activeElement !== document.documentElement &&
+                        activeElement !== editor &&
+                        !(activeElement instanceof HTMLInputElement && activeElement.classList.contains("todo-checkbox"))
+                    ) {
+                        return;
+                    }
+                    getEditorBlocks()[blockIndex]
+                        ?.querySelector<HTMLInputElement>(".todo-checkbox")
+                        ?.focus({ preventScroll: true });
+                });
             }
             return;
         }
@@ -420,6 +573,7 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorBeforeInput(event: InputEvent): void {
+        clearInlineObjectSelection();
         if (isComposingText && event.inputType.includes("Composition")) {
             const targetRange = event.getTargetRanges?.()[0];
             if (targetRange) {
@@ -447,6 +601,7 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorCompositionStart(): void {
+        clearPendingInlineFormats();
         isComposingText = true;
         syncStateSelectionFromDom();
         preCompositionSourceSelection = getEditorState().selection;
@@ -454,6 +609,57 @@ export function createEditorInputController(options: EditorInputControllerOption
             sessionId: documentState.sessionId,
             revision: getEditorState().revision,
         };
+    }
+
+    function canExecuteCommand(command: EditorCommand): boolean {
+        if (command === "undo") return canUndoSourceHistory();
+        if (command === "redo") return canRedoSourceHistory();
+        if (command === "paste" || command === "select-all") return true;
+        const state = getEditorState();
+        if (command === "copy" || command === "cut") {
+            return state.selection.anchor !== state.selection.head;
+        }
+        if (isInlineFormatCommand(command) || command.startsWith("block:") || command.startsWith("insert:")) {
+            return supportsRichSourceEditing();
+        }
+        return true;
+    }
+
+    function isCommandActive(command: EditorCommand): boolean {
+        const state = getEditorState();
+        const block = findSourceBlockAtOffset(state.blocks, state.selection.head);
+        if (command.startsWith("block:")) {
+            return block?.type === command.slice("block:".length);
+        }
+        if (!isInlineFormatCommand(command) || !block) {
+            return false;
+        }
+        const inlineCommand = readInlineFormatCommand(command);
+        if (inlineCommand !== "link" && pendingInlineFormats.has(inlineCommand)) {
+            return true;
+        }
+        const from = Math.min(state.selection.anchor, state.selection.head);
+        const to = Math.max(state.selection.anchor, state.selection.head);
+        return Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-markdown-token-kind]"))
+            .some((token) => {
+                const range = readSourceTokenDocumentRange(token);
+                if (!range || (from === to ? from < range.from || from > range.to : from < range.from || to > range.to)) {
+                    return false;
+                }
+                if (
+                    from === to &&
+                    (from === range.from && state.selection.headAffinity === "upstream" ||
+                        from === range.to && state.selection.headAffinity !== "upstream")
+                ) {
+                    return false;
+                }
+                const kind = token.dataset.markdownTokenKind;
+                if (command === "bold") return kind === "strong" || kind === "strong-emphasis";
+                if (command === "italic") return kind === "emphasis" || kind === "strong-emphasis";
+                if (command === "strike") return kind === "formatting" && token.dataset.sourceRaw?.startsWith("~~") === true;
+                if (command === "inline-code") return kind === "code";
+                return kind === "link" || kind === "autolink" || kind === "url";
+            });
     }
 
     function handleEditorCompositionEnd(event: CompositionEvent): void {
@@ -476,11 +682,8 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
     }
 
-    function handleEditorInput(_event: Event): void {
-    }
-
     function handleEditorPaste(event: ClipboardEvent): void {
-        handleEditorPasteFromFormatOrGeneric(event);
+        handleSourcePaste(event);
     }
 
     function handleEditorCopy(event: ClipboardEvent): void {
@@ -489,10 +692,6 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function handleEditorCut(event: ClipboardEvent): void {
         handleSourceCut(event);
-    }
-
-    function handleEditorPasteFromFormatOrGeneric(event: ClipboardEvent): void {
-        handleSourcePaste(event);
     }
 
     function handleEditorDragOver(event: DragEvent): void {
@@ -534,20 +733,66 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function handleEditorDrop(event: DragEvent): void {
-        handleEditorDropFromFormatOrGeneric(event);
-    }
-
-    function handleEditorDropFromFormatOrGeneric(event: DragEvent): void {
         handleSourceDrop(event);
     }
 
     function handleEditorClick(event: MouseEvent): void {
-        const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
+        const target = event.target as Element | null;
+        if (
+            event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            target &&
+            !target.closest("button, input, textarea, select") &&
+            findBlock(target)
+        ) {
+            event.preventDefault();
+            return;
+        }
+        const tableCell = target?.closest<HTMLTableCellElement>(".markdown-table th, .markdown-table td");
+        if (tableCell) {
+            event.preventDefault();
+            if (event.detail > 1) {
+                return;
+            }
+            if (activeTableCellEditor?.cell !== tableCell) {
+                startTableCellEditor(tableCell);
+            }
+            return;
+        }
+
+        const imageToken = target?.closest<HTMLElement>(".markdown-image-token");
+        if (imageToken) {
+            event.preventDefault();
+            return;
+        }
+
+        const mathToken = target?.closest<HTMLElement>(".markdown-math-token");
+        if (mathToken) {
+            event.preventDefault();
+            return;
+        }
+
+        const preview = target?.closest<HTMLElement>(".format-block-preview");
+        const previewBlock = preview ? findBlock(preview) : null;
+        const previewType = previewBlock?.dataset.type;
+        if (
+            preview &&
+            previewBlock &&
+            (previewType === "table" || previewType === "math" || previewType === "html" || previewType === "definition-list")
+        ) {
+            event.preventDefault();
+            editBlockObjectSource(previewBlock);
+            return;
+        }
+
+        const link = target?.closest<HTMLAnchorElement>("a[href]");
         if (!link) {
             return;
         }
         event.preventDefault();
-        if (!(event.ctrlKey || event.metaKey)) {
+        if (!(event.ctrlKey || event.metaKey || event.detail === 0)) {
             return;
         }
         const href = link.dataset.href ?? link.getAttribute("href") ?? "";
@@ -560,14 +805,278 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
     }
 
+    function editInlineObjectSource(token: HTMLElement): void {
+        clearInlineObjectSelection();
+        const range = readSourceTokenDocumentRange(token);
+        if (!range || !activateSourceToken(token, 1)) {
+            return;
+        }
+
+        const head = Math.min(range.to, range.from + 1);
+        dispatch({
+            changes: [],
+            selection: {
+                anchor: head,
+                head,
+                source: true,
+            },
+            annotations: { userEvent: "programmatic", addToHistory: false },
+        });
+        syncDomSelectionFromState({ focus: "editor" });
+    }
+
+    function selectInlineObject(token: HTMLElement): void {
+        clearInlineObjectSelection();
+        const range = readSourceTokenDocumentRange(token);
+        if (!range) return;
+
+        token.dataset.objectSelected = "true";
+        token.setAttribute("aria-selected", "true");
+        const toolbar = document.createElement("div");
+        toolbar.className = "inline-object-toolbar";
+        toolbar.contentEditable = "false";
+        toolbar.setAttribute("role", "toolbar");
+        toolbar.setAttribute("aria-label", token.classList.contains("markdown-image-token") ? "Image controls" : "Math controls");
+        const label = document.createElement("span");
+        label.textContent = token.classList.contains("markdown-image-token") ? "Image" : "Math";
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Edit Markdown";
+        edit.addEventListener("pointerdown", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        edit.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            editInlineObjectSource(token);
+        });
+        toolbar.append(label, edit);
+        document.body.append(toolbar);
+        positionInlineObjectToolbar(toolbar, token);
+        activeInlineObject = { token, toolbar, from: range.from, to: range.to };
+        dispatch({
+            changes: [],
+            selection: { anchor: range.to, head: range.to, anchorAffinity: "upstream", headAffinity: "upstream" },
+            annotations: { userEvent: "programmatic", addToHistory: false },
+        });
+        document.getElementById("editor")?.focus({ preventScroll: true });
+    }
+
+    function positionInlineObjectToolbar(toolbar: HTMLElement, token: HTMLElement): void {
+        const rect = token.getBoundingClientRect();
+        toolbar.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 190))}px`;
+        toolbar.style.top = `${Math.max(8, rect.top - 42)}px`;
+    }
+
+    function clearInlineObjectSelection(): void {
+        const active = activeInlineObject;
+        if (!active) return;
+        delete active.token.dataset.objectSelected;
+        active.token.removeAttribute("aria-selected");
+        active.toolbar.remove();
+        activeInlineObject = null;
+    }
+
+    function editBlockObjectSource(block: HTMLElement, selectAll = false): void {
+        const from = Number.parseInt(block.dataset.sourceFrom ?? "", 10);
+        const to = Number.parseInt(block.dataset.sourceTo ?? "", 10);
+        if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+        dispatch({
+            changes: [],
+            selection: selectAll
+                ? {
+                    anchor: from,
+                    head: to,
+                    source: true,
+                }
+                : {
+                    anchor: from,
+                    head: from,
+                    source: true,
+                },
+            annotations: { userEvent: "programmatic", addToHistory: false },
+        });
+        syncDomSelectionFromState({ focus: "editor" });
+    }
+
+    function startTableCellEditor(cell: HTMLTableCellElement): void {
+        cancelScheduledTableCellEditor();
+        const row = Number.parseInt(cell.dataset.tableSourceRow ?? "", 10);
+        const column = Number.parseInt(cell.dataset.tableSourceColumn ?? "", 10);
+        const table = cell.closest<HTMLTableElement>(".markdown-table");
+        const tableIndex = table ? Array.from(document.querySelectorAll(".markdown-table")).indexOf(table) : -1;
+        finishTableCellEditor(true);
+        if (!cell.isConnected && tableIndex >= 0 && Number.isFinite(row) && Number.isFinite(column)) {
+            cell = document.querySelectorAll<HTMLTableElement>(".markdown-table")[tableIndex]
+                ?.querySelector<HTMLTableCellElement>(
+                    `[data-table-source-row="${row}"][data-table-source-column="${column}"]`,
+                ) ?? cell;
+        }
+        const block = findBlock(cell);
+        const blockId = block?.dataset.blockId;
+        const sourceBlock = blockId ? getEditorState().blocks.blocks.find((candidate) => candidate.id === blockId) : null;
+        if (!block || !blockId || !sourceBlock || !Number.isFinite(row) || !Number.isFinite(column)) return;
+        const source = getEditorState().doc.slice(sourceBlock.sourceFrom, sourceBlock.sourceTo);
+        const range = readMarkdownTableCellRange(source, row, column);
+        if (!range) return;
+        delete block.dataset.blockSourceActive;
+
+        const input = document.createElement("input");
+        input.className = "table-cell-editor";
+        input.type = "text";
+        input.value = source.slice(range.start, range.end);
+        input.setAttribute("aria-label", `Table row ${row === 0 ? "header" : row}, column ${column + 1}`);
+        const cellRect = cell.getBoundingClientRect();
+        input.style.left = `${cellRect.left}px`;
+        input.style.top = `${cellRect.top}px`;
+        input.style.width = `${cellRect.width}px`;
+        input.style.height = `${cellRect.height}px`;
+        cell.dataset.tableCellEditing = "true";
+        document.body.append(input);
+        activeTableCellEditor = {
+            input,
+            cell,
+            blockId,
+            row,
+            column,
+            from: sourceBlock.sourceFrom + range.start,
+            to: sourceBlock.sourceFrom + range.end,
+            finishing: false,
+        };
+        for (const type of ["pointerdown", "click", "beforeinput", "input", "copy", "cut", "paste"] as const) {
+            input.addEventListener(type, (event) => event.stopPropagation());
+        }
+        input.addEventListener("keydown", (event) => {
+            event.stopPropagation();
+            if (event.key === "Escape") {
+                event.preventDefault();
+                finishTableCellEditor(false);
+            } else if (event.key === "Tab" || event.key === "Enter") {
+                event.preventDefault();
+                finishTableCellEditor(true, event.shiftKey ? -1 : 1);
+            }
+        });
+        input.addEventListener("blur", () => finishTableCellEditor(true));
+        input.focus({ preventScroll: true });
+        input.select();
+    }
+
+    function finishTableCellEditor(commit: boolean, move?: -1 | 1): void {
+        const active = activeTableCellEditor;
+        if (!active || active.finishing) return;
+        const nextCell = move ? readAdjacentTableCellAddress(active, move) : null;
+        active.finishing = true;
+        activeTableCellEditor = null;
+        active.input.remove();
+        active.cell.removeAttribute("data-table-cell-editing");
+        if (!commit) {
+            return;
+        }
+        const value = active.input.value.replace(/\r?\n/g, " ").replace(/(?<!\\)\|/g, "\\|");
+        dispatch({
+            changes: [{ from: active.from, to: active.to, insert: value }],
+            selection: { anchor: active.from + value.length, head: active.from + value.length },
+            annotations: { userEvent: "input", historyMode: "discrete" },
+        });
+        if (move) {
+            const transaction = createTableTabTransaction(getEditorState(), move);
+            if (transaction) dispatch(transaction);
+            if (transaction && nextCell) scheduleTableCellEditor(nextCell);
+        }
+    }
+
+    function readAdjacentTableCellAddress(active: ActiveTableCellEditor, move: -1 | 1): TableCellAddress | null {
+        const sourceBlock = getEditorState().blocks.blocks.find((candidate) => candidate.id === active.blockId);
+        const table = active.cell.closest<HTMLTableElement>(".markdown-table");
+        const tableIndex = table ? Array.from(document.querySelectorAll(".markdown-table")).indexOf(table) : -1;
+        if (!sourceBlock || tableIndex < 0) return null;
+        const source = getEditorState().doc.slice(sourceBlock.sourceFrom, sourceBlock.sourceTo);
+        const columnCount = readMarkdownTableColumnCount(source);
+        if (columnCount < 2) return null;
+
+        let row = active.row;
+        let column = active.column + move;
+        if (column >= columnCount) {
+            column = 0;
+            row = active.row === 0 ? 2 : active.row + 1;
+        } else if (column < 0) {
+            column = columnCount - 1;
+            row = active.row === 2 ? 0 : active.row - 1;
+        }
+        return row < 0 ? null : { tableIndex, row, column };
+    }
+
+    function scheduleTableCellEditor(address: TableCellAddress): void {
+        cancelScheduledTableCellEditor();
+        // Selection projection for a newly inserted row can emit a deferred
+        // selectionchange after the transaction. Open the next cell after that
+        // browser task has settled so it cannot immediately steal focus back.
+        scheduledTableCellTimer = window.setTimeout(() => {
+            scheduledTableCellTimer = null;
+            openTableCellEditor(address);
+        }, 32);
+    }
+
+    function cancelScheduledTableCellEditor(): void {
+        if (scheduledTableCellTimer === null) return;
+        window.clearTimeout(scheduledTableCellTimer);
+        scheduledTableCellTimer = null;
+    }
+
+    function openTableCellEditor(address: TableCellAddress): void {
+        const table = document.querySelectorAll<HTMLTableElement>(".markdown-table")[address.tableIndex];
+        const cell = table?.querySelector<HTMLTableCellElement>(
+            `[data-table-source-row="${address.row}"][data-table-source-column="${address.column}"]`,
+        ) ?? null;
+        if (cell) startTableCellEditor(cell);
+    }
+
     function handleSourceKeydown(event: KeyboardEvent): boolean {
         if (isComposingText) {
             return true;
         }
 
-        // Let beforeinput perform source-first range edits. The legacy Markdown
-        // keydown handler mutates DOM ranges directly, while handling deletion
-        // here can race selection projection; both leave EditorState out of sync.
+        if (activeInlineObject) {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                clearInlineObjectSelection();
+                return true;
+            }
+            if (event.key === "Enter") {
+                event.preventDefault();
+                editInlineObjectSource(activeInlineObject.token);
+                return true;
+            }
+            if (event.key === "Backspace" || event.key === "Delete") {
+                event.preventDefault();
+                const { from, to } = activeInlineObject;
+                clearInlineObjectSelection();
+                dispatch({
+                    changes: [{ from, to, insert: "" }],
+                    selection: { anchor: from, head: from },
+                    annotations: { userEvent: "delete", historyMode: "discrete" },
+                });
+                syncDomSelectionFromState({ focus: "editor" });
+                return true;
+            }
+            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                event.preventDefault();
+                const target = event.key === "ArrowLeft" ? activeInlineObject.from : activeInlineObject.to;
+                clearInlineObjectSelection();
+                dispatch({
+                    changes: [],
+                    selection: { anchor: target, head: target },
+                    annotations: { userEvent: "programmatic", addToHistory: false },
+                });
+                syncDomSelectionFromState({ focus: "editor" });
+                return true;
+            }
+        }
+
+        // Let beforeinput own source-first range edits. Handling the same
+        // deletion on keydown would race selection projection and duplicate the
+        // transaction.
         if (
             getEditorState().selection.anchor !== getEditorState().selection.head &&
             (isPlainTextKeydown(event) || event.key === "Backspace" || event.key === "Delete")
@@ -593,7 +1102,9 @@ export function createEditorInputController(options: EditorInputControllerOption
             syncStateSelectionFromDom();
             const state = getEditorState();
             dispatch(
-                options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state, { shiftKey: event.shiftKey })
+                (!options.isSourceMode()
+                    ? options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state, { shiftKey: event.shiftKey })
+                    : null)
                 ?? createSourceInsertTextTransaction(state, "\n"),
             );
             syncDomSelectionFromState();
@@ -603,10 +1114,12 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (event.key === "Tab") {
             syncStateSelectionFromDom();
             const state = getEditorState();
-            const transaction = options.getActiveDocumentFormat().editing?.createTabTransaction?.(
-                state,
-                event.shiftKey ? -1 : 1,
-            ) ?? null;
+            const transaction = options.isSourceMode()
+                ? null
+                : options.getActiveDocumentFormat().editing?.createTabTransaction?.(
+                    state,
+                    event.shiftKey ? -1 : 1,
+                ) ?? null;
             if (!transaction) {
                 const block = state.blocks.blocks.find((candidate) => (
                     state.selection.head >= candidate.contentFrom && state.selection.head <= candidate.contentTo
@@ -642,14 +1155,49 @@ export function createEditorInputController(options: EditorInputControllerOption
             return true;
         }
 
+        if (event.key === "Escape" && pendingInlineFormats.size > 0) {
+            event.preventDefault();
+            clearPendingInlineFormats();
+            return true;
+        }
+
+        if (event.key === "Escape") {
+            const token = document.querySelector<HTMLElement>(".markdown-token-editing");
+            const range = token ? readSourceTokenDocumentRange(token) : null;
+            if (range) {
+                event.preventDefault();
+                clearInlineTypingSourceReveal();
+                clearSourceReveal();
+                dispatch({
+                    changes: [],
+                    selection: {
+                        anchor: range.to,
+                        head: range.to,
+                        anchorAffinity: "upstream",
+                        headAffinity: "upstream",
+                    },
+                    annotations: { userEvent: "programmatic", addToHistory: false },
+                });
+                syncDomSelectionFromState({ focus: "editor" });
+                return true;
+            }
+        }
+
+        if (
+            pendingInlineFormats.size > 0 &&
+            ["Enter", "Tab", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)
+        ) {
+            clearPendingInlineFormats();
+        }
+        if (["Escape", "Enter", "Tab", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
+            clearInlineTypingSourceReveal();
+        }
+
         if (handleSourceHorizontalNavigation(event)) {
             return true;
         }
 
         if (isSourceVerticalNavigationKey(event)) {
-            if (shouldUseNativeVisualLineNavigation()) {
-                return false;
-            }
             syncStateSelectionFromDom();
             if (moveSourceSelectionVertically(
                 event.key === "ArrowUp" ? "up" : "down",
@@ -669,18 +1217,10 @@ export function createEditorInputController(options: EditorInputControllerOption
             return false;
         }
 
-        if (
-            (event.key === "Home" || event.key === "End") &&
-            !event.ctrlKey &&
-            !event.metaKey &&
-            shouldUseNativeVisualLineNavigation()
-        ) {
-            return false;
-        }
-
         event.preventDefault();
         syncStateSelectionFromDom();
         const state = getEditorState();
+        const currentHead = state.selection.head;
         const backward = event.key === "ArrowLeft" || event.key === "Home";
         let target: number;
 
@@ -689,32 +1229,32 @@ export function createEditorInputController(options: EditorInputControllerOption
                 ? Math.min(state.selection.anchor, state.selection.head)
                 : Math.max(state.selection.anchor, state.selection.head);
         } else if (event.key === "Home") {
-            target = event.ctrlKey || event.metaKey ? 0 : previousLineBoundary(state.doc, state.selection.head);
+            target = event.ctrlKey || event.metaKey ? 0 : previousLineBoundary(state.doc, currentHead);
         } else if (event.key === "End") {
-            target = event.ctrlKey || event.metaKey ? state.doc.length : nextLineBoundary(state.doc, state.selection.head);
+            target = event.ctrlKey || event.metaKey ? state.doc.length : nextLineBoundary(state.doc, currentHead);
         } else if (event.ctrlKey || event.altKey) {
             target = backward
-                ? previousWordBoundary(state.doc, state.selection.head)
-                : nextWordBoundary(state.doc, state.selection.head);
+                ? previousWordBoundary(state.doc, currentHead)
+                : nextWordBoundary(state.doc, currentHead);
         } else {
             target = backward
-                ? previousGraphemeBoundary(state.doc, state.selection.head)
-                : nextGraphemeBoundary(state.doc, state.selection.head);
+                ? previousGraphemeBoundary(state.doc, currentHead)
+                : nextGraphemeBoundary(state.doc, currentHead);
         }
 
-        target = normalizeHiddenListIndentNavigationTarget(
-            state,
-            state.selection.head,
-            target,
-            backward,
-            event.key === "Home" && !event.ctrlKey && !event.metaKey,
-        );
+        let extendedAnchor = state.selection.anchor === state.selection.head
+            ? currentHead
+            : state.selection.anchor;
 
+        const nextSelection = {
+            anchor: event.shiftKey ? extendedAnchor : target,
+            head: target,
+        };
         dispatch({
             changes: [],
             selection: {
-                anchor: event.shiftKey ? state.selection.anchor : target,
-                head: target,
+                ...nextSelection,
+                source: selectionTouchesSource(nextSelection),
             },
             annotations: { userEvent: "programmatic", addToHistory: false },
         });
@@ -758,10 +1298,21 @@ export function createEditorInputController(options: EditorInputControllerOption
         ) {
             return () => {
                 const state = getEditorState();
-                return createSourceInsertTextTransaction(
-                    state,
-                    prepareVirtualEofInsertion(event.data ?? "", state.selection),
-                );
+                const wrappedSelection = supportsRichSourceEditing()
+                    ? createSelectedTextWrapperTransaction(state, event.data ?? "")
+                    : null;
+                if (wrappedSelection) {
+                    clearPendingInlineFormats();
+                    return wrappedSelection;
+                }
+                const text = prepareVirtualEofInsertion(event.data ?? "", state.selection);
+                const pending = pendingInlineFormats.size > 0
+                    ? createPendingInlineFormatInsertTransaction(state, text, Array.from(pendingInlineFormats))
+                    : null;
+                if (pendingInlineFormats.size > 0) {
+                    clearPendingInlineFormats();
+                }
+                return pending ?? createSourceInsertTextTransaction(state, text);
             };
         }
 
@@ -791,7 +1342,9 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
             return () => {
                 const state = getEditorState();
-                return options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state)
+                return (!options.isSourceMode()
+                    ? options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state)
+                    : null)
                     ?? createSourceInsertTextTransaction(state, "\n");
             };
         }
@@ -924,6 +1477,12 @@ export function createEditorInputController(options: EditorInputControllerOption
                 ? { kind: "plain", value: event.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n") } as ClipboardReadResult
                 : null;
         const images = supportsRichSourceEditing() ? readClipboardImages(event.clipboardData) : [];
+        if (shouldPreferClipboardImages(images, result, event.clipboardData)) {
+            event.preventDefault();
+            syncStateSelectionFromDom();
+            void pasteSourceImages(images, createSelectionBookmark());
+            return true;
+        }
         if (result) {
             event.preventDefault();
             if ("warning" in result && result.warning) {
@@ -993,7 +1552,9 @@ export function createEditorInputController(options: EditorInputControllerOption
 
         event.preventDefault();
         syncSourceSelectionFromDropPoint(event);
-        if (text) {
+        if (images.length > 0) {
+            void pasteSourceImages(images, createSelectionBookmark());
+        } else if (text) {
             const state = getEditorState();
             const target = state.selection.head;
             const drag = internalDrag;
@@ -1008,8 +1569,6 @@ export function createEditorInputController(options: EditorInputControllerOption
                 dispatch(createSourcePasteTransaction(state, text));
             }
             internalDrag = null;
-        } else {
-            void pasteSourceImages(images, createSelectionBookmark());
         }
 
         return true;
@@ -1082,8 +1641,10 @@ export function createEditorInputController(options: EditorInputControllerOption
             const mappedSelection = bookmark.read();
             if (sources.length > 0 && mappedSelection && lease.sessionId === documentState.sessionId) {
                 const state = getEditorState();
-                const source = prepareBlockImageInsertion(sources.join("\n\n"), mappedSelection, state.doc);
-                dispatch(createSourcePasteTransaction({ ...state, selection: mappedSelection }, source));
+                dispatch(createSourcePasteTransaction(
+                    { ...state, selection: mappedSelection },
+                    sources.join(" "),
+                ));
                 if (lease.focusOwner && document.activeElement === lease.focusOwner) {
                     syncDomSelectionFromState({ focus: "editor" });
                 }
@@ -1101,26 +1662,6 @@ export function createEditorInputController(options: EditorInputControllerOption
         syncStateSelectionFromDom();
         const state = getEditorState();
         dispatch(createSourcePasteTransaction(state, prepareVirtualEofInsertion(text, state.selection)));
-    }
-
-    function prepareBlockImageInsertion(
-        source: string,
-        selection: ReturnType<typeof getEditorState>["selection"],
-        documentSource: string,
-    ): string {
-        const from = Math.min(selection.anchor, selection.head);
-        const to = Math.max(selection.anchor, selection.head);
-        const before = documentSource.slice(0, from);
-        const after = documentSource.slice(to);
-        const prefix = before === "" || before.endsWith("\n\n")
-            ? ""
-            : before.endsWith("\n") ? "\n" : "\n\n";
-        const suffix = after === "" || after.startsWith("\n\n")
-            ? ""
-            : after.startsWith("\n") ? "\n" : "\n\n";
-        const editor = document.getElementById("editor");
-        if (editor) editor.dataset.virtualEofCaret = "false";
-        return `${prefix}${source}${suffix}`;
     }
 
     function prepareVirtualEofInsertion(
@@ -1160,24 +1701,82 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function supportsRichSourceEditing(): boolean {
+        if (options.isSourceMode()) {
+            return false;
+        }
         const format = options.getActiveDocumentFormat();
         return Boolean(format.clipboard?.richHtml && format.clipboard.mimeTypes.includes("text/markdown"));
+    }
+
+    function canUsePendingInlineFormat(state: ReturnType<typeof getEditorState>): boolean {
+        const block = findSourceBlockAtOffset(state.blocks, state.selection.head);
+        return Boolean(block && [
+            "paragraph",
+            "heading-1",
+            "heading-2",
+            "heading-3",
+            "heading-4",
+            "heading-5",
+            "heading-6",
+            "list",
+            "ordered-list",
+            "todo",
+            "quote",
+        ].includes(block.type));
+    }
+
+    function togglePendingInlineFormat(
+        command: Exclude<InlineFormatCommand, "link">,
+        offset: number,
+    ): void {
+        if (command === "code") {
+            const wasActive = pendingInlineFormats.has(command);
+            pendingInlineFormats.clear();
+            if (!wasActive) pendingInlineFormats.add(command);
+        } else {
+            pendingInlineFormats.delete("code");
+            if (pendingInlineFormats.has(command)) pendingInlineFormats.delete(command);
+            else pendingInlineFormats.add(command);
+        }
+        pendingInlineFormatOffset = pendingInlineFormats.size > 0 ? offset : null;
+        options.syncActiveBlockIndicator(findBlock(document.getSelection()?.focusNode ?? null));
+    }
+
+    function clearPendingInlineFormats(): void {
+        pendingInlineFormats.clear();
+        pendingInlineFormatOffset = null;
+    }
+
+    function handleEditorSelectionChange(): void {
+        const state = getEditorState();
+        if (pendingInlineFormatOffset !== null && (
+            state.selection.anchor !== state.selection.head ||
+            state.selection.head !== pendingInlineFormatOffset
+        )) {
+            clearPendingInlineFormats();
+        }
     }
 
     function createSourceInsertTextTransaction(
         state: ReturnType<typeof getEditorState>,
         text: string,
     ): Parameters<typeof dispatch>[0] {
-        return options.getActiveDocumentFormat().editing?.createInsertTextTransaction?.(state, text)
+        const transaction = (!options.isSourceMode()
+            ? options.getActiveDocumentFormat().editing?.createInsertTextTransaction?.(state, text)
+            : null)
             ?? createInsertTextTransaction(state, text);
+        return preserveSourceSelection(state, transaction);
     }
 
     function createSourcePasteTransaction(
         state: ReturnType<typeof getEditorState>,
         text: string,
     ): Parameters<typeof dispatch>[0] {
-        return options.getActiveDocumentFormat().editing?.createPasteTransaction?.(state, text)
+        const transaction = (!options.isSourceMode()
+            ? options.getActiveDocumentFormat().editing?.createPasteTransaction?.(state, text)
+            : null)
             ?? createPasteTransaction(state, text);
+        return preserveSourceSelection(state, transaction);
     }
 
     function createSourceDeleteTransaction(
@@ -1185,8 +1784,24 @@ export function createEditorInputController(options: EditorInputControllerOption
         direction: "backward" | "forward",
         granularity: "grapheme" | "word" | "soft-line" | "hard-line",
     ): Parameters<typeof dispatch>[0] | null {
-        return options.getActiveDocumentFormat().editing?.createDeleteTransaction?.(state, direction, granularity)
+        const transaction = (!options.isSourceMode()
+            ? options.getActiveDocumentFormat().editing?.createDeleteTransaction?.(state, direction, granularity)
+            : null)
             ?? createDeleteTransaction(state, direction, granularity);
+        return transaction ? preserveSourceSelection(state, transaction) : null;
+    }
+
+    function preserveSourceSelection(
+        state: ReturnType<typeof getEditorState>,
+        transaction: Parameters<typeof dispatch>[0],
+    ): Parameters<typeof dispatch>[0] {
+        if (!isSourceSelection(state.selection) || !transaction.selection || transaction.selection.source !== undefined) {
+            return transaction;
+        }
+        return {
+            ...transaction,
+            selection: { ...transaction.selection, source: true },
+        };
     }
 
     function writeSourceClipboard(clipboard: DataTransfer, _text: string): boolean {
@@ -1227,18 +1842,6 @@ export function createEditorInputController(options: EditorInputControllerOption
             ? options.getActiveDocumentFormat().clipboard?.createPayload?.(context)
                 ?? createPlainClipboardPayload(context.state.doc.slice(context.from, context.to))
             : createPlainClipboardPayload(context.state.doc.slice(context.from, context.to));
-    }
-
-    function shouldUseNativeVisualLineNavigation(): boolean {
-        const focusNode = document.getSelection()?.focusNode ?? null;
-        const focusElement = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
-        if (!focusElement) {
-            return true;
-        }
-
-        return !focusElement.closest(
-            ".markdown-token-editing, .format-block-source, [data-block][data-type='code']",
-        );
     }
 
     function createClipboardSelectionContext(): ClipboardSelectionContext {
@@ -1308,38 +1911,47 @@ function readClipboardImages(dataTransfer: DataTransfer | null | undefined): Fil
         : Array.from(dataTransfer.files).filter(isSupportedPastedImage);
 }
 
-function normalizeHiddenListIndentNavigationTarget(
-    state: EditorState,
-    current: number,
-    target: number,
-    backward: boolean,
-    moveToLineStart: boolean,
-): number {
-    const block = findSourceBlockAtOffset(state.blocks, current);
-    if (
-        !block ||
-        (block.type !== "list" && block.type !== "ordered-list" && block.type !== "todo") ||
-        !block.indent
-    ) {
-        return target;
+function shouldPreferClipboardImages(
+    images: File[],
+    result: ClipboardReadResult | null,
+    dataTransfer: DataTransfer | null | undefined,
+): boolean {
+    if (images.length === 0) {
+        return false;
     }
-
-    const markerFrom = block.contentFrom - readVisibleListPrefixLength(block);
-    if (markerFrom <= block.sourceFrom) {
-        return target;
+    if (!result || result.kind === "plain") {
+        return true;
     }
-
-    if (moveToLineStart) {
-        return markerFrom;
+    if (result.kind !== "html") {
+        return false;
     }
+    return !hasMeaningfulNonImageClipboardHtml(dataTransfer?.getData("text/html") ?? "");
+}
 
-    if (target >= block.sourceFrom && target < markerFrom) {
-        return backward && current <= markerFrom
-            ? previousGraphemeBoundary(state.doc, block.sourceFrom)
-            : markerFrom;
+function hasMeaningfulNonImageClipboardHtml(html: string): boolean {
+    if (!html) {
+        return false;
     }
+    const clipboardDocument = new DOMParser().parseFromString(html, "text/html");
+    for (const element of Array.from(clipboardDocument.body.querySelectorAll("script, style, img"))) {
+        element.remove();
+    }
+    if (clipboardDocument.body.textContent?.trim()) {
+        return true;
+    }
+    return Boolean(clipboardDocument.body.querySelector(
+        "br, hr, table, ul, ol, pre, blockquote, input, textarea, select, video, audio, canvas, svg",
+    ));
+}
 
-    return target;
+function isTextEntryElement(element: Element | null): element is HTMLInputElement | HTMLTextAreaElement {
+    if (element instanceof HTMLTextAreaElement) {
+        return true;
+    }
+    if (!(element instanceof HTMLInputElement)) {
+        return false;
+    }
+    return ["text", "search", "tel", "url", "password"].includes(element.type);
 }
 
 function extensionForImageMimeType(mimeType: string): string {
@@ -1375,4 +1987,115 @@ function convertDataImagesToFiles(markdown: string): { urls: string[]; files: Fi
 
 function isPlainTextKeydown(event: KeyboardEvent): boolean {
     return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
+function isInlineFormatCommand(command: EditorCommand): command is "bold" | "italic" | "strike" | "inline-code" | "link" {
+    return command === "bold" || command === "italic" || command === "strike" || command === "inline-code" || command === "link";
+}
+
+function readInlineFormatCommand(command: "bold" | "italic" | "strike" | "inline-code" | "link"): InlineFormatCommand {
+    return command === "inline-code" ? "code" : command;
+}
+
+function isTextInputCommand(command: EditorCommand): command is "copy" | "cut" | "paste" | "select-all" {
+    return command === "copy" || command === "cut" || command === "paste" || command === "select-all";
+}
+
+function createSelectedTextWrapperTransaction(
+    state: ReturnType<typeof getEditorState>,
+    text: string,
+): Parameters<typeof dispatch>[0] | null {
+    if (
+        text.length !== 1 ||
+        isSourceSelection(state.selection)
+    ) {
+        return null;
+    }
+
+    const range = {
+        from: Math.min(state.selection.anchor, state.selection.head),
+        to: Math.max(state.selection.anchor, state.selection.head),
+    };
+    if (range.from === range.to) {
+        return null;
+    }
+
+    const block = findSourceBlockAtOffset(state.blocks, range.from);
+    if (
+        !block ||
+        !isInlineWrappableMarkdownBlock(block.type) ||
+        range.to > block.contentTo ||
+        /\r?\n/.test(state.doc.slice(range.from, range.to))
+    ) {
+        return null;
+    }
+
+    const pair = readSelectionWrapperPair(text, state.doc.slice(range.from, range.to));
+    if (!pair) {
+        return null;
+    }
+
+    return {
+        changes: [{
+            from: range.from,
+            to: range.to,
+            insert: `${pair.open}${state.doc.slice(range.from, range.to)}${pair.close}`,
+        }],
+        selection: {
+            anchor: range.from + pair.open.length,
+            head: range.to + pair.open.length,
+        },
+        annotations: { userEvent: "input", historyMode: "typing", typingBoundary: false },
+    };
+}
+
+function readSelectionWrapperPair(
+    character: string,
+    selectedText: string,
+): { open: string; close: string } | null {
+    if (character === "*") {
+        return { open: "*", close: "*" };
+    }
+    if (character === "_") {
+        return { open: "_", close: "_" };
+    }
+    if (character === "`") {
+        const longestRun = Math.max(0, ...Array.from(selectedText.matchAll(/`+/g), (match) => match[0].length));
+        const marker = "`".repeat(longestRun + 1);
+        const needsPadding = selectedText.startsWith("`") || selectedText.endsWith("`") || (
+            selectedText.startsWith(" ") && selectedText.endsWith(" ") && selectedText.trim() !== ""
+        );
+        const padding = needsPadding ? " " : "";
+        return { open: `${marker}${padding}`, close: `${padding}${marker}` };
+    }
+    if (character === "[") {
+        return { open: "[", close: "]" };
+    }
+    if (character === "(") {
+        return { open: "(", close: ")" };
+    }
+    if (character === "{") {
+        return { open: "{", close: "}" };
+    }
+    if (character === "\"") {
+        return { open: "\"", close: "\"" };
+    }
+    if (character === "'") {
+        return { open: "'", close: "'" };
+    }
+    return null;
+}
+
+function isInlineWrappableMarkdownBlock(type: SourceBlock["type"] | undefined): boolean {
+    return type === "paragraph" ||
+        type === "heading-1" ||
+        type === "heading-2" ||
+        type === "heading-3" ||
+        type === "heading-4" ||
+        type === "heading-5" ||
+        type === "heading-6" ||
+        type === "list" ||
+        type === "ordered-list" ||
+        type === "todo" ||
+        type === "quote";
 }

@@ -9,6 +9,10 @@ tasks:
 
     install:frontend:deps:
         summary: Install frontend dependencies
+        cmds:
+            - task: install:frontend:deps:{{.PACKAGE_MANAGER}}
+
+    install:frontend:deps:npm:
         dir: frontend
         sources:
             - package.json
@@ -19,7 +23,7 @@ tasks:
             - sh: npm version
               msg: "Looks like npm isn't installed. Npm is part of the Node installer: https://nodejs.org/en/download/"
         cmds:
-            - npm install
+            - npm install --no-audit --no-fund
 
     build:frontend:
         label: build:frontend (DEV={{.DEV}})
@@ -53,9 +57,11 @@ tasks:
 
     dev:frontend:
         summary: Runs the frontend in development mode
+        cmds:
+            - task: frontend:dev:{{.PACKAGE_MANAGER}}
+
+    frontend:dev:npm:
         dir: frontend
-        deps:
-            - task: install:frontend:deps
         cmds:
             - npm run dev -- --port {{.VITE_PORT}} --strictPort
 

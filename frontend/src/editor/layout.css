@@ -1,5 +1,5 @@
 .editor-shell {
-    background: #ffffff;
+    background: var(--glyph-surface);
     height: 100vh;
     width: 100vw;
     overflow-y: auto;
@@ -46,12 +46,18 @@ body.app-titlebar-host .editor-shell {
 }
 
 .document-surface {
-    width: min(65vw, 1280px);
+    width: min(100%, 880px);
     min-height: 100vh;
     margin: 0 auto;
-    padding: 72px 48px 120px 48px;
+    padding: 72px 48px 120px;
     cursor: text;
     zoom: var(--glyph-editor-zoom, 1);
+}
+
+.document-title-row {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
 }
 
 body.app-titlebar-host .document-surface {
@@ -60,16 +66,77 @@ body.app-titlebar-host .document-surface {
 }
 
 .document-title {
-    width: 100%;
+    width: auto;
+    min-width: 0;
+    max-width: calc(100% - 3rem);
+    flex: 0 1 auto;
+    field-sizing: content;
     border: 0;
     outline: 0;
     background: transparent;
-    color: #191919;
+    color: var(--glyph-text-strong);
     font-family: var(--glyph-font-title, var(--glyph-font-text));
     font-size: 2.75rem;
     font-weight: 700;
+    letter-spacing: -0.035em;
     line-height: 1.3;
     padding: 0 0 0.08em;
+}
+
+.document-title[readonly] {
+    cursor: default;
+}
+
+.document-extension {
+    flex: 0 0 auto;
+    margin-left: 0.08em;
+    color: var(--glyph-text-muted);
+    font: 650 1.05rem/1 var(--glyph-font-text);
+    letter-spacing: -0.01em;
+}
+
+.markdown-mode-toggle {
+    align-self: center;
+    flex: 0 0 auto;
+    margin-left: auto;
+    border: 1px solid var(--glyph-border);
+    border-radius: 999px;
+    background: var(--glyph-surface);
+    color: var(--glyph-text-muted);
+    cursor: pointer;
+    font: 650 0.72rem/1 var(--glyph-font-text);
+    letter-spacing: 0.015em;
+    padding: 0.48rem 0.72rem;
+    transition: background-color 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+
+.markdown-mode-toggle:hover {
+    border-color: color-mix(in srgb, var(--glyph-text-muted) 45%, var(--glyph-border));
+    background: var(--glyph-control-hover);
+    color: var(--glyph-text-strong);
+}
+
+.markdown-mode-toggle:focus-visible {
+    outline: 2px solid var(--glyph-focus-ring);
+    outline-offset: 2px;
+}
+
+.markdown-mode-toggle[aria-pressed="true"] {
+    border-color: color-mix(in srgb, var(--glyph-accent) 35%, var(--glyph-border));
+    background: var(--glyph-accent-soft);
+    color: var(--glyph-accent);
+}
+
+.editor-shell[data-editing-mode="source"] .block-editor {
+    margin-top: 1.5rem;
+}
+
+.editor-shell[data-editing-mode="source"] .block[data-type="source"] .block-content {
+    min-height: 50vh;
+    font-family: var(--glyph-font-code);
+    font-size: 0.92rem;
+    line-height: 1.65;
+    tab-size: 4;
 }
 
 .block-editor {
@@ -89,14 +156,67 @@ body.app-titlebar-host .document-surface {
 }
 
 .todo-checkbox {
+    appearance: none;
     display: none;
-    width: 1rem;
-    height: 1rem;
+    place-items: center;
+    width: 1.05rem;
+    height: 1.05rem;
+    border: 1px solid rgb(72 76 84 / 26%);
+    border-radius: 5px;
+    background: rgb(255 255 255 / 62%);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 82%),
+        0 1px 3px rgb(31 34 40 / 8%);
     cursor: pointer;
+    transition:
+        background-color 120ms ease,
+        border-color 120ms ease,
+        box-shadow 120ms ease,
+        transform 100ms ease;
 }
 
 .block[data-type="todo"] .todo-checkbox {
-    display: block;
+    display: grid;
+}
+
+.todo-checkbox::after {
+    width: 0.28rem;
+    height: 0.52rem;
+    border: solid #ffffff;
+    border-width: 0 0.12rem 0.12rem 0;
+    content: "";
+    opacity: 0;
+    transform: translateY(-0.04rem) rotate(45deg) scale(0.65);
+    transition:
+        opacity 100ms ease,
+        transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.todo-checkbox:hover {
+    border-color: rgb(72 76 84 / 38%);
+    background: rgb(248 249 251 / 84%);
+}
+
+.todo-checkbox:checked {
+    border-color: rgb(8 105 207 / 78%);
+    background: var(--glyph-accent);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 26%),
+        0 2px 6px rgb(8 121 232 / 24%);
+}
+
+.todo-checkbox:checked::after {
+    opacity: 1;
+    transform: translateY(-0.04rem) rotate(45deg) scale(1);
+}
+
+.todo-checkbox:active {
+    transform: scale(0.94);
+}
+
+.todo-checkbox:focus-visible {
+    outline: 2px solid var(--glyph-focus-ring);
+    outline-offset: 2px;
 }
 
 .block-content {
@@ -110,12 +230,18 @@ body.app-titlebar-host .document-surface {
     word-break: break-word;
 }
 
+.block-editor > .block:only-child .block-content:empty::before {
+    color: var(--glyph-text-muted);
+    content: "Start writing\2026";
+    pointer-events: none;
+}
+
 .block::after {
     content: "";
     position: absolute;
     top: 0.2rem;
     left: -34px;
-    width: 3px;
+    width: 4px;
     height: calc(100% - 0.4rem);
     min-height: 1rem;
     max-height: 2.5rem;
@@ -133,26 +259,28 @@ body.app-titlebar-host .document-surface {
 
 .block[data-active-block="true"]::after {
     background: var(--glyph-active-block-indicator);
+    box-shadow:
+        inset 1px 0 0 rgb(255 255 255 / 34%),
+        0 2px 7px rgb(8 121 232 / 20%);
     opacity: 1;
     transform: scaleY(1);
 }
 
 .block[data-gutter-hover="true"]:not([data-active-block="true"])::after {
     background: var(--glyph-hover-block-indicator);
+    box-shadow: inset 1px 0 0 rgb(255 255 255 / 38%);
     opacity: 1;
     transform: scaleY(0.7);
-}
-
-@media (max-width: 1060px) {
-    .document-surface {
-        width: 100%;
-    }
 }
 
 @media (max-width: 640px) {
     .document-surface {
         width: 100%;
-        padding: 56px 24px 96px;
+        padding: 48px 22px 96px;
+    }
+
+    body.app-titlebar-host .document-surface {
+        padding-top: calc(48px - var(--glyph-titlebar-height, 37px));
     }
 
     .document-title {
@@ -241,10 +369,23 @@ body.app-titlebar-host .document-surface {
     bottom: 1rem;
     z-index: 20;
     max-width: min(28rem, calc(100vw - 2rem));
-    padding: 0.6rem 0.8rem;
-    border: 1px solid color-mix(in srgb, #d33 55%, transparent);
-    border-radius: 0.4rem;
-    background: color-mix(in srgb, #d33 12%, var(--surface-color, #fff));
-    color: var(--text-color, inherit);
-    box-shadow: 0 0.3rem 1rem rgb(0 0 0 / 18%);
+    padding: 0.72rem 0.9rem;
+    border: 1px solid rgb(190 43 51 / 22%);
+    border-radius: 12px;
+    background: rgb(255 246 247 / 82%);
+    color: #7c252a;
+    box-shadow:
+        var(--glyph-glass-shadow-compact),
+        var(--glyph-glass-inset);
+    font: 500 0.86rem/1.35 var(--glyph-font-text);
+    -webkit-backdrop-filter: var(--glyph-glass-backdrop);
+    backdrop-filter: var(--glyph-glass-backdrop);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .todo-checkbox,
+    .todo-checkbox::after,
+    .block::after {
+        transition-duration: 0.01ms;
+    }
 }

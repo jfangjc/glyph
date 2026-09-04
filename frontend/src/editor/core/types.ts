@@ -1,76 +1,24 @@
 import type { ParsedBlock } from "../blocks/model";
-import type { BlockSourcePosition } from "../blocks/rendering";
-
-export type DocumentEditorHooks = {
-    syncActiveBlockIndicator: (block: HTMLElement | null) => void;
-    syncBlockSourceReveal: (block: HTMLElement | null) => void;
-    syncBlockSourceRevealBlocks: (blocks: HTMLElement[]) => void;
-};
-
-export type DocumentSourceSelectionTarget =
-    | {
-          kind: "block-source";
-          block: HTMLElement;
-          source: HTMLElement;
-          sourcePosition: BlockSourcePosition;
-          sourceOffset: number;
-      }
-    | {
-          kind: "inline-source";
-          block: HTMLElement;
-          token: HTMLElement;
-          source: HTMLElement;
-          sourceOffset: number;
-      };
-
-export type DocumentEditorSelectionState = {
-    selection: Selection | null;
-    isCollapsed: boolean;
-    anchorNode: Node | null;
-    focusNode: Node | null;
-    anchorOffset: number;
-    focusOffset: number;
-    anchorBlock: HTMLElement | null;
-    focusBlock: HTMLElement | null;
-    anchorBlockOffset: number | null;
-    focusBlockOffset: number | null;
-    selectedBlocks: HTMLElement[];
-    sourceTarget: DocumentSourceSelectionTarget | null;
-};
 
 export type DocOffset = number;
 
 export type SourceAffinity = "upstream" | "downstream";
 
-export type SelectionEndpoint = {
-    offset: DocOffset;
-    affinity: SourceAffinity;
-};
-
+/**
+ * Describes which projection owns the selection. Source offsets are always the
+ * canonical coordinates; the domain controls whether normally-hidden markup is
+ * exposed while those coordinates are edited.
+ */
 export type SelectionRange = {
     anchor: DocOffset;
     head: DocOffset;
     anchorAffinity?: SourceAffinity;
     headAffinity?: SourceAffinity;
+    source?: boolean;
 };
 
-export function selectionEndpoint(
-    selection: SelectionRange,
-    endpoint: "anchor" | "head",
-): SelectionEndpoint {
-    return {
-        offset: selection[endpoint],
-        affinity: endpoint === "anchor"
-            ? selection.anchorAffinity ?? "downstream"
-            : selection.headAffinity ?? "downstream",
-    };
-}
-
-export function orderedSelectionBounds(selection: SelectionRange): { from: DocOffset; to: DocOffset } {
-    return {
-        from: Math.min(selection.anchor, selection.head),
-        to: Math.max(selection.anchor, selection.head),
-    };
+export function isSourceSelection(selection: SelectionRange): boolean {
+    return selection.source === true;
 }
 
 export type Change = {
@@ -86,6 +34,7 @@ export type Transaction = {
         userEvent?: "input" | "delete" | "paste" | "format" | "history" | "programmatic";
         addToHistory?: boolean;
         historyMode?: "typing" | "discrete";
+        typingBoundary?: boolean;
     };
 };
 
@@ -117,6 +66,13 @@ export type ProjectionCapability = {
     resolveSelectionRange?: (state: EditorState) => { from: DocOffset; to: DocOffset } | null;
     shouldUseNativePointer?: (target: Element) => boolean | null;
     reconcileInteractiveSource?: () => void;
+    readVisualHiddenRanges?: (state: EditorState) => Array<{
+        from: DocOffset;
+        to: DocOffset;
+        visibleFrom: DocOffset;
+        visibleTo: DocOffset;
+        atomic?: boolean;
+    }>;
 };
 
 export type EditorState = {

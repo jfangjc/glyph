@@ -115,29 +115,9 @@ export function readBlockSourcePosition(source: HTMLElement): BlockSourcePositio
     return null;
 }
 
-export function isBlockSourceElement(node: Node): node is HTMLElement {
-    return node instanceof HTMLElement && node.classList.contains("format-block-source");
-}
-
 export function findBlockSourceElement(node: Node | null): HTMLElement | null {
     const element = node instanceof Element ? node : node?.parentElement;
     return element?.closest<HTMLElement>(".format-block-source") ?? null;
-}
-
-export function isEditableBlockSourceElement(source: HTMLElement): boolean {
-    return source.dataset.blockSourceEditable !== "false" && source.getAttribute("contenteditable") !== "false";
-}
-
-export function focusBlockSourceAtOffset(source: HTMLElement, offset: number): void {
-    const selection = document.getSelection();
-    const range = document.createRange();
-    const position = getPlainTextPosition(source, Math.max(0, offset));
-
-    source.closest<HTMLElement>("#editor")?.focus({ preventScroll: true });
-    range.setStart(position.node, position.offset);
-    range.collapse(true);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
 }
 
 export function getBlockSourceOffset(source: HTMLElement, node: Node, offset: number): number {
@@ -205,9 +185,4 @@ function getBlockSourceClassName(position: BlockSourcePosition): string {
         "format-block-source",
         `format-block-source-${position}`,
     ].join(" ");
-}
-
-function getPlainTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } {
-    const text = root.firstChild ?? root.appendChild(document.createTextNode(""));
-    return { node: text, offset: Math.min(offset, text.textContent?.length ?? 0) };
 }
