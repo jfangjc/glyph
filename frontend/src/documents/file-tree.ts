@@ -9,7 +9,9 @@ type FileTreeHost = {
     openDocumentPath: (path: string) => Promise<void>;
 };
 
-type FileTreeController = {
+export type FileTreeController = {
+    setQuery: (value: string) => void;
+    show: () => void;
     openDirectory: () => Promise<void>;
     toggle: () => void;
     close: () => void;
@@ -109,14 +111,14 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
         const selectedDirectoryPath = await chooseDirectoryToOpen();
         if (!selectedDirectoryPath) {
             if (frame.isOpen()) {
-                search.focus({ preventScroll: true });
+                (document.getElementById("explorer-query") ?? search).focus({ preventScroll: true });
             }
             return;
         }
 
         await openDirectoryPath(selectedDirectoryPath, treeRoot, search);
         frame.show();
-        search.focus({ preventScroll: true });
+        (document.getElementById("explorer-query") ?? search).focus({ preventScroll: true });
     };
 
     search.addEventListener("input", () => {
@@ -136,7 +138,7 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
     );
 
     document.addEventListener("mousedown", (event) => {
-        if (frame.isOpen() && !frame.element.contains(event.target as Node | null)) {
+        if (frame.isOpen() && !frame.element.closest(".writing-panel") && !frame.element.contains(event.target as Node | null)) {
             closeFrame();
         }
     });
@@ -185,8 +187,18 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
     renderTree(treeRoot);
 
     return {
+        setQuery: (value) => {
+            search.value = value;
+            query = value.trim().toLowerCase();
+            selectedPath = null;
+            renderTree(treeRoot);
+        },
         openDirectory: chooseAndOpenDirectory,
         close: closeFrame,
+        show: () => {
+            frame.show();
+            if (!tree) void restoreLastOpenDirectory();
+        },
         toggle: () => {
             if (frame.isOpen()) {
                 closeFrame();
@@ -195,7 +207,7 @@ export function installFileTree(root: HTMLElement, nextHost: FileTreeHost): File
 
             frame.show();
             if (tree) {
-                search.focus({ preventScroll: true });
+                (document.getElementById("explorer-query") ?? search).focus({ preventScroll: true });
             } else {
                 treeRoot.querySelector<HTMLButtonElement>("[data-file-tree-open-directory]")?.focus({ preventScroll: true });
             }
@@ -345,11 +357,15 @@ function normalizeSignaturePath(path: string): string {
 }
 
 function handleFileTreeKeydown(event: KeyboardEvent, treeRoot: HTMLElement, closeFrame: () => void): void {
-    if (event.defaultPrevented) {
+    if (event.defaultPrevented || event.isComposing || (event.target instanceof Element && !treeRoot.contains(event.target))) {
         return;
     }
 
+    const focusedRow = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-file-tree-selectable=\"true\"]");
+    if (focusedRow?.dataset.fileTreePath) selectedPath = focusedRow.dataset.fileTreePath;
+
     if (event.key === "Escape") {
+        if (treeRoot.closest(".writing-panel")) return;
         event.preventDefault();
         event.stopPropagation();
         closeFrame();
@@ -396,6 +412,7 @@ function handleFileTreeKeydown(event: KeyboardEvent, treeRoot: HTMLElement, clos
                 selectedPath = child.dataset.fileTreePath;
                 syncSelection(treeRoot);
                 child.focus({ preventScroll: true });
+                child.scrollIntoView({ block: "nearest" });
             }
             return;
         }
@@ -411,6 +428,7 @@ function handleFileTreeKeydown(event: KeyboardEvent, treeRoot: HTMLElement, clos
             selectedPath = parent.dataset.fileTreePath;
             syncSelection(treeRoot);
             parent.focus({ preventScroll: true });
+            parent.scrollIntoView({ block: "nearest" });
         }
         return;
     }
@@ -430,8 +448,9 @@ function renderTree(root: HTMLElement): void {
         searchRenderTimer = null;
     }
 
-    if (!query && !selectedPath) {
-        selectedPath = documentState.activeFilePath;
+    const revealCurrent = !query && !selectedPath;
+    if (revealCurrent) {
+        selectedPath = revealCurrentFile(tree?.children ?? []);
     }
 
     root.innerHTML = renderFileTreeHtml({
@@ -443,9 +462,33 @@ function renderTree(root: HTMLElement): void {
     });
     if (fileTreeFrameElement) fileTreeFrameElement.dataset.hasTree = String(Boolean(tree));
     renderedSelectedPath = null;
+    if (selectedPath && !getFileTreeItem(root, selectedPath)) selectedPath = null;
     selectFirstSearchResult(root);
     syncSelection(root);
     syncTreeContext();
+    if (revealCurrent && selectedPath) {
+        const path = selectedPath;
+        requestAnimationFrame(() => {
+            const item = getFileTreeItem(root, path);
+            if (selectedPath === path && item?.getClientRects().length) {
+                item.scrollIntoView({ block: "nearest", behavior: "instant" });
+            }
+        });
+    }
+}
+
+function revealCurrentFile(items: DirectoryTreeItem[]): string | null {
+    const current = normalizeSignaturePath(documentState.activeFilePath || "");
+    if (!current) return null;
+    for (const item of items) {
+        if (!item.isDir && normalizeSignaturePath(item.path) === current) return item.path;
+        const found = item.isDir ? revealCurrentFile(item.children ?? []) : null;
+        if (found) {
+            collapsedDirectories.delete(item.path);
+            return found;
+        }
+    }
+    return null;
 }
 
 function syncTreeContext(): void {
@@ -473,6 +516,7 @@ function activateSelectedItem(root: HTMLElement, path: string, closeFrame: () =>
     if (item.dataset.fileTreeDir === "true") {
         toggleDirectory(path);
         renderTree(root);
+        getFileTreeItem(root, path)?.focus({ preventScroll: true });
         return;
     }
 
@@ -484,6 +528,7 @@ function moveSelection(root: HTMLElement, direction: 1 | -1): void {
 
     selectedPath = moveFileTreeSelection(root, selectedPath, direction);
     syncSelection(root);
+    if (selectedPath) getFileTreeItem(root, selectedPath)?.focus({ preventScroll: true });
 }
 
 function syncSelection(root: HTMLElement): void {
@@ -492,7 +537,7 @@ function syncSelection(root: HTMLElement): void {
 }
 
 function selectFirstSearchResult(root: HTMLElement): void {
-    if (!query || selectedPath) {
+    if (selectedPath) {
         return;
     }
 
@@ -548,6 +593,7 @@ function collapseDirectories(items: DirectoryTreeItem[]): void {
 async function openSelectedFile(path: string, closeFrame: () => void): Promise<void> {
     await getHost().openDocumentPath(path);
     closeFrame();
+    window.dispatchEvent(new Event("glyph:navigation-selected"));
 }
 
 function clearSearch(root: HTMLElement, search: HTMLInputElement): void {

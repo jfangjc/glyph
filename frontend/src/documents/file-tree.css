@@ -206,10 +206,6 @@
     cursor: pointer;
     font: 400 0.95rem/1.2 var(--glyph-font-text);
     text-align: left;
-    transition:
-        background-color 100ms ease,
-        box-shadow 100ms ease,
-        transform 100ms ease;
 }
 
 .file-tree-row:hover {
@@ -222,10 +218,6 @@
     background: rgb(28 28 30 / 5%);
     box-shadow: none;
     outline: 0;
-}
-
-.file-tree-row:active {
-    transform: scale(0.994);
 }
 
 button.file-tree-row.is-selected,
@@ -323,11 +315,6 @@ body.centered-frame-active::after {
     transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
 
-@media (min-width: 1080px) {
-    body.centered-frame-active .document-surface {
-        translate: 150px 0;
-    }
-}
 
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     .centered-frame-content > * {

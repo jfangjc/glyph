@@ -11,6 +11,7 @@ export type ImageFile = {
 };
 
 export type PdfPreviewFile = {
+    stale?: boolean;
     path: string;
     mimeType: string;
     dataUrl: string;

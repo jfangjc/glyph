@@ -13,6 +13,7 @@ type ImageFile struct {
 }
 
 type PdfPreviewFile struct {
+	Stale    bool   `json:"stale"`
 	Path     string `json:"path"`
 	MimeType string `json:"mimeType"`
 	DataURL  string `json:"dataUrl"`

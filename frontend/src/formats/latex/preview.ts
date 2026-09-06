@@ -1,97 +1,87 @@
 import { readSiblingPdfPreview } from "../../bridge/documents";
+import { canUseNativeRuntime } from "../../platform/runtime";
+import { documentState } from "../../documents/document-state";
 import { readEditorDom } from "../../editor/editor-dom";
-import type { DocumentPreviewBehavior, DocumentPreviewContext } from "../types";
+import type { DocumentPreviewBehavior } from "../types";
 
-let latexPreviewSourcePath: string | null = null;
-let latexPreviewRequestId = 0;
-let wasSavingDocumentForLatexPreview = false;
-
+let sourcePath: string | null = null;
+let requestId = 0;
+let stale = false;
+let feedback = "";
 export const latexPreviewBehavior: DocumentPreviewBehavior = {
-    sync: syncLatexPdfPreview,
-    deactivate: deactivateLatexPdfPreview,
+    sync(context) {
+        const { latexPreview, latexFrame, latexStatus } = readEditorDom();
+        if (!context.activeFilePath) {
+            requestId++;
+            sourcePath = null;
+            latexFrame.removeAttribute("src");
+            latexPreview.dataset.state = "empty";
+            latexStatus.textContent = "Save this LaTeX document to compile a PDF. A TeX compiler must be installed.";
+            return;
+        }
+        if (sourcePath !== context.activeFilePath) void load(context.activeFilePath);
+        else updateFeedback();
+    },
+    deactivate() {
+        requestId++;
+        sourcePath = null;
+        feedback = "";
+        const { latexPreview, latexFrame, latexStatus } = readEditorDom();
+        latexFrame.removeAttribute("src");
+        latexPreview.dataset.state = "hidden";
+        latexStatus.textContent = "";
+    },
 };
-
-function syncLatexPdfPreview(context: DocumentPreviewContext): void {
-    const { latexPreview: preview, latexFrame: frame, latexStatus: status } = readEditorDom();
-    const saveJustFinished = wasSavingDocumentForLatexPreview && !context.isSavingDocument;
-
-    wasSavingDocumentForLatexPreview = context.isSavingDocument;
-
-    if (!context.activeFilePath) {
-        latexPreviewRequestId += 1;
-        latexPreviewSourcePath = null;
-        setLatexPreviewActive(false);
-        preview.dataset.state = "empty";
-        frame.removeAttribute("src");
-        status.textContent = "";
+window.addEventListener("glyph:document-saved", () => {
+    if (documentState.activeFormatId === "latex" && documentState.activeFilePath) void load(documentState.activeFilePath, true);
+});
+function updateFeedback(): void {
+    const { latexPreview, latexStatus } = readEditorDom();
+    if (latexPreview.dataset.state !== "ready") return;
+    latexStatus.textContent = [feedback, stale || documentState.hasUnsavedChanges ? "PDF is older than the current source. Save & Compile to update." : ""].filter(Boolean).join(" ");
+}
+async function load(path: string, compile = false): Promise<void> {
+    const id = ++requestId;
+    const { latexPreview, latexFrame, latexStatus } = readEditorDom();
+    const sameSource = sourcePath === path;
+    sourcePath = path;
+    if (!sameSource) latexFrame.removeAttribute("src");
+    latexPreview.dataset.state = "loading";
+    latexStatus.textContent = compile ? "Source saved. Compiling PDF..." : "Loading PDF preview...";
+    if (!canUseNativeRuntime()) {
+        latexPreview.dataset.state = "unavailable";
+        latexStatus.textContent = "PDF compilation and file previews require the desktop app and a TeX compiler.";
         return;
     }
-
-    if (context.activeFilePath === latexPreviewSourcePath && !saveJustFinished) {
-        return;
-    }
-
-    void loadLatexPdfPreview(context.activeFilePath);
-}
-
-function deactivateLatexPdfPreview(_context: DocumentPreviewContext): void {
-    const { latexPreview: preview, latexFrame: frame, latexStatus: status } = readEditorDom();
-
-    latexPreviewRequestId += 1;
-    latexPreviewSourcePath = null;
-    wasSavingDocumentForLatexPreview = false;
-    setLatexPreviewActive(false);
-    preview.dataset.state = "hidden";
-    frame.removeAttribute("src");
-    status.textContent = "";
-}
-
-async function loadLatexPdfPreview(sourcePath: string): Promise<void> {
-    const requestId = latexPreviewRequestId + 1;
-    const { latexPreview: preview, latexFrame: frame, latexStatus: status } = readEditorDom();
-
-    latexPreviewRequestId = requestId;
-    latexPreviewSourcePath = sourcePath;
-    setLatexPreviewActive(true);
-    preview.dataset.state = "loading";
-    frame.removeAttribute("src");
-    status.textContent = "Preparing PDF preview...";
-
     try {
-        const pdfPreview = await readSiblingPdfPreview(sourcePath);
-        if (requestId !== latexPreviewRequestId) {
-            return;
+        const pdf = await readSiblingPdfPreview(path, compile);
+        if (id !== requestId) return;
+        latexFrame.src = `${pdf.dataUrl}#toolbar=0&navpanes=0&view=FitH`;
+        stale = pdf.stale ?? false;
+        feedback = pdf.stale === undefined ? "Preview freshness is unavailable from this backend." : "";
+        latexPreview.dataset.state = "ready";
+        updateFeedback();
+    } catch (error) {
+        if (id !== requestId) return;
+        feedback = `PDF ${compile ? "compilation failed" : "unavailable"}: ${error instanceof Error ? error.message : String(error)}. Check your TeX installation and source, then Save & Compile.`;
+        if (latexFrame.hasAttribute("src")) {
+            stale = true;
+            latexPreview.dataset.state = "ready";
+            updateFeedback();
+        } else {
+            latexPreview.dataset.state = "unavailable";
+            latexStatus.textContent = feedback;
         }
-
-        setLatexPreviewActive(true);
-        frame.src = `${pdfPreview.dataUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
-        preview.dataset.state = "ready";
-        status.textContent = "";
-    } catch {
-        if (requestId !== latexPreviewRequestId) {
-            return;
-        }
-
-        preview.dataset.state = "unavailable";
-        setLatexPreviewActive(false);
-        frame.removeAttribute("src");
-        status.textContent = "";
     }
 }
 
-function setLatexPreviewActive(isActive: boolean): void {
-    const { shell, surface } = readEditorDom();
-
-    if (isActive) {
-        surface.dataset.latexPreview = "active";
-        if (shell) {
-            shell.dataset.latexPreview = "active";
-        }
-        return;
-    }
-
-    delete surface.dataset.latexPreview;
-    if (shell) {
-        delete shell.dataset.latexPreview;
+// A clean document still needs an explicit retry after a compiler failure.
+export async function saveAndCompileLatex(): Promise<void> {
+    const before = requestId;
+    const session = documentState.sessionId;
+    const { saveCurrentDocument } = await import("../../documents/document-actions");
+    const saved = await saveCurrentDocument({ promptForPath: !documentState.activeFilePath });
+    if (saved && session === documentState.sessionId && requestId === before && documentState.activeFilePath) {
+        await load(documentState.activeFilePath, true);
     }
 }

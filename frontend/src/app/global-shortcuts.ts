@@ -29,6 +29,7 @@ type GlobalShortcutCommand =
     | "view:zoom-reset";
 
 export function handleGlobalKeydown(event: KeyboardEvent, options: GlobalShortcutOptions): void {
+    if (event.isComposing || event.defaultPrevented) return;
     syncLinkOpenIntentFromKeyboard(event);
 
     const command = readGlobalShortcutCommand(event);

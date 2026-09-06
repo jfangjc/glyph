@@ -69,6 +69,12 @@ function renderItem(
             ? (item.children ?? []).map((child) => renderItem(child, depth + 1, matchCache, state, options)).join("")
             : "";
     const expanded = item.isDir ? ` aria-expanded="${!isCollapsed}"` : "";
+    const extension = item.name.match(/\.([^.]+)$/)?.[1].toLowerCase() ?? "";
+    const fileType = item.isDir ? "Folder"
+        : ["md", "markdown", "mdown"].includes(extension) ? "Markdown"
+        : extension === "tex" ? "LaTeX"
+        : extension === "txt" ? "Text"
+        : extension ? extension.toUpperCase() : "File";
     state.rendered += 1;
 
     return `
@@ -77,6 +83,8 @@ function renderItem(
                 class="file-tree-row"
                 type="button"
                 role="treeitem"
+                aria-level="${depth + 1}"
+                title="${escapeHtml(item.path)}"
                 data-file-tree-path="${escapeHtml(item.path)}"
                 data-file-tree-dir="${item.isDir ? "true" : "false"}"
                 data-file-tree-selectable="true"
@@ -85,9 +93,11 @@ function renderItem(
                 ${options.selectedPath === item.path ? `data-selected="true"` : ""}
                 ${expanded}
             >
+                <span class="file-tree-chevron" aria-hidden="true"></span>
                 <span class="file-tree-name">${escapeHtml(item.name)}</span>
+                <span class="file-tree-type" title="${escapeHtml(fileType)}">${escapeHtml(fileType)}</span>
             </button>
-            ${children ? `<div role="group">${children}</div>` : ""}
+            ${children ? `<div class="file-tree-children" role="group" style="--file-tree-depth: ${depth}">${children}</div>` : ""}
         </div>
     `;
 }

@@ -1,3 +1,4 @@
+import { installWritingInterface } from "./writing-interface";
 import { handleGlobalKeydown } from "../app/global-shortcuts";
 import { getSuggestedFileName, syncDocumentWindowTitle } from "../app/window-title";
 import {
@@ -130,6 +131,7 @@ export function installEditorController(): void {
         canExecuteEditorCommand: inputController.canExecuteCommand,
         isEditorCommandActive: inputController.isCommandActive,
     });
+    installWritingInterface({ fileTree, inputController });
     document.addEventListener("selectionchange", () => appMenuController.syncMenuState());
 
     installEditorEventListeners(
@@ -159,7 +161,8 @@ export function installEditorController(): void {
             onEditorFocusOut: (event) => {
                 if (
                     (!(event.relatedTarget instanceof Node) || !dom.editor.contains(event.relatedTarget)) &&
-                    !inputController.containsExternalInteractionTarget(event.relatedTarget)
+                    !inputController.containsExternalInteractionTarget(event.relatedTarget) &&
+                    !(event.relatedTarget instanceof Element && event.relatedTarget.closest(".writing-panel, .writing-header"))
                 ) {
                     inputController.deactivate();
                 }

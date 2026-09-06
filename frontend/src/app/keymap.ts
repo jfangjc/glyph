@@ -38,7 +38,8 @@ export type AppMenuCommand =
     | "insert:rule"
     | "help:about";
 
-export type AppCommand = AppMenuCommand;
+export type ShellCommand = "ui:commands" | "ui:files" | "ui:outline" | "ui:focus";
+export type AppCommand = AppMenuCommand | ShellCommand;
 export type ShortcutScope = "global" | "editor" | "title" | "markdown" | "menu";
 export type ShortcutAvailability = "always" | "native-file-system";
 export type ModifierRequirement = boolean | "any";
@@ -67,6 +68,10 @@ type ShortcutMatchOptions = {
 };
 
 export const shortcutKeymap = [
+    { command: "ui:commands", scopes: ["global", "menu"], bindings: [{ key: "p", primary: true, shift: true }] },
+    { command: "ui:files", scopes: ["global", "menu"], bindings: [{ key: "o", primary: true }] },
+    { command: "ui:outline", scopes: ["global", "menu"], bindings: [{ key: "o", primary: true, shift: true }] },
+    { command: "ui:focus", scopes: ["global", "menu"], bindings: [{ key: "f", primary: true, shift: true }] },
     {
         command: "file:new",
         scopes: ["global", "menu"],
@@ -77,13 +82,13 @@ export const shortcutKeymap = [
         command: "file:open",
         scopes: ["global", "menu"],
         availability: "native-file-system",
-        bindings: [{ key: "o", primary: true }],
+        bindings: [],
     },
     {
         command: "file:open-directory",
         scopes: ["global", "menu"],
         availability: "native-file-system",
-        bindings: [{ key: "o", primary: true, shift: true }],
+        bindings: [],
     },
     {
         command: "file:save",
@@ -227,11 +232,11 @@ export function readShortcutCommand(
 }
 
 export function readShortcutLabel(
-    command: AppMenuCommand,
+    command: AppCommand,
     platform: ShortcutLabelPlatform = readShortcutLabelPlatform(),
 ): string | null {
     const definition = shortcutKeymap.find(
-        (candidate) => candidate.command === command && hasScope(candidate.scopes, "menu"),
+        (candidate) => candidate.command === command,
     );
     const binding = definition?.bindings[0];
     if (!binding) {

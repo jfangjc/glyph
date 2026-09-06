@@ -53,50 +53,15 @@ export function createCenteredFrame(options: CenteredFrameOptions): CenteredFram
     };
 
     const hide = (onHidden?: () => void): void => {
-        if (element.hidden || element.dataset.frameState === "closing") {
-            return;
-        }
-
-        element.dataset.frameState = "closing";
-        let hideTimer = 0;
-
-        const cleanup = (): void => {
-            element.removeEventListener("transitionend", handleTransitionEnd);
-            if (hideTimer) {
-                window.clearTimeout(hideTimer);
-                hideTimer = 0;
-            }
-            cancelPendingHide = null;
-        };
-
-        const finish = (): void => {
-            cleanup();
-            if (element.dataset.frameState !== "closing") {
-                return;
-            }
-            element.hidden = true;
-            delete element.dataset.frameState;
-            visibleFrames.delete(element);
-            syncCenteredFramePageState();
-            onHidden?.();
-            if (document.activeElement instanceof HTMLElement && element.contains(document.activeElement)) {
-                document.activeElement.blur();
-            }
-            if (focusBeforeOpen?.isConnected) {
-                focusBeforeOpen.focus({ preventScroll: true });
-            }
-            focusBeforeOpen = null;
-        };
-
-        const handleTransitionEnd = (event: TransitionEvent): void => {
-            if (event.target === element && event.propertyName === "transform") {
-                finish();
-            }
-        };
-
-        element.addEventListener("transitionend", handleTransitionEnd);
-        hideTimer = window.setTimeout(finish, 180);
-        cancelPendingHide = cleanup;
+        if (element.hidden) return;
+        const restore = element.contains(document.activeElement);
+        element.hidden = true;
+        delete element.dataset.frameState;
+        visibleFrames.delete(element);
+        syncCenteredFramePageState();
+        onHidden?.();
+        if (restore && focusBeforeOpen?.isConnected) focusBeforeOpen.focus({ preventScroll: true });
+        focusBeforeOpen = null;
     };
 
     return {

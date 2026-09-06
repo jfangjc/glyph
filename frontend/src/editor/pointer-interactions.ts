@@ -33,9 +33,6 @@ type PointerBlockTarget = {
     block: HTMLElement;
     offset: number;
     documentOffset?: number;
-    pointerElement?: Element;
-    clientX?: number;
-    clientY?: number;
     virtualEof?: boolean;
 };
 
@@ -419,34 +416,13 @@ function shouldLetBrowserHandlePointerTarget(target: Element): boolean {
 function findPointerTargetBlock(target: Element, clientX: number, clientY: number): PointerBlockTarget | null {
     const directBlock = findBlock(target);
     if (directBlock) {
-        const blockSource = readPointerBlockSourceTarget(directBlock, clientX, clientY);
-        const projectedSource = readPointerProjectedSourceTarget(directBlock, target, clientX, clientY);
-        return {
-            block: directBlock,
-            offset: getPointerCaretOffset(directBlock, clientX, clientY),
-            ...blockSource,
-            ...projectedSource,
-            pointerElement: target,
-            clientX,
-            clientY,
-        };
+        return resolvePointerBlockTarget(directBlock, target, clientX, clientY);
     }
 
     const pointTarget = document.elementFromPoint(clientX, clientY);
     const pointBlock = pointTarget instanceof Element ? findBlock(pointTarget) : null;
     if (pointBlock) {
-        const pointElement = pointTarget instanceof Element ? pointTarget : null;
-        const blockSource = readPointerBlockSourceTarget(pointBlock, clientX, clientY);
-        const projectedSource = readPointerProjectedSourceTarget(pointBlock, pointElement, clientX, clientY);
-        return {
-            block: pointBlock,
-            offset: getPointerCaretOffset(pointBlock, clientX, clientY),
-            ...blockSource,
-            ...projectedSource,
-            pointerElement: pointTarget instanceof Element ? pointTarget : undefined,
-            clientX,
-            clientY,
-        };
+        return resolvePointerBlockTarget(pointBlock, pointTarget, clientX, clientY);
     }
 
     const blocks = getEditorBlocks();
@@ -457,7 +433,13 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
     const firstBlock = blocks[0];
     const firstRect = firstBlock.getBoundingClientRect();
     if (clientY < firstRect.top) {
-        return { block: firstBlock, offset: 0 };
+        return resolvePointerBlockTarget(
+            firstBlock,
+            null,
+            clientX,
+            clampPointerYToBlock(firstBlock, clientY),
+            0,
+        );
     }
 
     let previousBlock = firstBlock;
@@ -466,36 +448,66 @@ function findPointerTargetBlock(target: Element, clientX: number, clientY: numbe
 
         if (clientY >= rect.top && clientY <= rect.bottom) {
             const pointElement = pointTarget instanceof Element ? pointTarget : null;
-            const blockSource = readPointerBlockSourceTarget(block, clientX, clientY);
-            const projectedSource = readPointerProjectedSourceTarget(block, pointElement, clientX, clientY);
-            return {
-                block,
-                offset: getPointerCaretOffset(block, clientX, clientY),
-                ...blockSource,
-                ...projectedSource,
-                clientX,
-                clientY,
-            };
+            return resolvePointerBlockTarget(block, pointElement, clientX, clientY);
         }
 
         if (clientY < rect.top) {
             const previousRect = previousBlock.getBoundingClientRect();
             const gapProgress = (clientY - previousRect.bottom) / Math.max(1, rect.top - previousRect.bottom);
             if (gapProgress > 0.55) {
-                return { block, offset: 0 };
+                return resolvePointerBlockTarget(
+                    block,
+                    null,
+                    clientX,
+                    clampPointerYToBlock(block, clientY),
+                    0,
+                );
             }
 
-            return { block: previousBlock, offset: getBlockText(previousBlock).length };
+            return resolvePointerBlockTarget(
+                previousBlock,
+                null,
+                clientX,
+                clampPointerYToBlock(previousBlock, clientY),
+                getBlockText(previousBlock).length,
+            );
         }
 
         previousBlock = block;
     }
 
     return {
-        block: previousBlock,
-        offset: getBlockText(previousBlock).length,
+        ...resolvePointerBlockTarget(
+            previousBlock,
+            null,
+            clientX,
+            clampPointerYToBlock(previousBlock, clientY),
+            getBlockText(previousBlock).length,
+        ),
         virtualEof: true,
     };
+}
+
+function resolvePointerBlockTarget(
+    block: HTMLElement,
+    pointerElement: Element | null,
+    clientX: number,
+    clientY: number,
+    offset = getPointerCaretOffset(block, clientX, clientY),
+): PointerBlockTarget {
+    return {
+        block,
+        offset,
+        ...readPointerBlockSourceTarget(block, clientX, clientY),
+        ...readPointerProjectedSourceTarget(block, pointerElement, clientX, clientY),
+    };
+}
+
+function clampPointerYToBlock(block: HTMLElement, clientY: number): number {
+    const rect = getBlockContent(block).getBoundingClientRect();
+    return rect.height > 2
+        ? clamp(clientY, rect.top + 1, rect.bottom - 1)
+        : rect.top + rect.height / 2;
 }
 
 function extendPointerSelection(event: MouseEvent): void {
@@ -654,16 +666,12 @@ function isPointInInactiveBlockSourceBand(
         return false;
     }
 
-    const blockRect = block.getBoundingClientRect();
     const content = getBlockContent(block);
     const contentRect = content.getBoundingClientRect();
-    const computedLineHeight = Number.parseFloat(window.getComputedStyle(content).lineHeight);
-    const markerLineHeight = Number.isFinite(computedLineHeight) ? Math.max(24, computedLineHeight) : 24;
-    const markerLineBottom = Math.min(blockRect.bottom, contentRect.top + markerLineHeight);
     return (
         clientX < contentRect.left &&
         clientY >= contentRect.top - 2 &&
-        clientY <= markerLineBottom + 2
+        clientY <= contentRect.bottom + 2
     );
 }
 
@@ -773,9 +781,9 @@ function isPointInPrefixLineStartBand(
     const contentRect = getBlockContent(block).getBoundingClientRect();
     const leftBoundary = Number.NEGATIVE_INFINITY;
     const rightBoundary = Math.max(contentRect.left, sourceRect.right + 4);
-    const verticalSlop = 0.5;
-    const topBoundary = Math.max(Math.min(contentRect.top, sourceRect.top), sourceRect.top - verticalSlop);
-    const bottomBoundary = Math.min(Math.max(contentRect.bottom, sourceRect.bottom), sourceRect.bottom + verticalSlop);
+    const verticalSlop = 2;
+    const topBoundary = Math.min(contentRect.top, sourceRect.top) - verticalSlop;
+    const bottomBoundary = Math.max(contentRect.bottom, sourceRect.bottom) + verticalSlop;
 
     return (
         clientX >= leftBoundary &&

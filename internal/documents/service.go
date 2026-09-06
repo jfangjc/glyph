@@ -10,8 +10,8 @@ func (*Service) SaveDocument(path string, content string) error {
 	return saveDocument(path, content)
 }
 
-func (*Service) ReadSiblingPdfPreview(sourcePath string) (*PdfPreviewFile, error) {
-	return readSiblingPdfPreview(sourcePath)
+func (*Service) ReadSiblingPdfPreview(sourcePath string, forceCompile bool) (*PdfPreviewFile, error) {
+	return readSiblingPdfPreview(sourcePath, forceCompile)
 }
 
 func (*Service) CreateUntitledMarkdownDocument(baseFilePath string) (*DocumentFile, error) {

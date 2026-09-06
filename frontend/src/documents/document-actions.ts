@@ -286,6 +286,7 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
         }
 
         saved = !documentState.hasUnsavedChanges;
+        window.dispatchEvent(new Event("glyph:document-saved"));
     } catch (error) {
         documentState.hasUnsavedChanges = true;
         console.error("Failed to save file:", error);

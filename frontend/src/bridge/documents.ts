@@ -23,7 +23,7 @@ export async function chooseDocumentToOpen(): Promise<string | null> {
         AllowsMultipleSelection: false,
         AllowsOtherFiletypes: true,
         Filters: textFileFilters,
-    });
+    }).catch(ignoreDialogCancellation);
 
     if (Array.isArray(selection)) {
         return selection[0] ?? null;
@@ -40,7 +40,7 @@ export async function chooseDirectoryToOpen(): Promise<string | null> {
         CanChooseDirectories: true,
         AllowsMultipleSelection: false,
         AllowsOtherFiletypes: true,
-    });
+    }).catch(ignoreDialogCancellation);
 
     if (Array.isArray(selection)) {
         return selection[0] ?? null;
@@ -57,9 +57,16 @@ export async function chooseDocumentToSave(filename: string): Promise<string | n
         CanCreateDirectories: true,
         AllowsOtherFiletypes: true,
         Filters: textFileFilters,
-    });
+    }).catch(ignoreDialogCancellation);
 
     return selection || null;
+}
+
+// Wails may reject a cancelled native dialog instead of returning an empty path.
+function ignoreDialogCancellation(error: unknown): null {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/\bcancel(?:led|ed) by user\b/i.test(message)) return null;
+    throw error;
 }
 
 export async function chooseUnsavedDocumentDecision(): Promise<UnsavedDocumentDecision> {
@@ -182,10 +189,11 @@ export function saveDocument(path: string, content: string): Promise<void> {
     return Call.ByName("glyph/internal/documents.Service.SaveDocument", path, content) as Promise<void>;
 }
 
-export function readSiblingPdfPreview(sourcePath: string): Promise<PdfPreviewFile> {
+export function readSiblingPdfPreview(sourcePath: string, forceCompile = false): Promise<PdfPreviewFile> {
     return Call.ByName(
         "glyph/internal/documents.Service.ReadSiblingPdfPreview",
         sourcePath,
+        forceCompile,
     ) as Promise<PdfPreviewFile>;
 }
 

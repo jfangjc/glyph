@@ -10,6 +10,7 @@ type OutlineEntry = {
 
 let outline: HTMLElement | null = null;
 let list: HTMLUListElement | null = null;
+let panelList: HTMLUListElement | null = null;
 let scrollContainer: HTMLElement | null = null;
 let outlineSyncPending = false;
 let pendingActiveOutlineFrame = 0;
@@ -31,8 +32,24 @@ export function installDocumentOutline(container: HTMLElement): void {
     scheduleOutlineSync();
 }
 
+/** A second view of the same headings; the side browser stays mounted. */
+export function createDocumentOutlinePanel(): HTMLElement {
+    const panel = document.createElement("nav");
+    panel.className = "document-outline outline-panel";
+    panel.setAttribute("aria-label", "Outline headings");
+    panelList = document.createElement("ul");
+    panelList.className = "document-outline-list";
+    panel.append(panelList);
+    syncOutlineEntryElements(readOutlineEntries(), panelList);
+    applyActiveOutlineId();
+    return panel;
+}
+
 export function syncDocumentOutlineToBlock(block: HTMLElement | null): void {
-    setActiveOutlineId(block?.dataset.blockId ?? null, { scrollActiveItem: false });
+    const blocks = getEditorState().blocks.blocks;
+    const index = blocks.findIndex(entry => entry.id === block?.dataset.blockId);
+    const heading = blocks.slice(0, index + 1).reverse().find(entry => entry.type.startsWith("heading-"));
+    setActiveOutlineId(heading?.id ?? null, { scrollActiveItem: false });
 }
 
 export function refreshDocumentOutline(): void {
@@ -59,6 +76,7 @@ function syncDocumentOutline(): void {
     const entries = readOutlineEntries();
     outline.hidden = entries.length === 0;
     syncOutlineEntryElements(entries);
+    if (panelList) syncOutlineEntryElements(entries, panelList);
 
     if (activeId && entries.some((entry) => entry.id === activeId)) {
         applyActiveOutlineId();
@@ -113,6 +131,7 @@ function renderOutlineEntry(entry: OutlineEntry): HTMLLIElement {
                 annotations: { userEvent: "programmatic", addToHistory: false },
             });
             syncDomSelectionFromState({ focus: "editor" });
+            window.dispatchEvent(new Event("glyph:navigation-selected"));
         }
     });
 
@@ -129,14 +148,14 @@ function renderOutlineEntry(entry: OutlineEntry): HTMLLIElement {
     return item;
 }
 
-function syncOutlineEntryElements(entries: OutlineEntry[]): void {
-    if (!list) {
+function syncOutlineEntryElements(entries: OutlineEntry[], target = list): void {
+    if (!target) {
         return;
     }
 
-    const existingItems = Array.from(list.children);
+    const existingItems = Array.from(target.children);
     if (!canUpdateOutlineEntriesInPlace(existingItems, entries)) {
-        list.replaceChildren(...entries.map(renderOutlineEntry));
+        target.replaceChildren(...entries.map(renderOutlineEntry));
         return;
     }
 
@@ -237,11 +256,11 @@ function applyActiveOutlineId(): HTMLElement | null {
     }
 
     let activeItem: HTMLElement | null = null;
-    for (const item of Array.from(list.children)) {
+    for (const item of [...Array.from(list.children), ...Array.from(panelList?.children ?? [])]) {
         if (item instanceof HTMLElement) {
             const isActive = item.dataset.outlineId === activeId;
             item.dataset.active = isActive ? "true" : "false";
-            if (isActive) {
+            if (isActive && item.parentElement === list) {
                 activeItem = item;
             }
             const button = item.querySelector<HTMLButtonElement>(".document-outline-button");

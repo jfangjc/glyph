@@ -1,32 +1,17 @@
 .document-outline {
     position: fixed;
     z-index: 20;
-    top: 112px;
-    right: auto;
-    left: calc(50% + 464px);
-    width: 184px;
-    max-height: calc(100vh - 144px);
-    padding: 9px 7px;
+    top: 44%;
+    right: 36px;
+    width: 112px;
+    max-height: 268px;
+    padding: 8px 0;
     overflow-x: hidden;
     overflow-y: auto;
-    border: 1px solid var(--glyph-border);
-    border-radius: 12px;
-    background: #ffffff;
-    box-shadow: 0 5px 18px rgb(31 34 40 / 5%);
-    color: var(--glyph-text-muted);
+    color: #777b80;
     pointer-events: auto;
     scrollbar-width: none;
-    transform: none;
-    transition:
-        width 180ms cubic-bezier(0.16, 1, 0.3, 1),
-        background-color 150ms ease,
-        box-shadow 150ms ease;
-}
-
-.document-outline:hover,
-.document-outline:focus-within {
-    background: #ffffff;
-    box-shadow: var(--glyph-glass-shadow-compact);
+    transform: translateY(-50%);
 }
 
 .document-outline::-webkit-scrollbar {
@@ -40,7 +25,7 @@
 
 .document-outline-list {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -52,13 +37,12 @@
 
 .document-outline-button {
     display: grid;
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: 26px minmax(0, 1fr);
     align-items: center;
     width: 100%;
-    min-height: 24px;
-    padding: 0 3px;
+    min-height: 18px;
+    padding: 0;
     border: 0;
-    border-radius: 7px;
     background: transparent;
     color: inherit;
     cursor: pointer;
@@ -67,11 +51,10 @@
 }
 
 .document-outline-marker {
-    width: 18px;
+    width: 20px;
     height: 4px;
     border-radius: 999px;
-    background: rgb(77 83 91 / 20%);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%);
+    background: #dedfe0;
     transition:
         background-color 180ms ease,
         width 180ms ease;
@@ -80,17 +63,14 @@
 .document-outline-text {
     min-width: 0;
     overflow: hidden;
-    opacity: 1;
-    color: var(--glyph-text-muted);
+    opacity: 0;
+    color: #6f7377;
     font-size: 0.78rem;
     font-weight: 700;
     line-height: 1.25;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transform: none;
-    transition:
-        opacity 140ms ease,
-        transform 170ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity 220ms ease;
 }
 
 .document-outline-item[data-level="2"] .document-outline-marker {
@@ -101,57 +81,37 @@
     font-weight: 400;
 }
 
-.document-outline-item[data-level="3"] .document-outline-marker { width: 9px; }
-.document-outline-item[data-level="4"] .document-outline-marker { width: 7px; }
-.document-outline-item[data-level="5"] .document-outline-marker { width: 5px; }
-.document-outline-item[data-level="6"] .document-outline-marker { width: 4px; }
-
-.document-outline-item[data-level="3"] .document-outline-text,
-.document-outline-item[data-level="4"] .document-outline-text,
-.document-outline-item[data-level="5"] .document-outline-text,
-.document-outline-item[data-level="6"] .document-outline-text {
-    font-weight: 400;
-}
-
 .document-outline-item[data-active="true"] .document-outline-marker {
-    background: var(--glyph-accent);
-    box-shadow:
-        0 0 0 1px rgb(255 255 255 / 72%),
-        0 2px 7px rgb(8 121 232 / 26%);
+    background: #73787c;
 }
 
-.document-outline:hover .document-outline-text,
-.document-outline:focus-within .document-outline-text {
+.document-outline:hover .document-outline-text {
     opacity: 1;
-    transform: translateX(0);
-    transition-delay: 25ms;
 }
 
 .document-outline-button:hover .document-outline-marker,
 .document-outline-button:focus-visible .document-outline-marker {
-    background: #656b73;
+    background: #5f6368;
 }
 
 .document-outline-button:hover .document-outline-text,
 .document-outline-button:focus-visible .document-outline-text {
-    color: var(--glyph-text);
+    color: #202124;
 }
 
-.document-outline-button:hover,
-.document-outline-button:focus-visible {
-    background: var(--glyph-control-hover);
-    outline: 0;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .document-outline,
-    .document-outline-text {
-        transition-duration: 0.01ms;
-    }
-}
-
-@media (max-width: 1319px) {
+@media (max-width: 1060px) {
     .document-outline {
         display: none;
     }
+}
+
+/* Keyboard users get the same labels as hover users. */
+.document-outline:focus-within .document-outline-text { opacity: 1; }
+.document-outline-item[data-level="3"] .document-outline-marker { width: 9px; }
+.document-outline-item[data-level="4"] .document-outline-marker { width: 7px; }
+.document-outline-item[data-level="5"] .document-outline-marker { width: 5px; }
+.document-outline-item[data-level="6"] .document-outline-marker { width: 4px; }
+.writing-focus .editor-shell > .document-outline { display: none; }
+@media (prefers-reduced-motion: reduce) {
+    .document-outline-text, .document-outline-marker { transition: none; }
 }

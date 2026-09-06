@@ -8,10 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
-func readSiblingPdfPreview(sourcePath string) (*PdfPreviewFile, error) {
+func readSiblingPdfPreview(sourcePath string, forceCompile bool) (*PdfPreviewFile, error) {
 	resolvedSourcePath, err := resolveFilePath(sourcePath)
 	if err != nil {
 		return nil, err
@@ -19,14 +20,23 @@ func readSiblingPdfPreview(sourcePath string) (*PdfPreviewFile, error) {
 
 	sourceExtension := filepath.Ext(resolvedSourcePath)
 	pdfPath := strings.TrimSuffix(resolvedSourcePath, sourceExtension) + ".pdf"
+	if forceCompile {
+		if err := compileTexToPdf(resolvedSourcePath); err != nil {
+			return nil, err
+		}
+	}
 	content, err := readOrCompilePdfPreview(resolvedSourcePath, pdfPath)
 	if err != nil {
 		return nil, err
 	}
 
+	sourceInfo, sourceErr := os.Stat(resolvedSourcePath)
+	pdfInfo, pdfErr := os.Stat(pdfPath)
+	stale := sourceErr == nil && pdfErr == nil && pdfInfo.ModTime().Before(sourceInfo.ModTime())
 	const mimeType = "application/pdf"
 	return &PdfPreviewFile{
 		Path:     pdfPath,
+		Stale:    stale,
 		MimeType: mimeType,
 		DataURL:  "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
 	}, nil
@@ -49,7 +59,13 @@ func readOrCompilePdfPreview(sourcePath string, pdfPath string) ([]byte, error) 
 	return os.ReadFile(pdfPath)
 }
 
+// TeX writes auxiliary files beside the source. Serialize requests so autosaves
+// cannot launch competing compilers against the same output files.
+var texCompileMu sync.Mutex
+
 func compileTexToPdf(sourcePath string) error {
+	texCompileMu.Lock()
+	defer texCompileMu.Unlock()
 	command, args, err := resolveTexCompileCommand(sourcePath)
 	if err != nil {
 		return err
