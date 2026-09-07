@@ -1,5 +1,6 @@
 import { applyTransactionToDoc, mapSelection, normalizeSelection } from "./transaction";
 import type {
+    BlockIndex,
     BlockIndexBuilder,
     EditorSnapshot,
     EditorState,
@@ -29,7 +30,7 @@ const typingBatchDelayMs = 1200;
 let editorState = freezeEditorState({
     doc: "",
     selection: { anchor: 0, head: 0 },
-    blocks: { blocks: [] },
+    blocks: freezeBlockIndex({ blocks: [] }),
     revision: 0,
 });
 let blockIndexBuilder: BlockIndexBuilder = () => ({ blocks: [] });
@@ -194,11 +195,11 @@ function applyDispatch(transaction: Transaction): void {
     const nextSelection = normalizeSelection(applied.selection, applied.doc.length);
     const blockIndexStartedAt = readPerformanceNow();
     const blocks = nextDocChanged || blockIndexInvalidated
-        ? blockIndexBuilder(applied.doc, {
+        ? freezeBlockIndex(blockIndexBuilder(applied.doc, {
             previousDoc: previous.doc,
             previous: previous.blocks,
             changes: applied.changes,
-        })
+        }))
         : previous.blocks;
     blockIndexInvalidated = false;
     measureEditorPerformance("glyph:block-index", blockIndexStartedAt);
@@ -401,13 +402,14 @@ function createSnapshot(state: EditorState): EditorSnapshot {
     };
 }
 
-function freezeEditorState(state: EditorState): EditorState {
-    const blocks = state.blocks.blocks.map((block) => Object.freeze({ ...block })) as unknown as typeof state.blocks.blocks;
-    const blockIndex = Object.freeze({ blocks: Object.freeze(blocks) as unknown as typeof state.blocks.blocks });
+function freezeBlockIndex(index: BlockIndex): BlockIndex {
+    const blocks = index.blocks.map((block) => Object.freeze({ ...block }));
+    return Object.freeze({ blocks: Object.freeze(blocks) as unknown as BlockIndex["blocks"] });
+}
 
+function freezeEditorState(state: EditorState): EditorState {
     return Object.freeze({
         ...state,
         selection: Object.freeze({ ...state.selection }),
-        blocks: blockIndex,
     });
 }

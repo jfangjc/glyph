@@ -76,11 +76,10 @@ async function load(path: string, compile = false): Promise<void> {
 }
 
 // A clean document still needs an explicit retry after a compiler failure.
-export async function saveAndCompileLatex(): Promise<void> {
+export async function saveAndCompileLatex(saveDocument: () => Promise<boolean>): Promise<void> {
     const before = requestId;
     const session = documentState.sessionId;
-    const { saveCurrentDocument } = await import("../../documents/document-actions");
-    const saved = await saveCurrentDocument({ promptForPath: !documentState.activeFilePath });
+    const saved = await saveDocument();
     if (saved && session === documentState.sessionId && requestId === before && documentState.activeFilePath) {
         await load(documentState.activeFilePath, true);
     }

@@ -38,12 +38,15 @@ import {
     beginDocumentSession,
     documentState,
     notifyDocumentStateChanged,
+    recordSavedDocumentContent,
     type DocumentEditingMode,
 } from "./document-state";
 import { fileNameFromPath } from "../utils/text";
 
 let sourceStateIntegrationInstalled = false;
 let sourceViewFormat: DocumentFormat | null = null;
+let initializingEditor = false;
+let formatUiSignature = "";
 
 export function getActiveDocumentFormat(): DocumentFormat {
     return getDocumentFormatById(documentState.activeFormatId);
@@ -67,29 +70,19 @@ export function toggleMarkdownEditingMode(): void {
     const selection = getEditorState().selection;
 
     documentState.editingMode = mode;
-    const format = getActiveEditorFormat();
-    configureBlockIndexBuilder(format.index.build);
-    configureProjectionCapability(format.projection);
-    replaceDocumentState(source, selection);
-    const state = getEditorState();
-    const blocks = readParsedBlocksFromSourceState(state);
-    loadDocumentRenderContext(format, blocks, format.render.readReferences?.(blocks) ?? {});
-    syncBlockViewContext();
-    syncDocumentProjectionFromState(state);
-    syncDocumentReferences(format, documentState.activeFilePath);
-    applyDocumentRenderContext(format);
-    syncDocumentFooter(format);
-    syncDocumentFormatUi();
+    initializeDocumentEditor(source, selection);
     notifyDocumentStateChanged();
 
+    const session = documentState.sessionId;
     window.requestAnimationFrame(() => {
+        if (session !== documentState.sessionId || documentState.editingMode !== mode) return;
         shell.scrollTop = scrollTop;
         editor.focus({ preventScroll: true });
         syncDomSelectionFromState({ focus: "editor" });
     });
 }
 
-export function installSourceStateDocumentIntegration(): void {
+export function installSourceStateDocumentIntegration(onContentChanged: () => void): void {
     if (sourceStateIntegrationInstalled) {
         return;
     }
@@ -99,10 +92,11 @@ export function installSourceStateDocumentIntegration(): void {
     configureBlockIndexBuilder(initialFormat.index.build);
     configureProjectionCapability(initialFormat.projection);
     subscribeEditorState((next, previous, transaction) => {
-        if (next.doc !== previous.doc) {
+        if (!initializingEditor && next.doc !== previous.doc) {
             invalidateMarkdownImageCache();
             syncDocumentProjectionFromState(next, previous, transaction);
             pruneUnreferencedPendingImages();
+            onContentChanged();
             syncEditorDirtyState();
         }
     });
@@ -124,21 +118,10 @@ export function loadDocument(documentFile: DocumentFile): void {
     sourceViewFormat = null;
     resetPendingImagesForSession();
     delete editor.dataset.virtualEofCaret;
-    syncDocumentFormatUi();
-    const editorFormat = getActiveEditorFormat();
-    syncBlockViewContext();
     title.value = titleFromFileName(fileName);
-    configureBlockIndexBuilder(editorFormat.index.build);
-    configureProjectionCapability(editorFormat.projection);
-    replaceDocumentState(decoded.source);
-    const parsedBlocks = readParsedBlocksFromSourceState(getEditorState());
-    loadDocumentRenderContext(editorFormat, parsedBlocks, editorFormat.render.readReferences?.(parsedBlocks) ?? {});
-    syncDocumentProjectionFromState(getEditorState());
-    syncDocumentReferences(editorFormat, documentState.activeFilePath);
-    applyDocumentRenderContext(editorFormat);
-    syncDocumentFooter(editorFormat);
+    initializeDocumentEditor(decoded.source);
     clearSourceHistory();
-    documentState.lastSavedContent = serializeDocument();
+    recordSavedDocumentContent(serializeDocument());
     documentState.hasUnsavedChanges = false;
     notifyDocumentStateChanged();
     syncDocumentWindowTitle();
@@ -159,7 +142,7 @@ export function commitSavedDocument(path: string, savedContent: string): void {
     documentState.fileName = fileNameFromPath(path);
     documentState.committedFileName = documentState.fileName;
     documentState.fileNameDirty = false;
-    documentState.lastSavedContent = savedContent;
+    recordSavedDocumentContent(savedContent);
     readEditorDom().title.value = titleFromFileName(documentState.fileName);
 
     if (formatChanged) {
@@ -167,16 +150,7 @@ export function commitSavedDocument(path: string, savedContent: string): void {
             documentState.editingMode = "live-preview";
         }
         sourceViewFormat = null;
-        const editorFormat = getActiveEditorFormat();
-        configureBlockIndexBuilder(editorFormat.index.build);
-        configureProjectionCapability(editorFormat.projection);
-        syncDocumentFormatUi();
-        syncBlockViewContext();
-        replaceDocumentState(getDocumentSource(), getEditorState().selection);
-        const blocks = readParsedBlocksFromSourceState(getEditorState());
-        loadDocumentRenderContext(editorFormat, blocks, editorFormat.render.readReferences?.(blocks) ?? {});
-        syncDocumentProjectionFromState(getEditorState());
-        syncDocumentReferences(editorFormat, path);
+        initializeDocumentEditor(getDocumentSource(), getEditorState().selection);
     } else {
         syncBlockViewContext();
     }
@@ -187,10 +161,28 @@ export function commitSavedDocument(path: string, savedContent: string): void {
 
 export function syncEditorDirtyState(): void {
     documentState.hasUnsavedChanges =
-        serializeDocument() !== documentState.lastSavedContent ||
+        getDocumentSource() !== documentState.lastSavedSource ||
         documentState.fileNameDirty;
     notifyDocumentStateChanged();
     syncDocumentWindowTitle();
+}
+
+function initializeDocumentEditor(source: string, selection?: ReturnType<typeof getEditorState>["selection"]): void {
+    const format = getActiveEditorFormat();
+    configureBlockIndexBuilder(format.index.build);
+    configureProjectionCapability(format.projection);
+    // Replacement still dispatches to store consumers. This session owns its
+    // projection explicitly, including identical-source format/mode changes.
+    initializingEditor = true;
+    try {
+        replaceDocumentState(source, selection);
+    } finally {
+        initializingEditor = false;
+    }
+    invalidateMarkdownImageCache();
+    syncDocumentProjectionFromState(getEditorState());
+    syncDocumentReferences(format, documentState.activeFilePath);
+    syncDocumentFormatUi();
 }
 
 export function syncBlockViewContext(): void {
@@ -201,23 +193,27 @@ export function syncDocumentFormatUi(): void {
     const { shell, surface, title, extension, markdownModeToggle } = readEditorDom();
     const format = getActiveDocumentFormat();
 
-    title.hidden = false;
-    title.readOnly = !format.descriptor.editableTitle;
-    title.setAttribute("aria-readonly", String(title.readOnly));
     const activeExtension = extensionFromPath(documentState.fileName) || format.descriptor.defaultExtension;
-    extension.textContent = `.${activeExtension}`;
-    extension.setAttribute("aria-label", `${activeExtension} file extension`);
-    surface.dataset.documentFormat = format.descriptor.id;
-    shell.dataset.documentFormat = format.descriptor.id;
-    surface.dataset.editingMode = documentState.editingMode;
-    shell.dataset.editingMode = documentState.editingMode;
-    const canToggleMarkdownMode = format.descriptor.id === "markdown";
-    markdownModeToggle.hidden = !canToggleMarkdownMode;
-    markdownModeToggle.textContent = isMarkdownSourceMode() ? "Source" : "Live Preview";
-    markdownModeToggle.setAttribute("aria-pressed", String(isMarkdownSourceMode()));
-    markdownModeToggle.title = isMarkdownSourceMode()
-        ? "Switch to Markdown Live Preview"
-        : "Switch to Markdown source mode";
+    const signature = JSON.stringify([format.descriptor.id, format.descriptor.editableTitle, activeExtension, documentState.editingMode]);
+    if (signature !== formatUiSignature) {
+        formatUiSignature = signature;
+        title.hidden = false;
+        title.readOnly = !format.descriptor.editableTitle;
+        title.setAttribute("aria-readonly", String(title.readOnly));
+        extension.textContent = `.${activeExtension}`;
+        extension.setAttribute("aria-label", `${activeExtension} file extension`);
+        surface.dataset.documentFormat = format.descriptor.id;
+        shell.dataset.documentFormat = format.descriptor.id;
+        surface.dataset.editingMode = documentState.editingMode;
+        shell.dataset.editingMode = documentState.editingMode;
+        const canToggleMarkdownMode = format.descriptor.id === "markdown";
+        markdownModeToggle.hidden = !canToggleMarkdownMode;
+        markdownModeToggle.textContent = isMarkdownSourceMode() ? "Source" : "Live Preview";
+        markdownModeToggle.setAttribute("aria-pressed", String(isMarkdownSourceMode()));
+        markdownModeToggle.title = isMarkdownSourceMode()
+            ? "Switch to Markdown Live Preview"
+            : "Switch to Markdown source mode";
+    }
 
     syncDocumentPreview(format, {
         activeFilePath: documentState.activeFilePath,
@@ -240,10 +236,10 @@ function syncDocumentProjectionFromState(
         ? loadDocumentRenderContext(format, blocks, format.render.readReferences?.(blocks) ?? {})
         : false;
     measureEditorPerformance("glyph:render-context", renderContextStartedAt);
-    if (renderContextChanged) {
+    if (renderContextChanged || !previous) {
         syncRenderBlockViewContext(format, documentState.activeFilePath);
     }
-    replaceEditorBlocksFromSourceState(state, previous);
+    replaceEditorBlocksFromSourceState(state, previous, renderContextChanged);
     syncInlineTypingSourceReveal(state, transaction);
     if (renderContextChanged) {
         applyDocumentRenderContext(format);

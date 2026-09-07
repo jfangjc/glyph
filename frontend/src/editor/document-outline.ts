@@ -15,6 +15,7 @@ let scrollContainer: HTMLElement | null = null;
 let outlineSyncPending = false;
 let pendingActiveOutlineFrame = 0;
 let activeId: string | null = null;
+let renderedEntries: OutlineEntry[] = [];
 
 export function installDocumentOutline(container: HTMLElement): void {
     scrollContainer = container;
@@ -74,12 +75,19 @@ function syncDocumentOutline(): void {
     }
 
     const entries = readOutlineEntries();
-    outline.hidden = entries.length === 0;
-    syncOutlineEntryElements(entries);
-    if (panelList) syncOutlineEntryElements(entries, panelList);
+    const changed = entries.length !== renderedEntries.length || entries.some((entry, index) => {
+        const previous = renderedEntries[index];
+        return entry.id !== previous.id || entry.level !== previous.level || entry.text !== previous.text;
+    });
+    if (outline.hidden !== (entries.length === 0)) outline.hidden = entries.length === 0;
+    if (changed) {
+        renderedEntries = entries;
+        syncOutlineEntryElements(entries);
+        if (panelList) syncOutlineEntryElements(entries, panelList);
+    }
 
     if (activeId && entries.some((entry) => entry.id === activeId)) {
-        applyActiveOutlineId();
+        if (changed) applyActiveOutlineId();
         return;
     }
 

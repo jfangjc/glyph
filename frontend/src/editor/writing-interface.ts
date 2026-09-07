@@ -4,7 +4,8 @@ import { commands } from "../app/commands";
 import { readShortcutCommand, readShortcutLabel, type AppMenuCommand } from "../app/keymap";
 import { appMenuCommandEvent } from "../platform/window-controls/window-controls";
 import { documentState, documentStateChangedEvent } from "../documents/document-state";
-import { canUseDesktopFileSystem } from "../documents/document-actions";
+import { canUseDesktopFileSystem, saveCurrentDocument } from "../documents/document-actions";
+import { saveAndCompileLatex } from "../formats/latex/preview";
 import { getActiveDocumentFormat, isMarkdownSourceMode, toggleMarkdownEditingMode } from "../documents/document-session";
 import type { FileTreeController } from "../documents/file-tree";
 import type { createEditorInputController } from "./controllers/editor-input-controller";
@@ -115,7 +116,7 @@ export function installWritingInterface(options: Options): void {
         }));
         for (const mode of ["Live Preview", "Source"]) result.push({ id: `markdown:${mode}`, label: `Markdown: ${mode}`, group: "View", enabled: markdown, active: markdown && isMarkdownSourceMode() === (mode === "Source"), run: () => { if (isMarkdownSourceMode() !== (mode === "Source")) toggleMarkdownEditingMode(); } });
         for (const mode of ["source", "split", "pdf"]) result.push({ id: `latex:${mode}`, label: `LaTeX: ${mode.toUpperCase() === "PDF" ? "PDF" : mode[0].toUpperCase() + mode.slice(1)}`, group: "View", enabled: latex && (mode !== "split" || window.innerWidth > 700), active: latex && latexView === mode, run: () => { latexView = mode; sync(); if (mode === "pdf") document.getElementById("latex-preview")?.focus(); } });
-        result.push({ id: "latex:compile", label: "Save & Compile", group: "File", enabled: latex && native && !documentState.isSavingDocument, run: () => { void import("../formats/latex/preview").then(module => module.saveAndCompileLatex()); } });
+        result.push({ id: "latex:compile", label: "Save & Compile", group: "File", enabled: latex && native && !documentState.isSavingDocument, run: () => { void saveAndCompileLatex(() => saveCurrentDocument({ promptForPath: !documentState.activeFilePath })); } });
         result.push({ id: "ui:focus", label: focusMode ? "Exit Focus mode" : "Focus mode", group: "View", shortcut: readShortcutLabel("ui:focus"), enabled: true, active: focusMode, run: toggleFocus });
         result.push({ id: "ui:files", label: "Navigate Files", group: "Navigate", shortcut: readShortcutLabel("ui:files"), enabled: true, run: () => open("files") });
         result.push({ id: "ui:outline", label: "Navigate Outline", group: "Navigate", shortcut: readShortcutLabel("ui:outline"), enabled: true, run: () => open("outline") });

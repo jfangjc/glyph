@@ -66,15 +66,15 @@ export function applySourceBlockProjectionMetadata(
     block: SourceBlock,
     documentSource: string,
 ): void {
-    blockElement.dataset.blockId = block.id;
-    blockElement.dataset.sourceFrom = String(block.sourceFrom);
-    blockElement.dataset.sourceTo = String(block.sourceTo);
-    blockElement.dataset.contentFrom = String(block.contentFrom);
-    blockElement.dataset.contentTo = String(block.contentTo);
+    setProjectionData(blockElement, "blockId", block.id);
+    setProjectionData(blockElement, "sourceFrom", String(block.sourceFrom));
+    setProjectionData(blockElement, "sourceTo", String(block.sourceTo));
+    setProjectionData(blockElement, "contentFrom", String(block.contentFrom));
+    setProjectionData(blockElement, "contentTo", String(block.contentTo));
 
     const content = getBlockContent(blockElement);
-    content.dataset.sourceFrom = String(block.contentFrom);
-    content.dataset.sourceTo = String(block.contentTo);
+    setProjectionData(content, "sourceFrom", String(block.contentFrom));
+    setProjectionData(content, "sourceTo", String(block.contentTo));
 
     if (block.type === "code") {
         const prefix = getBlockSourceElement(content, "prefix");
@@ -110,6 +110,10 @@ export function applySourceBlockProjectionMetadata(
     applyPrefixSourceElementRange(prefix, block.sourceFrom, block.contentFrom);
     applySourceElementRange(suffix, block.sourceTo, "end");
     applySourceElementRange(getBlockSourceElement(content, "atomic"), block.sourceFrom);
+}
+
+function setProjectionData(element: HTMLElement, key: string, value: string): void {
+    if (element.dataset[key] !== value) element.dataset[key] = value;
 }
 
 export function sourceOffsetToDomPoint(offset: number, options: SourceOffsetToDomPointOptions = {}): DomPoint {
@@ -788,9 +792,9 @@ function applySourceElementRange(
     const sourceFrom = boundary === "start" ? boundaryOffset : boundaryOffset - textLength;
     const sourceTo = boundary === "start" ? boundaryOffset + textLength : boundaryOffset;
 
-    source.dataset.sourceFrom = String(sourceFrom);
-    source.dataset.sourceTo = String(sourceTo);
-    delete source.dataset.sourceHiddenPrefixLength;
+    setProjectionData(source, "sourceFrom", String(sourceFrom));
+    setProjectionData(source, "sourceTo", String(sourceTo));
+    if (source.dataset.sourceHiddenPrefixLength !== undefined) delete source.dataset.sourceHiddenPrefixLength;
 }
 
 function applyPrefixSourceElementRange(source: HTMLElement | null, sourceFrom: number, sourceTo: number): void {
@@ -801,12 +805,12 @@ function applyPrefixSourceElementRange(source: HTMLElement | null, sourceFrom: n
     const textLength = source.textContent?.length ?? 0;
     const hiddenPrefixLength = Math.max(0, sourceTo - sourceFrom - textLength);
 
-    source.dataset.sourceFrom = String(sourceFrom);
-    source.dataset.sourceTo = String(sourceTo);
+    setProjectionData(source, "sourceFrom", String(sourceFrom));
+    setProjectionData(source, "sourceTo", String(sourceTo));
     if (hiddenPrefixLength > 0) {
-        source.dataset.sourceHiddenPrefixLength = String(hiddenPrefixLength);
+        setProjectionData(source, "sourceHiddenPrefixLength", String(hiddenPrefixLength));
     } else {
-        delete source.dataset.sourceHiddenPrefixLength;
+        if (source.dataset.sourceHiddenPrefixLength !== undefined) delete source.dataset.sourceHiddenPrefixLength;
     }
 }
 

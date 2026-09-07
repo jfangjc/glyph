@@ -1,4 +1,5 @@
 import { Window } from "@wailsio/runtime";
+import { commands } from "../../app/commands";
 import { applyZoomShortcut } from "../../app/zoom";
 import { canUseWindowPrintRuntime } from "../../platform/runtime";
 import type { AppMenuCommandDetail } from "../../platform/window-controls/window-controls";
@@ -31,7 +32,7 @@ export function createAppMenuController(options: AppMenuControllerOptions) {
     };
 
     function handleAppMenuCommand(event: CustomEvent<AppMenuCommandDetail>): void {
-        const editorCommand = readEditorCommand(event.detail.command);
+        const editorCommand = commands.find(command => command.id === event.detail.command)?.editor;
         if (editorCommand) {
             void options.executeEditorCommand(editorCommand, event.detail.focusOwner).finally(syncMenuState);
             return;
@@ -157,7 +158,7 @@ export function createAppMenuController(options: AppMenuControllerOptions) {
             return;
         }
 
-        exportButton.disabled = !options.canExport();
+        setDisabled(exportButton, !options.canExport());
         const editorCommands: Array<[string, EditorCommand]> = [
             ["edit:undo", "undo"],
             ["edit:redo", "redo"],
@@ -168,23 +169,23 @@ export function createAppMenuController(options: AppMenuControllerOptions) {
         ];
         for (const [menuCommand, editorCommand] of editorCommands) {
             const button = document.querySelector<HTMLButtonElement>(`[data-app-command="${menuCommand}"]`);
-            if (button) button.disabled = !options.canExecuteEditorCommand(editorCommand);
+            if (button) setDisabled(button, !options.canExecuteEditorCommand(editorCommand));
         }
 
         const sourceModeButton = document.querySelector<HTMLButtonElement>(
             '[data-app-command="view:toggle-markdown-source"]',
         );
         if (sourceModeButton) {
-            sourceModeButton.disabled = !options.canToggleMarkdownEditingMode();
-            sourceModeButton.setAttribute("aria-checked", String(options.isMarkdownSourceMode()));
+            setDisabled(sourceModeButton, !options.canToggleMarkdownEditingMode());
+            setChecked(sourceModeButton, options.isMarkdownSourceMode());
         }
 
         for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>("[data-editor-command]"))) {
             const command = button.dataset.editorCommand as EditorCommand | undefined;
             if (!command) continue;
-            button.disabled = !options.canExecuteEditorCommand(command);
+            setDisabled(button, !options.canExecuteEditorCommand(command));
             if (button.getAttribute("role") === "menuitemcheckbox" || button.getAttribute("role") === "menuitemradio") {
-                button.setAttribute("aria-checked", String(options.isEditorCommandActive(command)));
+                setChecked(button, options.isEditorCommandActive(command));
             }
         }
     }
@@ -224,21 +225,6 @@ function waitForPreviewImages(root: HTMLElement): Promise<void> {
     return Promise.race([settled, timeout]);
 }
 
-function readEditorCommand(command: AppMenuCommandDetail["command"]): EditorCommand | null {
-    if (command === "format:bold") return "bold";
-    if (command === "format:italic") return "italic";
-    if (command === "format:strike") return "strike";
-    if (command === "format:inline-code") return "inline-code";
-    if (command === "format:link") return "link";
-    if (command.startsWith("format:block:")) {
-        return `block:${command.slice("format:block:".length)}` as EditorCommand;
-    }
-    if (command.startsWith("insert:")) {
-        return command as EditorCommand;
-    }
-    return null;
-}
-
 function showAboutDialog(): void {
     let dialog = document.getElementById("about-glyph-dialog") as HTMLDialogElement | null;
     if (!dialog) {
@@ -263,4 +249,13 @@ function showAboutDialog(): void {
 
 function assertUnhandledMenuCommand(command: never): never {
     throw new Error(`Unhandled app menu command: ${command}`);
+}
+
+function setDisabled(button: HTMLButtonElement, disabled: boolean): void {
+    if (button.disabled !== disabled) button.disabled = disabled;
+}
+
+function setChecked(button: HTMLButtonElement, checked: boolean): void {
+    const value = String(checked);
+    if (button.getAttribute("aria-checked") !== value) button.setAttribute("aria-checked", value);
 }

@@ -37,6 +37,7 @@ let documentReferences: DocumentReferenceMap = {};
 let documentRenderContext: DocumentRenderContext = { references: documentReferences };
 let documentReferencesSnapshot = "{}";
 let referenceRerenderRequestId = 0;
+let footerHtml: string | undefined;
 
 export function loadDocumentRenderContext(
     format: DocumentFormat,
@@ -85,23 +86,32 @@ export function applyDocumentRenderContext(format: DocumentFormat): void {
 export function syncDocumentFooter(format: DocumentFormat): void {
     const { footer } = readEditorDom();
     const html = format.render.renderDocumentFooter?.(documentRenderContext) ?? "";
-    footer.hidden = html === "";
-    footer.innerHTML = html;
+    if (footer.hidden !== (html === "")) footer.hidden = html === "";
+    if (footerHtml !== html) {
+        footer.innerHTML = html;
+        footerHtml = html;
+    }
 }
 
-export function replaceEditorBlocksFromSourceState(state: EditorState, previous?: EditorState): void {
+export function replaceEditorBlocksFromSourceState(state: EditorState, previous?: EditorState, renderContextChanged = false): void {
     const { editor } = readEditorDom();
     const currentBlocks = getEditorBlocks();
     const currentById = new Map(currentBlocks.map((block) => [block.dataset.blockId, block]));
     const previousById = new Map(previous?.blocks.blocks.map((block) => [block.id, block]) ?? []);
     const nextBlocks = state.blocks.blocks.map((sourceBlock) => {
-        const block = readParsedBlockFromSourceState(state, sourceBlock);
         const current = currentById.get(sourceBlock.id);
         const previousBlock = previousById.get(sourceBlock.id);
         const sourceChanged = !previous || !previousBlock || !sourceBlocksEquivalent(state, sourceBlock, previous, previousBlock);
-        const element = current && readBlockType(current.dataset.type) === block.type
-            ? sourceChanged && projectedBlockNeedsUpdate(current, block) ? updateProjectedBlock(current, block) : current
-            : createBlock(block.type, block.text, block);
+        let element = current;
+        if (!element || readBlockType(element.dataset.type) !== sourceBlock.type) {
+            const block = readParsedBlockFromSourceState(state, sourceBlock);
+            element = createBlock(block.type, block.text, block);
+        } else if (sourceChanged || renderContextChanged) {
+            const block = readParsedBlockFromSourceState(state, sourceBlock);
+            if (!previous || renderContextChanged || projectedBlockNeedsUpdate(element, block)) {
+                element = updateProjectedBlock(element, block);
+            }
+        }
         // IDs are intentionally reused across reparses, including for visually
         // identical empty blocks. Their absolute source ranges can still move,
         // so projection metadata must never be treated as render-cache data.
@@ -182,6 +192,10 @@ function codeSourceStructureMatches(element: HTMLElement, block: ParsedBlock): b
 }
 
 function reconcileEditorBlocks(editor: HTMLElement, currentBlocks: HTMLElement[], nextBlocks: HTMLElement[]): void {
+    if (editor.children.length === nextBlocks.length && currentBlocks.length === nextBlocks.length &&
+        currentBlocks.every((block, index) => block === nextBlocks[index])) {
+        return;
+    }
     const nextSet = new Set(nextBlocks);
     for (const block of currentBlocks) {
         if (!nextSet.has(block)) {

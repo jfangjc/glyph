@@ -20,7 +20,7 @@ import { reportEditorError } from "../editor/editor-status";
 import { getElement } from "../utils/dom";
 import { fileNameFromPath } from "../utils/text";
 import { canUseNativeRuntime } from "../platform/runtime";
-import { documentState, notifyDocumentStateChanged } from "./document-state";
+import { documentState, notifyDocumentStateChanged, recordSavedDocumentContent } from "./document-state";
 import { notifyDirectoryTreeChanged } from "./file-tree";
 import {
     forgetLastOpenDocumentPath,
@@ -54,7 +54,7 @@ let pendingWindowCloseConfirmation = false;
 
 export function bindDocumentActions(nextHost: DocumentActionHost): void {
     host = nextHost;
-    documentState.lastSavedContent = nextHost.serializeDocument();
+    recordSavedDocumentContent(nextHost.serializeDocument());
     notifyDocumentStateChanged();
 }
 

@@ -14,8 +14,9 @@ export function buildBlockIndex(doc: string, options?: BlockIndexBuildContext): 
     const unchangedIds = options
         ? reserveUnchangedBlockIds(previousBlocks, parsedBlocks, options.previousDoc, doc)
         : new Map<number, string>();
+    const readReusableId = createReusableBlockIdReader(previousBlocks);
     const blocks = parsedBlocks.map((block, index): SourceBlock => {
-        const id = unchangedIds.get(index) ?? readReusableBlockId(previousBlocks, block);
+        const id = unchangedIds.get(index) ?? readReusableId(block);
 
         return {
             ...block,
@@ -27,7 +28,7 @@ export function buildBlockIndex(doc: string, options?: BlockIndexBuildContext): 
     if (doc.endsWith("\n")) {
         const lastLine = blocks[blocks.length - 1]?.lineTo ?? -1;
         blocks.push({
-            id: readReusableBlockId(previousBlocks, {
+            id: readReusableId({
                 type: "paragraph",
                 sourceFrom: doc.length,
                 sourceTo: doc.length,
@@ -46,30 +47,54 @@ export function buildBlockIndex(doc: string, options?: BlockIndexBuildContext): 
     return { blocks };
 }
 
+type MappedBlock = SourceBlock & { mappedFrom: number; mappedTo: number; used: boolean };
+type CandidateGroup = { position: number; blocks: MappedBlock[]; cursor: number };
+type SourceCandidates = { groups: CandidateGroup[]; right: number; left: CandidateGroup[] };
+
 function reserveUnchangedBlockIds(
-    previousBlocks: Array<SourceBlock & { mappedFrom: number; mappedTo: number; used: boolean }>,
+    previousBlocks: MappedBlock[],
     nextBlocks: Array<Omit<SourceBlock, "id" | "text">>,
     previousDoc: string,
     doc: string,
 ): Map<number, string> {
+    const byType = new Map<SourceBlock["type"], Map<string, SourceCandidates>>();
+    for (const block of previousBlocks) {
+        let bySource = byType.get(block.type);
+        if (!bySource) byType.set(block.type, bySource = new Map());
+        const source = previousDoc.slice(block.sourceFrom, block.sourceTo);
+        let bucket = bySource.get(source);
+        if (!bucket) bySource.set(source, bucket = { groups: [], right: 0, left: [] });
+        let group = bucket.groups[bucket.groups.length - 1];
+        if (!group || group.position !== block.mappedFrom) {
+            group = { position: block.mappedFrom, blocks: [], cursor: 0 };
+            bucket.groups.push(group);
+        }
+        group.blocks.push(block);
+    }
+
     const ids = new Map<number, string>();
+    // Parser ranges and mapped previous ranges are ordered. Each group crosses
+    // the sweep once; duplicates at one position are consumed in original order.
     for (let index = 0; index < nextBlocks.length; index += 1) {
         const block = nextBlocks[index];
-        const source = doc.slice(block.sourceFrom, block.sourceTo);
-        const candidate = previousBlocks
-            .filter((previous) => (
-                !previous.used &&
-                previous.type === block.type &&
-                previousDoc.slice(previous.sourceFrom, previous.sourceTo) === source
-            ))
-            .sort((left, right) => (
-                Math.abs(left.mappedFrom - block.sourceFrom) - Math.abs(right.mappedFrom - block.sourceFrom)
-            ))[0];
-        if (!candidate) {
-            continue;
+        const bucket = byType.get(block.type)?.get(doc.slice(block.sourceFrom, block.sourceTo));
+        if (!bucket) continue;
+        while (bucket.right < bucket.groups.length && bucket.groups[bucket.right].position <= block.sourceFrom) {
+            const group = bucket.groups[bucket.right++];
+            if (group.cursor < group.blocks.length) bucket.left.push(group);
         }
+        const left = bucket.left[bucket.left.length - 1];
+        const right = bucket.groups[bucket.right];
+        const group = left && (!right || block.sourceFrom - left.position <= right.position - block.sourceFrom)
+            ? left : right;
+        if (!group) continue;
+        const candidate = group.blocks[group.cursor++];
         candidate.used = true;
         ids.set(index, candidate.id);
+        if (group.cursor === group.blocks.length) {
+            if (group === left) bucket.left.pop();
+            else bucket.right += 1;
+        }
     }
     return ids;
 }
@@ -161,27 +186,85 @@ function stripMappedBlock(
     return sourceBlock;
 }
 
-function readReusableBlockId(
-    previousBlocks: Array<SourceBlock & { mappedFrom: number; mappedTo: number; used: boolean }>,
-    block: Pick<SourceBlock, "type" | "sourceFrom" | "sourceTo">,
-): string {
-    const exact = previousBlocks.find((candidate) => (
-        !candidate.used &&
-        candidate.type === block.type &&
-        candidate.mappedFrom === block.sourceFrom &&
-        candidate.mappedTo === block.sourceTo
-    ));
-    const overlapping = exact ?? previousBlocks.find((candidate) => (
-        !candidate.used &&
-        candidate.type === block.type &&
-        rangesOverlap(candidate.mappedFrom, candidate.mappedTo, block.sourceFrom, block.sourceTo)
-    ));
-    if (!overlapping) {
-        return createBlockId();
+// Skip consumed candidates with path compression. Binary searches locate the
+// first eligible range without rescanning earlier used entries on each query.
+class AvailableBlocks {
+    private readonly next: number[];
+
+    constructor(readonly blocks: MappedBlock[]) {
+        this.next = blocks.map((_, index) => index);
     }
 
-    overlapping.used = true;
-    return overlapping.id;
+    first(index: number): MappedBlock | undefined {
+        let cursor = index;
+        while (cursor < this.blocks.length && this.blocks[cursor].used) {
+            if (this.next[cursor] === cursor) this.next[cursor] = cursor + 1;
+            cursor = this.next[cursor];
+        }
+        while (index < cursor) {
+            const next = this.next[index];
+            this.next[index] = cursor;
+            index = next;
+        }
+        return this.blocks[cursor];
+    }
+
+    lowerBound(predicate: (block: MappedBlock) => boolean): MappedBlock | undefined {
+        let low = 0;
+        let high = this.blocks.length;
+        while (low < high) {
+            const middle = (low + high) >>> 1;
+            if (predicate(this.blocks[middle])) high = middle;
+            else low = middle + 1;
+        }
+        return this.first(low);
+    }
+}
+
+function createReusableBlockIdReader(previousBlocks: MappedBlock[]) {
+    const exact = new Map<string, MappedBlock[]>();
+    const types = new Map<SourceBlock["type"], MappedBlock[]>();
+    const order = new Map<MappedBlock, number>();
+    for (const [index, block] of previousBlocks.entries()) {
+        if (block.used) continue;
+        order.set(block, index);
+        const key = `${block.type}:${block.mappedFrom}:${block.mappedTo}`;
+        let matching = exact.get(key);
+        if (!matching) exact.set(key, matching = []);
+        matching.push(block);
+        let typed = types.get(block.type);
+        if (!typed) types.set(block.type, typed = []);
+        typed.push(block);
+    }
+    const exactCandidates = new Map(Array.from(exact, ([key, blocks]) => [key, new AvailableBlocks(blocks)]));
+    const byType = new Map(Array.from(types, ([type, blocks]) => [type, {
+        all: new AvailableBlocks(blocks),
+        nonempty: new AvailableBlocks(blocks.filter(block => block.mappedFrom !== block.mappedTo)),
+        empty: new AvailableBlocks(blocks.filter(block => block.mappedFrom === block.mappedTo)),
+    }]));
+
+    return (block: Pick<SourceBlock, "type" | "sourceFrom" | "sourceTo">): string => {
+        let candidate = exactCandidates.get(`${block.type}:${block.sourceFrom}:${block.sourceTo}`)?.first(0);
+        const typed = byType.get(block.type);
+        if (!candidate && typed) {
+            if (block.sourceFrom === block.sourceTo) {
+                const sameStart = typed.all.lowerBound(previous => previous.mappedFrom >= block.sourceFrom);
+                if (sameStart?.mappedFrom === block.sourceFrom) candidate = sameStart;
+            } else {
+                // Nonempty ranges have monotonically ordered ends as well as
+                // starts. Empty blocks overlap only at the same start offset.
+                const overlap = typed.nonempty.lowerBound(previous => previous.mappedTo > block.sourceFrom);
+                if (overlap && overlap.mappedFrom < block.sourceTo) candidate = overlap;
+                const empty = typed.empty.lowerBound(previous => previous.mappedFrom >= block.sourceFrom);
+                if (empty?.mappedFrom === block.sourceFrom && (!candidate || order.get(empty)! < order.get(candidate)!)) {
+                    candidate = empty;
+                }
+            }
+        }
+        if (!candidate) return createBlockId();
+        candidate.used = true;
+        return candidate.id;
+    };
 }
 
 function mapPreviousBlocks(
@@ -208,13 +291,6 @@ function mapRangeBoundary(offset: number, changes: Change[], edge: "start" | "en
         delta += change.insert.length - (change.to - change.from);
     }
     return offset + delta;
-}
-
-function rangesOverlap(leftFrom: number, leftTo: number, rightFrom: number, rightTo: number): boolean {
-    if (leftFrom === leftTo || rightFrom === rightTo) {
-        return leftFrom === rightFrom;
-    }
-    return leftFrom < rightTo && rightFrom < leftTo;
 }
 
 function createBlockId(): string {

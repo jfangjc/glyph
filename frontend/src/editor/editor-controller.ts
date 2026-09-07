@@ -30,6 +30,7 @@ import {
     toggleMarkdownEditingMode,
 } from "../documents/document-session";
 import { installFileTree } from "../documents/file-tree";
+import { syncDocumentPreview } from "../documents/document-preview";
 import {
     appMenuCommandEvent,
 } from "../platform/window-controls/window-controls";
@@ -134,6 +135,14 @@ export function installEditorController(): void {
     installWritingInterface({ fileTree, inputController });
     document.addEventListener("selectionchange", () => appMenuController.syncMenuState());
 
+    let previousSession = -1;
+    let previousFormat = "";
+    let previousMode = "";
+    let previousPath: string | null | undefined;
+    let previousFileName = "";
+    let previousSaving: boolean | undefined;
+    let previousDirty: boolean | undefined;
+
     installEditorEventListeners(
         { surface: dom.surface, editor: dom.editor, title: dom.title },
         {
@@ -193,13 +202,32 @@ export function installEditorController(): void {
                 inputController.deactivate();
             },
             onDocumentStateChanged: () => {
-                selectionController.refresh();
-                refreshDocumentOutline();
-                syncDocumentFormatUi();
-                syncBlockViewContext();
+                const reinitialized = previousSession !== documentState.sessionId ||
+                    previousFormat !== documentState.activeFormatId || previousMode !== documentState.editingMode;
+                const pathChanged = previousPath !== documentState.activeFilePath;
+                const dirtyChanged = previousDirty !== documentState.hasUnsavedChanges;
+                const formatUiChanged = reinitialized || pathChanged || previousFileName !== documentState.fileName ||
+                    previousSaving !== documentState.isSavingDocument;
+                previousSession = documentState.sessionId;
+                previousFormat = documentState.activeFormatId;
+                previousMode = documentState.editingMode;
+                previousPath = documentState.activeFilePath;
+                previousFileName = documentState.fileName;
+                previousSaving = documentState.isSavingDocument;
+                previousDirty = documentState.hasUnsavedChanges;
+                if (reinitialized) {
+                    selectionController.refresh();
+                    refreshDocumentOutline();
+                    findReplaceController.refresh();
+                }
+                if (formatUiChanged) syncDocumentFormatUi();
+                else if (dirtyChanged) syncDocumentPreview(getActiveDocumentFormat(), {
+                    activeFilePath: documentState.activeFilePath,
+                    isSavingDocument: documentState.isSavingDocument,
+                });
+                if (reinitialized || pathChanged) syncBlockViewContext();
                 syncDocumentWindowTitle();
                 appMenuController.syncMenuState();
-                findReplaceController.refresh();
             },
         },
         documentStateChangedEvent,
@@ -214,7 +242,11 @@ export function installEditorController(): void {
         onBlockActivated: syncActiveBlockIndicator,
         getProjectionCapability: () => getActiveDocumentFormat().projection,
     });
-    installSourceStateDocumentIntegration();
+    installSourceStateDocumentIntegration(() => {
+        refreshDocumentOutline();
+        findReplaceController.refresh();
+        appMenuController.syncMenuState();
+    });
     if (documentState.sessionId === 0) {
         loadDocument({
             path: "",

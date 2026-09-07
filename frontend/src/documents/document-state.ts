@@ -15,6 +15,7 @@ type DocumentState = {
     isSavingDocument: boolean;
     saveAgainAfterCurrent: boolean;
     lastSavedContent: string;
+    lastSavedSource: string;
 };
 
 export const documentStateChangedEvent = "glyph:document-state-changed";
@@ -34,7 +35,18 @@ export const documentState: DocumentState = {
     isSavingDocument: false,
     saveAgainAfterCurrent: false,
     lastSavedContent: "",
+    lastSavedSource: "",
 };
+
+export function recordSavedDocumentContent(content: string): void {
+    documentState.lastSavedContent = content;
+    const source = documentState.hasUtf8Bom ? content.slice(1) : content;
+    documentState.lastSavedSource = documentState.lineEnding === "\r\n"
+        ? source.replace(/\r\n/g, "\n")
+        : source;
+}
+
+let notifiedMetadata: unknown[] = [];
 
 export function beginDocumentSession(options: {
     path: string | null;
@@ -56,5 +68,12 @@ export function beginDocumentSession(options: {
 }
 
 export function notifyDocumentStateChanged(): void {
+    // Saved bytes/source belong to content comparison, not UI metadata.
+    const { lastSavedContent, lastSavedSource, ...metadata } = documentState;
+    const values = Object.values(metadata);
+    if (values.every((value, index) => value === notifiedMetadata[index])) {
+        return;
+    }
+    notifiedMetadata = values;
     window.dispatchEvent(new CustomEvent(documentStateChangedEvent));
 }

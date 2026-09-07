@@ -5,6 +5,8 @@ import { getElement } from "../utils/dom";
 import { fileNameFromPath } from "../utils/text";
 import { getDocumentFormatById } from "../formats/registry";
 
+let nativeTitle: string | undefined;
+
 export function syncDocumentWindowTitle(): void {
     const fileName = documentState.fileName || (
         documentState.activeFilePath ? fileNameFromPath(documentState.activeFilePath) : getSuggestedFileName()
@@ -12,10 +14,14 @@ export function syncDocumentWindowTitle(): void {
     const dirty = documentState.hasUnsavedChanges ? " •" : "";
     const title = `${fileName}${dirty} — Glyph`;
 
-    document.title = title;
+    if (document.title !== title) document.title = title;
 
-    if (canUseDesktopFileSystem()) {
-        void Window.SetTitle(title).catch((error) => console.error("Failed to update window title:", error));
+    if (canUseDesktopFileSystem() && nativeTitle !== title) {
+        nativeTitle = title;
+        void Window.SetTitle(title).catch((error) => {
+            if (nativeTitle === title) nativeTitle = undefined;
+            console.error("Failed to update window title:", error);
+        });
     }
 }
 
