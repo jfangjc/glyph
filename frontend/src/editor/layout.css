@@ -1,4 +1,5 @@
 .editor-shell {
+    position: relative;
     background: var(--glyph-surface);
     height: 100vh;
     width: 100vw;
@@ -312,9 +313,7 @@ body.app-titlebar-host .document-surface {
     .latex-preview,
     .find-replace-panel,
     .find-highlight-layer,
-    .document-outline,
-    .centered-frame,
-    .file-tree-frame {
+    .document-outline {
         display: none !important;
     }
 

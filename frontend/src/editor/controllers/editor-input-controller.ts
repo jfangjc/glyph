@@ -1,31 +1,34 @@
+import type { EditorCommand } from "../../app/commands";
 import { documentState } from "../../documents/document-state";
-import { Clipboard } from "@wailsio/runtime";
 import {
-    isSupportedPastedImage,
+    extensionForImageMimeType,
+    hasMeaningfulNonImageClipboardHtml,
+    readClipboardImages,
+    readNativePlainClipboard,
+    readNativeRichClipboard,
+    writeNativeClipboard,
+} from "../../bridge/clipboard";
+import {
     persistImageFiles,
     pruneUnreferencedPendingImages,
     stagePendingImages,
 } from "../../formats/markdown/pending-images";
 import {
     createPendingInlineFormatInsertTransaction,
-    createTableTabTransaction,
 } from "../../formats/markdown/commands";
-import {
-    readMarkdownTableColumnCount,
-    readMarkdownTableCellRange,
-} from "../../formats/markdown/table";
+import { createTableCellController } from "./table-cell-controller";
 import {
     matchesShortcutCommand,
     readInlineFormatShortcut,
 } from "../../app/keymap";
 import type {
     BlockFormatCommand,
+    InsertContentCommand,
     ClipboardPayload,
     ClipboardReadResult,
     ClipboardSelectionContext,
     DocumentFormat,
     InlineFormatCommand,
-    InsertContentCommand,
 } from "../../formats/types";
 import {
     findSourceBlockAtOffset,
@@ -35,11 +38,13 @@ import {
 import {
     findBlock,
     getEditorBlocks,
+    invalidateBlockRenderCache,
 } from "../blocks/view";
 import {
     createDeleteTransaction,
     createInsertTextTransaction,
     createPasteTransaction,
+    createIndentSourceTransaction,
 } from "../core/commands";
 import {
     createSelectionBookmark,
@@ -48,6 +53,8 @@ import {
     dispatch,
     flushSourceHistoryBatch,
     getEditorState,
+    getDocumentRevision,
+    subscribeEditorState,
     redoSourceHistory,
     undoSourceHistory,
 } from "../core/store";
@@ -57,13 +64,16 @@ import {
     clearInlineTypingSourceReveal,
     domPointToSourceOffset,
     moveSourceSelectionVertically,
+    readVisualLineBoundary,
     selectionTouchesSource,
     resetVerticalNavigationAffinity,
     readSourceTokenDocumentRange,
     syncDomSelectionFromState,
     syncStateSelectionFromDom,
+    setCompositionSurface,
 } from "../core/projection";
 import { reportEditorError } from "../editor-status";
+import { replaceEditorBlocksFromSourceState } from "../../documents/document-render-context";
 import { handleEditorMouseDown as handleEditorMouseDownCommand } from "../pointer-interactions";
 import { getCaretPositionFromPoint } from "../selection/caret";
 import {
@@ -75,47 +85,12 @@ import {
     previousWordBoundary,
 } from "../../utils/text-boundaries";
 
-const supportedPastedImageMimeTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
-const maxRichClipboardHtmlLength = 5 * 1024 * 1024;
-
-type ActiveTableCellEditor = {
-    input: HTMLInputElement;
-    cell: HTMLTableCellElement;
-    blockId: string;
-    row: number;
-    column: number;
-    from: number;
-    to: number;
-    finishing: boolean;
-};
-
-type TableCellAddress = {
-    tableIndex: number;
-    row: number;
-    column: number;
-};
-
 type ActiveInlineObjectSelection = {
     token: HTMLElement;
     toolbar: HTMLElement;
     from: number;
     to: number;
 };
-
-export type EditorCommand =
-    | "undo"
-    | "redo"
-    | "select-all"
-    | "bold"
-    | "italic"
-    | "strike"
-    | "inline-code"
-    | "link"
-    | `block:${BlockFormatCommand}`
-    | `insert:${InsertContentCommand}`
-    | "copy"
-    | "cut"
-    | "paste";
 
 type EditorInputControllerOptions = {
     syncActiveBlockIndicator: (block: HTMLElement | null) => void;
@@ -128,6 +103,7 @@ export function createEditorInputController(options: EditorInputControllerOption
     let isComposingText = false;
     let preCompositionSourceSelection = getEditorState().selection;
     let compositionLease: { sessionId: number; revision: number } | null = null;
+    let compositionTargetCaptured = false;
     let clipboardOperationId = 0;
     let internalDrag: {
         sessionId: number;
@@ -136,11 +112,15 @@ export function createEditorInputController(options: EditorInputControllerOption
         to: number;
         source: string;
     } | null = null;
-    let activeTableCellEditor: ActiveTableCellEditor | null = null;
-    let scheduledTableCellTimer: number | null = null;
+    const tableCellController = createTableCellController();
     let activeInlineObject: ActiveInlineObjectSelection | null = null;
     const pendingInlineFormats = new Set<Exclude<InlineFormatCommand, "link">>();
     let pendingInlineFormatOffset: number | null = null;
+    subscribeEditorState(() => {
+        if (compositionLease && (compositionLease.sessionId !== documentState.sessionId || compositionLease.revision !== getDocumentRevision())) {
+            cancelComposition();
+        }
+    });
 
     return {
         deactivate,
@@ -255,7 +235,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             const bookmark = createSelectionBookmark();
             try {
                 const result = supportsRichSourceEditing()
-                    ? await readNativeRichClipboard()
+                    ? await readNativeRichClipboard(html => options.getActiveDocumentFormat().clipboard?.convertHtml?.(html) ?? html)
                     : { kind: "plain", value: await readNativePlainClipboard() } as ClipboardReadResult;
                 const selection = bookmark.read();
                 if ("warning" in result && result.warning) {
@@ -365,95 +345,16 @@ export function createEditorInputController(options: EditorInputControllerOption
         input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: value }));
     }
 
-    async function writeNativeClipboard(
-        payload: ClipboardPayload,
-        includeMarkdown: boolean,
-    ): Promise<void> {
-        if (navigator.clipboard?.write && typeof ClipboardItem === "function") {
-            try {
-                const clipboardData: Record<string, Blob> = {
-                    "text/plain": new Blob([payload.plainText], { type: "text/plain" }),
-                    "text/html": new Blob([payload.html], { type: "text/html" }),
-                };
-                if (includeMarkdown && (typeof ClipboardItem.supports !== "function" || ClipboardItem.supports("text/markdown"))) {
-                    clipboardData["text/markdown"] = new Blob([payload.markdown], { type: "text/markdown" });
-                }
-                await navigator.clipboard.write([new ClipboardItem(clipboardData)]);
-                return;
-            } catch {
-                // Wails clipboard is the permission-safe desktop fallback.
-            }
-        }
-        await Clipboard.SetText(payload.markdown);
-    }
-
-    async function readNativeRichClipboard(): Promise<ClipboardReadResult> {
-        if (navigator.clipboard?.read) {
-            try {
-                const items = await navigator.clipboard.read();
-                const item = items[0];
-                if (item) {
-                    const imageTypes = item.types.filter((type) => supportedPastedImageMimeTypes.has(type.toLowerCase()));
-                    const hasMarkdown = item.types.includes("text/markdown");
-                    const html = imageTypes.length > 0 && item.types.includes("text/html")
-                        ? await (await item.getType("text/html")).text()
-                        : "";
-                    if (
-                        imageTypes.length > 0 &&
-                        !hasMarkdown &&
-                        (!html || !hasMeaningfulNonImageClipboardHtml(html))
-                    ) {
-                        const files = await Promise.all(imageTypes.map(async (type, index) => {
-                            const blob = await item.getType(type);
-                            return new File([blob], `clipboard-image-${index + 1}.${extensionForImageMimeType(type)}`, { type });
-                        }));
-                        return { kind: "images", files };
-                    }
-                }
-                for (const type of ["text/markdown", "text/html", "text/plain"] as const) {
-                    if (!item?.types.includes(type)) continue;
-                    const value = await (await item.getType(type)).text();
-                    if (type === "text/html" && value.length > maxRichClipboardHtmlLength) {
-                        return {
-                            kind: "plain",
-                            value: new DOMParser().parseFromString(value, "text/html").body.textContent?.replace(/\r\n?/g, "\n") ?? "",
-                            warning: "Rich clipboard content exceeded 5 MB and was pasted as plain text.",
-                        };
-                    }
-                    return {
-                        kind: type === "text/markdown" ? "markdown" : type === "text/html" ? "html" : "plain",
-                        value: type === "text/html"
-                            ? options.getActiveDocumentFormat().clipboard?.convertHtml?.(value) ?? value
-                            : value.replace(/\r\n?/g, "\n"),
-                    };
-                }
-            } catch {
-                // Wails clipboard is the permission-safe desktop fallback.
-            }
-        }
-        return { kind: "plain", value: (await Clipboard.Text()).replace(/\r\n?/g, "\n") };
-    }
-
-    async function readNativePlainClipboard(): Promise<string> {
-        if (navigator.clipboard?.readText) {
-            try {
-                return (await navigator.clipboard.readText()).replace(/\r\n?/g, "\n");
-            } catch {
-                // Wails clipboard is the permission-safe desktop fallback.
-            }
-        }
-        return (await Clipboard.Text()).replace(/\r\n?/g, "\n");
-    }
-
     function escapeClipboardText(value: string): string {
         return `<pre>${value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>`;
     }
 
     function deactivate(): void {
-        cancelScheduledTableCellEditor();
+        cancelComposition();
+        tableCellController.cancelScheduled();
         clearPendingInlineFormats();
         clearInlineObjectSelection();
-        finishTableCellEditor(true);
+        tableCellController.finish(true);
         flushSourceHistoryBatch();
         resetVerticalNavigationAffinity();
         clearSourceReveal();
@@ -462,7 +363,7 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function containsExternalInteractionTarget(target: EventTarget | null): boolean {
         return target instanceof Node && Boolean(
-            activeTableCellEditor?.input.contains(target) ||
+            tableCellController.contains(target) ||
             activeInlineObject?.toolbar.contains(target)
         );
     }
@@ -486,16 +387,16 @@ export function createEditorInputController(options: EditorInputControllerOption
             event.stopPropagation();
             if (event.detail > 1) {
                 const block = findBlock(tableCell);
-                finishTableCellEditor(true);
+                tableCellController.finish(true);
                 if (block) {
                     editBlockObjectSource(block, true);
                 }
                 return;
             }
-            if (activeTableCellEditor?.cell === tableCell) {
-                activeTableCellEditor.input.focus({ preventScroll: true });
+            if (tableCellController.isEditing(tableCell)) {
+                tableCellController.focus();
             } else {
-                startTableCellEditor(tableCell);
+                tableCellController.start(tableCell);
             }
             return;
         }
@@ -576,12 +477,15 @@ export function createEditorInputController(options: EditorInputControllerOption
         clearInlineObjectSelection();
         if (isComposingText && event.inputType.includes("Composition")) {
             const targetRange = event.getTargetRanges?.()[0];
-            if (targetRange) {
+            const editor = document.getElementById("editor");
+            if (!compositionTargetCaptured && targetRange && editor?.contains(targetRange.startContainer) && editor.contains(targetRange.endContainer)) {
                 preCompositionSourceSelection = {
+                    ...preCompositionSourceSelection,
                     anchor: domPointToSourceOffset(targetRange.startContainer, targetRange.startOffset),
                     head: domPointToSourceOffset(targetRange.endContainer, targetRange.endOffset),
                 };
             }
+            compositionTargetCaptured = true;
             return;
         }
         const undoKind = event.inputType === "historyUndo"
@@ -602,13 +506,16 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function handleEditorCompositionStart(): void {
         clearPendingInlineFormats();
-        isComposingText = true;
         syncStateSelectionFromDom();
+        isComposingText = true;
+        compositionTargetCaptured = false;
         preCompositionSourceSelection = getEditorState().selection;
         compositionLease = {
             sessionId: documentState.sessionId,
-            revision: getEditorState().revision,
+            revision: getDocumentRevision(),
         };
+        flushSourceHistoryBatch();
+        setCompositionSurface(document.getElementById("editor"));
     }
 
     function canExecuteCommand(command: EditorCommand): boolean {
@@ -664,22 +571,42 @@ export function createEditorInputController(options: EditorInputControllerOption
 
     function handleEditorCompositionEnd(event: CompositionEvent): void {
         isComposingText = false;
+        setCompositionSurface(null);
         const insert = event.data ?? "";
         const lease = compositionLease;
         compositionLease = null;
-        if (!lease || lease.sessionId !== documentState.sessionId || lease.revision !== getEditorState().revision) {
+        if (!lease || lease.sessionId !== documentState.sessionId || lease.revision !== getDocumentRevision()) {
+            reconcileCompositionDom();
             syncDomSelectionFromState({ focus: "preserve" });
             return;
         }
         if (insert) {
             const state = getEditorState();
-            dispatch(createSourceInsertTextTransaction(
+            const transaction = createSourceInsertTextTransaction(
                 { ...state, selection: preCompositionSourceSelection },
                 prepareVirtualEofInsertion(insert, preCompositionSourceSelection),
-            ));
+            );
+            transaction.annotations = { ...transaction.annotations, historyMode: "discrete" };
+            reconcileCompositionDom();
+            dispatch(transaction);
         } else {
-            syncDomSelectionFromState({ focus: "editor" });
+            reconcileCompositionDom();
+            syncDomSelectionFromState({ focus: "preserve" });
         }
+    }
+
+    function reconcileCompositionDom(): void {
+        getEditorBlocks().forEach(invalidateBlockRenderCache);
+        replaceEditorBlocksFromSourceState(getEditorState());
+    }
+
+    function cancelComposition(): void {
+        if (!compositionLease && !isComposingText) return;
+        compositionLease = null;
+        isComposingText = false;
+        setCompositionSurface(null);
+        reconcileCompositionDom();
+        syncDomSelectionFromState({ focus: "preserve" });
     }
 
     function handleEditorPaste(event: ClipboardEvent): void {
@@ -756,8 +683,8 @@ export function createEditorInputController(options: EditorInputControllerOption
             if (event.detail > 1) {
                 return;
             }
-            if (activeTableCellEditor?.cell !== tableCell) {
-                startTableCellEditor(tableCell);
+            if (!tableCellController.isEditing(tableCell)) {
+                tableCellController.start(tableCell);
             }
             return;
         }
@@ -900,140 +827,8 @@ export function createEditorInputController(options: EditorInputControllerOption
         syncDomSelectionFromState({ focus: "editor" });
     }
 
-    function startTableCellEditor(cell: HTMLTableCellElement): void {
-        cancelScheduledTableCellEditor();
-        const row = Number.parseInt(cell.dataset.tableSourceRow ?? "", 10);
-        const column = Number.parseInt(cell.dataset.tableSourceColumn ?? "", 10);
-        const table = cell.closest<HTMLTableElement>(".markdown-table");
-        const tableIndex = table ? Array.from(document.querySelectorAll(".markdown-table")).indexOf(table) : -1;
-        finishTableCellEditor(true);
-        if (!cell.isConnected && tableIndex >= 0 && Number.isFinite(row) && Number.isFinite(column)) {
-            cell = document.querySelectorAll<HTMLTableElement>(".markdown-table")[tableIndex]
-                ?.querySelector<HTMLTableCellElement>(
-                    `[data-table-source-row="${row}"][data-table-source-column="${column}"]`,
-                ) ?? cell;
-        }
-        const block = findBlock(cell);
-        const blockId = block?.dataset.blockId;
-        const sourceBlock = blockId ? getEditorState().blocks.blocks.find((candidate) => candidate.id === blockId) : null;
-        if (!block || !blockId || !sourceBlock || !Number.isFinite(row) || !Number.isFinite(column)) return;
-        const source = getEditorState().doc.slice(sourceBlock.sourceFrom, sourceBlock.sourceTo);
-        const range = readMarkdownTableCellRange(source, row, column);
-        if (!range) return;
-        delete block.dataset.blockSourceActive;
-
-        const input = document.createElement("input");
-        input.className = "table-cell-editor";
-        input.type = "text";
-        input.value = source.slice(range.start, range.end);
-        input.setAttribute("aria-label", `Table row ${row === 0 ? "header" : row}, column ${column + 1}`);
-        const cellRect = cell.getBoundingClientRect();
-        input.style.left = `${cellRect.left}px`;
-        input.style.top = `${cellRect.top}px`;
-        input.style.width = `${cellRect.width}px`;
-        input.style.height = `${cellRect.height}px`;
-        cell.dataset.tableCellEditing = "true";
-        document.body.append(input);
-        activeTableCellEditor = {
-            input,
-            cell,
-            blockId,
-            row,
-            column,
-            from: sourceBlock.sourceFrom + range.start,
-            to: sourceBlock.sourceFrom + range.end,
-            finishing: false,
-        };
-        for (const type of ["pointerdown", "click", "beforeinput", "input", "copy", "cut", "paste"] as const) {
-            input.addEventListener(type, (event) => event.stopPropagation());
-        }
-        input.addEventListener("keydown", (event) => {
-            event.stopPropagation();
-            if (event.key === "Escape") {
-                event.preventDefault();
-                finishTableCellEditor(false);
-            } else if (event.key === "Tab" || event.key === "Enter") {
-                event.preventDefault();
-                finishTableCellEditor(true, event.shiftKey ? -1 : 1);
-            }
-        });
-        input.addEventListener("blur", () => finishTableCellEditor(true));
-        input.focus({ preventScroll: true });
-        input.select();
-    }
-
-    function finishTableCellEditor(commit: boolean, move?: -1 | 1): void {
-        const active = activeTableCellEditor;
-        if (!active || active.finishing) return;
-        const nextCell = move ? readAdjacentTableCellAddress(active, move) : null;
-        active.finishing = true;
-        activeTableCellEditor = null;
-        active.input.remove();
-        active.cell.removeAttribute("data-table-cell-editing");
-        if (!commit) {
-            return;
-        }
-        const value = active.input.value.replace(/\r?\n/g, " ").replace(/(?<!\\)\|/g, "\\|");
-        dispatch({
-            changes: [{ from: active.from, to: active.to, insert: value }],
-            selection: { anchor: active.from + value.length, head: active.from + value.length },
-            annotations: { userEvent: "input", historyMode: "discrete" },
-        });
-        if (move) {
-            const transaction = createTableTabTransaction(getEditorState(), move);
-            if (transaction) dispatch(transaction);
-            if (transaction && nextCell) scheduleTableCellEditor(nextCell);
-        }
-    }
-
-    function readAdjacentTableCellAddress(active: ActiveTableCellEditor, move: -1 | 1): TableCellAddress | null {
-        const sourceBlock = getEditorState().blocks.blocks.find((candidate) => candidate.id === active.blockId);
-        const table = active.cell.closest<HTMLTableElement>(".markdown-table");
-        const tableIndex = table ? Array.from(document.querySelectorAll(".markdown-table")).indexOf(table) : -1;
-        if (!sourceBlock || tableIndex < 0) return null;
-        const source = getEditorState().doc.slice(sourceBlock.sourceFrom, sourceBlock.sourceTo);
-        const columnCount = readMarkdownTableColumnCount(source);
-        if (columnCount < 2) return null;
-
-        let row = active.row;
-        let column = active.column + move;
-        if (column >= columnCount) {
-            column = 0;
-            row = active.row === 0 ? 2 : active.row + 1;
-        } else if (column < 0) {
-            column = columnCount - 1;
-            row = active.row === 2 ? 0 : active.row - 1;
-        }
-        return row < 0 ? null : { tableIndex, row, column };
-    }
-
-    function scheduleTableCellEditor(address: TableCellAddress): void {
-        cancelScheduledTableCellEditor();
-        // Selection projection for a newly inserted row can emit a deferred
-        // selectionchange after the transaction. Open the next cell after that
-        // browser task has settled so it cannot immediately steal focus back.
-        scheduledTableCellTimer = window.setTimeout(() => {
-            scheduledTableCellTimer = null;
-            openTableCellEditor(address);
-        }, 32);
-    }
-
-    function cancelScheduledTableCellEditor(): void {
-        if (scheduledTableCellTimer === null) return;
-        window.clearTimeout(scheduledTableCellTimer);
-        scheduledTableCellTimer = null;
-    }
-
-    function openTableCellEditor(address: TableCellAddress): void {
-        const table = document.querySelectorAll<HTMLTableElement>(".markdown-table")[address.tableIndex];
-        const cell = table?.querySelector<HTMLTableCellElement>(
-            `[data-table-source-row="${address.row}"][data-table-source-column="${address.column}"]`,
-        ) ?? null;
-        if (cell) startTableCellEditor(cell);
-    }
-
     function handleSourceKeydown(event: KeyboardEvent): boolean {
-        if (isComposingText) {
+        if (isComposingText || event.isComposing || event.keyCode === 229) {
             return true;
         }
 
@@ -1128,7 +923,8 @@ export function createEditorInputController(options: EditorInputControllerOption
                     return false;
                 }
                 event.preventDefault();
-                dispatch(createSourceInsertTextTransaction(state, "\t"));
+                dispatch(createIndentSourceTransaction(state, event.shiftKey));
+                syncDomSelectionFromState();
                 return true;
             }
 
@@ -1162,7 +958,12 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         if (event.key === "Escape") {
-            const token = document.querySelector<HTMLElement>(".markdown-token-editing");
+            const selection = getEditorState().selection;
+            const token = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token-editing"))
+                .reverse().find(candidate => {
+                    const owned = readSourceTokenDocumentRange(candidate);
+                    return candidate.dataset.sourcePinned !== "true" && owned && selection.head >= owned.from && selection.head <= owned.to;
+                });
             const range = token ? readSourceTokenDocumentRange(token) : null;
             if (range) {
                 event.preventDefault();
@@ -1171,8 +972,8 @@ export function createEditorInputController(options: EditorInputControllerOption
                 dispatch({
                     changes: [],
                     selection: {
-                        anchor: range.to,
-                        head: range.to,
+                        anchor: selection.anchor === selection.head ? range.to : selection.head,
+                        head: selection.anchor === selection.head ? range.to : selection.head,
                         anchorAffinity: "upstream",
                         headAffinity: "upstream",
                     },
@@ -1229,9 +1030,9 @@ export function createEditorInputController(options: EditorInputControllerOption
                 ? Math.min(state.selection.anchor, state.selection.head)
                 : Math.max(state.selection.anchor, state.selection.head);
         } else if (event.key === "Home") {
-            target = event.ctrlKey || event.metaKey ? 0 : previousLineBoundary(state.doc, currentHead);
+            target = event.ctrlKey || event.metaKey ? 0 : readVisualLineBoundary("backward") ?? previousLineBoundary(state.doc, currentHead);
         } else if (event.key === "End") {
-            target = event.ctrlKey || event.metaKey ? state.doc.length : nextLineBoundary(state.doc, currentHead);
+            target = event.ctrlKey || event.metaKey ? state.doc.length : readVisualLineBoundary("forward") ?? nextLineBoundary(state.doc, currentHead);
         } else if (event.ctrlKey || event.altKey) {
             target = backward
                 ? previousWordBoundary(state.doc, currentHead)
@@ -1242,13 +1043,15 @@ export function createEditorInputController(options: EditorInputControllerOption
                 : nextGraphemeBoundary(state.doc, currentHead);
         }
 
-        let extendedAnchor = state.selection.anchor === state.selection.head
+        const extendedAnchor = state.selection.anchor === state.selection.head
             ? currentHead
             : state.selection.anchor;
 
         const nextSelection = {
             anchor: event.shiftKey ? extendedAnchor : target,
             head: target,
+            anchorAffinity: event.shiftKey ? state.selection.anchorAffinity : state.selection.headAffinity,
+            headAffinity: event.key === "End" ? "upstream" as const : "downstream" as const,
         };
         dispatch({
             changes: [],
@@ -1292,8 +1095,30 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 
     function readSourceBeforeInputTransaction(event: InputEvent): (() => Parameters<typeof dispatch>[0] | null) | null {
+        if (event.inputType === "insertReplacementText") {
+            const text = event.data ?? event.dataTransfer?.getData("text/plain");
+            const targets = event.getTargetRanges?.() ?? [];
+            const target = targets[0];
+            const editor = document.getElementById("editor");
+            const sessionId = documentState.sessionId;
+            const revision = getDocumentRevision();
+            if (text === undefined || targets.length > 1 || target && (!editor?.contains(target.startContainer) || !editor.contains(target.endContainer))) return () => null;
+            const selection = target ? {
+                anchor: domPointToSourceOffset(target.startContainer, target.startOffset),
+                head: domPointToSourceOffset(target.endContainer, target.endOffset),
+                source: true,
+            } : null;
+            return () => {
+                if (sessionId !== documentState.sessionId || revision !== getDocumentRevision()) return null;
+                clearPendingInlineFormats();
+                const state = getEditorState();
+                const transaction = createInsertTextTransaction({ ...state, selection: selection ?? state.selection }, text);
+                transaction.annotations = { userEvent: "input", historyMode: "discrete" };
+                return transaction;
+            };
+        }
         if (
-            (event.inputType === "insertText" || event.inputType === "insertReplacementText") &&
+            event.inputType === "insertText" &&
             event.data !== null
         ) {
             return () => {
@@ -1328,22 +1153,11 @@ export function createEditorInputController(options: EditorInputControllerOption
             return () => null;
         }
 
-        // Some replacement sources provide their text through dataTransfer
-        // rather than InputEvent.data. Preserve the source-first path for
-        // those replacements and safely cancel non-text replacements.
-        if (event.inputType === "insertReplacementText") {
-            const replacement = event.dataTransfer?.getData("text/plain");
-            if (replacement !== undefined && replacement !== null) {
-                return () => createSourceInsertTextTransaction(getEditorState(), replacement);
-            }
-            return () => null;
-        }
-
         if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
             return () => {
                 const state = getEditorState();
                 return (!options.isSourceMode()
-                    ? options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state)
+                    ? options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state, { shiftKey: event.inputType === "insertLineBreak" })
                     : null)
                     ?? createSourceInsertTextTransaction(state, "\n");
             };
@@ -1408,15 +1222,12 @@ export function createEditorInputController(options: EditorInputControllerOption
         syncSourceSelectionForCommand();
         const state = getEditorState();
         const clipboardSelection = readClipboardSelection(state);
-        const selectedText = clipboardSelection
-            ? state.doc.slice(clipboardSelection.anchor, clipboardSelection.head)
-            : null;
-        if (selectedText === null || !event.clipboardData) {
+        if (clipboardSelection === null || !event.clipboardData) {
             return preventUnmappedSourceClipboardDefault(event);
         }
 
         event.preventDefault();
-        if (!writeSourceClipboard(event.clipboardData, selectedText)) {
+        if (!writeSourceClipboard(event.clipboardData)) {
             syncDomSelectionFromState();
         }
         return true;
@@ -1426,9 +1237,6 @@ export function createEditorInputController(options: EditorInputControllerOption
         syncSourceSelectionForCommand();
         const state = getEditorState();
         const clipboardSelection = readClipboardSelection(state);
-        const selectedText = clipboardSelection
-            ? state.doc.slice(clipboardSelection.anchor, clipboardSelection.head)
-            : null;
         const transaction = clipboardSelection
             ? createSourceDeleteTransaction(
                 { ...state, selection: clipboardSelection },
@@ -1436,12 +1244,12 @@ export function createEditorInputController(options: EditorInputControllerOption
                 "grapheme",
             )
             : null;
-        if (selectedText === null || !transaction || !event.clipboardData) {
+        if (clipboardSelection === null || !transaction || !event.clipboardData) {
             return preventUnmappedSourceClipboardDefault(event);
         }
 
         event.preventDefault();
-        if (!writeSourceClipboard(event.clipboardData, selectedText)) {
+        if (!writeSourceClipboard(event.clipboardData)) {
             syncDomSelectionFromState();
             return true;
         }
@@ -1804,7 +1612,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         };
     }
 
-    function writeSourceClipboard(clipboard: DataTransfer, _text: string): boolean {
+    function writeSourceClipboard(clipboard: DataTransfer): boolean {
         try {
             if (supportsRichSourceEditing()) {
                 const write = options.getActiveDocumentFormat().clipboard?.write;
@@ -1897,20 +1705,6 @@ export function createEditorInputController(options: EditorInputControllerOption
     }
 }
 
-function readClipboardImages(dataTransfer: DataTransfer | null | undefined): File[] {
-    if (!dataTransfer) {
-        return [];
-    }
-
-    const fromItems = Array.from(dataTransfer.items)
-        .filter((item) => item.kind === "file")
-        .map((item) => item.getAsFile())
-        .filter((file): file is File => Boolean(file && isSupportedPastedImage(file)));
-    return fromItems.length > 0
-        ? fromItems
-        : Array.from(dataTransfer.files).filter(isSupportedPastedImage);
-}
-
 function shouldPreferClipboardImages(
     images: File[],
     result: ClipboardReadResult | null,
@@ -1928,22 +1722,6 @@ function shouldPreferClipboardImages(
     return !hasMeaningfulNonImageClipboardHtml(dataTransfer?.getData("text/html") ?? "");
 }
 
-function hasMeaningfulNonImageClipboardHtml(html: string): boolean {
-    if (!html) {
-        return false;
-    }
-    const clipboardDocument = new DOMParser().parseFromString(html, "text/html");
-    for (const element of Array.from(clipboardDocument.body.querySelectorAll("script, style, img"))) {
-        element.remove();
-    }
-    if (clipboardDocument.body.textContent?.trim()) {
-        return true;
-    }
-    return Boolean(clipboardDocument.body.querySelector(
-        "br, hr, table, ul, ol, pre, blockquote, input, textarea, select, video, audio, canvas, svg",
-    ));
-}
-
 function isTextEntryElement(element: Element | null): element is HTMLInputElement | HTMLTextAreaElement {
     if (element instanceof HTMLTextAreaElement) {
         return true;
@@ -1952,13 +1730,6 @@ function isTextEntryElement(element: Element | null): element is HTMLInputElemen
         return false;
     }
     return ["text", "search", "tel", "url", "password"].includes(element.type);
-}
-
-function extensionForImageMimeType(mimeType: string): string {
-    if (mimeType === "image/jpeg") return "jpg";
-    if (mimeType === "image/gif") return "gif";
-    if (mimeType === "image/webp") return "webp";
-    return "png";
 }
 
 function containsDataImage(value: string): boolean {

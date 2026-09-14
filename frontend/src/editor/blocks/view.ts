@@ -1,4 +1,4 @@
-import type { DocumentReferenceMap, DocumentRenderContext, PlainTextHighlightPolicy } from "../../formats/types";
+import type { DocumentRenderContext, PlainTextHighlightPolicy } from "../../formats/types";
 import { blockLabels, headingTypes, readBlockType, type BlockType, type ParsedBlock } from "./model";
 import {
     renderAtomicBlockContent,
@@ -12,17 +12,14 @@ import {
 import { getElement } from "../../utils/dom";
 import {
     caretSpacerHtml,
-    findRenderedContentTextPosition,
-    getRenderedContentBoundaryOffset,
     getRenderedContentText,
 } from "../selection/rendered-content-dom";
-import { escapeHtml } from "../../utils/text";
-
-export type BlockEditingKind = "rich" | "plain" | "source-preview" | "atomic";
+import { escapeHtml, normalizeHeadingId } from "../../utils/text";
+import { isCompositionSurfaceActive, syncDomSelectionFromState, syncStateSelectionFromDom } from "../core/projection";
+import { documentState } from "../../documents/document-state";
 
 type BlockRenderContext = {
     context: DocumentRenderContext;
-    references: DocumentReferenceMap;
     activeFilePath: string | null;
     renderInlineContent: (text: string, context: DocumentRenderContext) => string;
     renderPlainTextContent?: (type: BlockType, text: string) => string | null;
@@ -35,7 +32,6 @@ type BlockRenderContext = {
 
 let renderContext: BlockRenderContext = {
     context: { references: {} },
-    references: {},
     activeFilePath: null,
     renderInlineContent: renderPlainInlineContent,
 };
@@ -64,8 +60,6 @@ let orderedListMarkerWidthSyncFrame = 0;
 
 export function configureBlockView(context: Partial<BlockRenderContext>): void {
     const nextContext = { ...renderContext, ...context };
-    nextContext.context = context.context ?? { references: context.references ?? nextContext.references };
-    nextContext.references = nextContext.context.references;
     nextContext.renderInlineContent = context.renderInlineContent ?? renderPlainInlineContent;
 
     if (didRenderContextChange(renderContext, nextContext)) {
@@ -108,6 +102,8 @@ export function applyBlockProperties(block: HTMLElement, options: Partial<Parsed
     setBlockListDelimiter(block, options.listDelimiter);
     setBlockTodoMarker(block, options.todoMarker);
     setBlockQuoteLevel(block, options.quoteLevel);
+    if (options.continuationPrefix === undefined) delete block.dataset.continuationPrefix;
+    else block.dataset.continuationPrefix = options.continuationPrefix;
     setTodoChecked(block, options.checked ?? false);
     setCodeFence(block, options.codeFence);
     setCodeFenceClosed(block, options.codeFenceClosed);
@@ -226,7 +222,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
         return;
     }
 
-    const html = renderBlockInnerHtml(type, text, source);
+    const html = renderBlockInnerHtml(type, text, source, block.dataset.continuationPrefix);
 
     const cache = getRenderCache(content);
     if (
@@ -241,6 +237,10 @@ export function setBlockText(block: HTMLElement, text: string): void {
     cache.inlineHtml = html;
     cache.inlineRevision = renderRevision;
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
+}
+
+export function invalidateBlockRenderCache(block: HTMLElement): void {
+    clearRenderCache(getBlockContent(block));
 }
 
 export function ensureBlockSourceRendered(block: HTMLElement): void {
@@ -321,8 +321,10 @@ function schedulePlainTextHighlight(
 
     cancelPendingPlainTextHighlight(content);
     const revision = renderRevision;
+    const sessionId = documentState.sessionId;
     const timer = window.setTimeout(() => {
         pendingPlainTextHighlights.delete(content);
+        if (revision !== renderRevision || sessionId !== documentState.sessionId) return;
         if (!block.isConnected || !content.isConnected || readBlockType(block.dataset.type) !== type) {
             return;
         }
@@ -331,12 +333,23 @@ function schedulePlainTextHighlight(
             return;
         }
 
+        if (isCompositionSurfaceActive(content)) {
+            schedulePlainTextHighlight(block, content, type, text, source, policy);
+            return;
+        }
+
         const renderPlainTextContent = renderContext.renderPlainTextContent;
         if (!renderPlainTextContent) {
             return;
         }
 
-        const activeOffset = readCurrentBlockOffset(block);
+        const selection = document.getSelection();
+        const ownsSelection = Boolean(selection && (content.contains(selection.anchorNode) || content.contains(selection.focusNode)));
+        const focusOwner = document.activeElement;
+        const shell = document.getElementById("app");
+        const scrollTop = shell?.scrollTop;
+        const scrollLeft = shell?.scrollLeft;
+        if (ownsSelection) syncStateSelectionFromDom();
         const highlightedHtml = renderPlainTextContent(type, text);
         const nextSource = renderContext.readBlockSource?.(block, type, text) ?? source;
 
@@ -347,9 +360,9 @@ function schedulePlainTextHighlight(
             revision: renderRevision,
         };
 
-        if (activeOffset !== null) {
-            focusBlockContentAtOffset(block, Math.min(activeOffset, text.length));
-        }
+        if (ownsSelection) syncDomSelectionFromState({ focus: "preserve" });
+        if (focusOwner instanceof HTMLElement && focusOwner.isConnected && document.activeElement !== focusOwner) focusOwner.focus({ preventScroll: true });
+        if (shell && scrollTop !== undefined && scrollLeft !== undefined) { shell.scrollTop = scrollTop; shell.scrollLeft = scrollLeft; }
     }, policy.delayMs);
 
     pendingPlainTextHighlights.set(content, { timer, text, revision });
@@ -566,7 +579,6 @@ function canRecoverMissingBlockSource(block: HTMLElement, type: BlockType): bool
 function didRenderContextChange(previous: BlockRenderContext, next: BlockRenderContext): boolean {
     return (
         previous.context !== next.context ||
-        previous.references !== next.references ||
         previous.activeFilePath !== next.activeFilePath ||
         previous.renderInlineContent !== next.renderInlineContent ||
         previous.renderPlainTextContent !== next.renderPlainTextContent ||
@@ -577,37 +589,8 @@ function didRenderContextChange(previous: BlockRenderContext, next: BlockRenderC
     );
 }
 
-function readCurrentBlockOffset(block: HTMLElement): number | null {
-    const content = getBlockContent(block);
-    const selection = document.getSelection();
-    const focusNode = selection?.focusNode;
-
-    if (!selection?.isCollapsed || !focusNode || (focusNode !== content && !content.contains(focusNode))) {
-        return null;
-    }
-
-    return getRenderedContentBoundaryOffset(content, focusNode, selection.focusOffset);
-}
-
-function focusBlockContentAtOffset(block: HTMLElement, offset: number): void {
-    const editor = getElement<HTMLElement>("editor");
-    const content = getBlockContent(block);
-    const selection = document.getSelection();
-    const range = document.createRange();
-    const position = findRenderedContentTextPosition(content, Math.max(0, offset)) ?? {
-        node: content,
-        offset: content.childNodes.length,
-    };
-
-    editor.focus({ preventScroll: true });
-    range.setStart(position.node, position.offset);
-    range.collapse(true);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-}
-
-function renderBlockInnerHtml(type: BlockType, text: string, source: BlockSource): string {
-    const bodyHtml = renderBlockEditableTextHtml(text, source);
+function renderBlockInnerHtml(type: BlockType, text: string, source: BlockSource, continuationPrefix?: string): string {
+    const bodyHtml = renderBlockEditableTextHtml(text, source, type, continuationPrefix);
     return (
         renderBlockSourceHtml(source.prefix, "prefix", source.prefixEditable ?? true) +
         renderBlockBodyHtml(type, source, bodyHtml) +
@@ -623,11 +606,17 @@ function renderBlockBodyHtml(type: BlockType, source: BlockSource, html: string)
     return `<span class="format-block-body">${html}</span>`;
 }
 
-function renderBlockEditableTextHtml(text: string, source: BlockSource): string {
+function renderBlockEditableTextHtml(text: string, source: BlockSource, type: BlockType, continuationPrefix?: string): string {
     if (text === "" && source.prefix) {
         return caretSpacerHtml;
     }
 
+    if (text.includes("\n") && (isIndentableListBlockType(type) || type === "quote")) {
+        return renderContext.renderInlineContent(text, {
+            ...renderContext.context,
+            inlineContinuationPrefix: continuationPrefix,
+        });
+    }
     return renderContext.renderInlineContent(text, renderContext.context);
 }
 
@@ -798,10 +787,6 @@ function setBlockHeadingSource(
     }
 }
 
-function normalizeHeadingId(value: string | undefined): string {
-    return (value ?? "").trim().replace(/\s+/g, "-");
-}
-
 function setMathSource(block: HTMLElement, mathSource: string | undefined): void {
     if (readBlockType(block.dataset.type) === "math" && mathSource !== undefined) {
         block.dataset.mathSource = mathSource;
@@ -892,51 +877,6 @@ export function readBlockHeadingIdExplicit(block: HTMLElement): boolean {
 export function readBlockRuleMarker(block: HTMLElement): string | undefined {
     const ruleMarker = block.dataset.ruleMarker;
     return ruleMarker && /^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$/.test(ruleMarker) ? ruleMarker : undefined;
-}
-
-export function readEditorBlock(block: HTMLElement): ParsedBlock {
-    const type = readBlockType(block.dataset.type);
-
-    return {
-        type,
-        text: getBlockText(block),
-        indent: readBlockIndent(block),
-        checked: type === "todo" ? getTodoCheckbox(block).checked : undefined,
-        codeFence: readBlockCodeFence(block),
-        codeFenceClosed: readBlockCodeFenceClosed(block),
-        codeInfo: block.dataset.codeInfo,
-        listMarker: readBlockListMarker(block),
-        listNumber: readBlockListNumber(block),
-        listDelimiter: readBlockListDelimiter(block),
-        todoMarker: readBlockTodoMarker(block),
-        quoteLevel: readBlockQuoteLevel(block),
-        ruleMarker: readBlockRuleMarker(block),
-        mathSource: type === "math" ? block.dataset.mathSource : undefined,
-        headingId: headingTypes.has(type) ? readBlockHeadingId(block) : undefined,
-        headingIdExplicit: headingTypes.has(type) ? readBlockHeadingIdExplicit(block) : undefined,
-        headingSourcePrefix: headingTypes.has(type) ? block.dataset.headingSourcePrefix : undefined,
-        headingSourceSuffix: headingTypes.has(type) ? block.dataset.headingSourceSuffix : undefined,
-    };
-}
-
-export function isRichTextBlockType(type: BlockType): boolean {
-    return readBlockEditingKind(type) === "rich";
-}
-
-export function readBlockEditingKind(type: BlockType): BlockEditingKind {
-    if (isPlainTextBlockType(type)) {
-        return "plain";
-    }
-
-    if (type === "table" || type === "math" || type === "html" || type === "definition-list") {
-        return "source-preview";
-    }
-
-    if (isAtomicBlockType(type)) {
-        return "atomic";
-    }
-
-    return "rich";
 }
 
 function isPlainTextBlockType(type: BlockType): boolean {

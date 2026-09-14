@@ -12,7 +12,7 @@ export function getRenderedContentText(node: Node): string {
     }
 
     if (node.nodeType === Node.TEXT_NODE) {
-        return stripCaretSpacers(node.textContent ?? "");
+        return (node.textContent ?? "");
     }
 
     return getRenderedContentChildText(node);
@@ -30,7 +30,7 @@ export function getRenderedContentBoundaryOffset(current: Node, anchorNode: Node
 
     if (current === anchorNode) {
         if (current.nodeType === Node.TEXT_NODE) {
-            return stripCaretSpacers((current.textContent ?? "").slice(0, anchorOffset)).length;
+            return (current.textContent ?? "").slice(0, anchorOffset).length;
         }
 
         return getRenderedContentLengthBeforeChild(current, anchorOffset);
@@ -67,10 +67,6 @@ export function findRenderedContentTextPosition(root: HTMLElement, offset: numbe
     return null;
 }
 
-export function stripCaretSpacers(text: string): string {
-    return text;
-}
-
 function findRenderedContentTextPositionInNode(
     node: Node,
     remaining: { value: number },
@@ -91,7 +87,7 @@ function findRenderedContentTextPositionInNode(
 
     if (node.nodeType === Node.TEXT_NODE) {
         const text = node.textContent ?? "";
-        const length = stripCaretSpacers(text).length;
+        const length = text.length;
         if (remaining.value <= length) {
             return { node, offset: getDomTextOffsetForRenderedContentOffset(text, remaining.value) };
         }

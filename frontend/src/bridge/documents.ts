@@ -1,5 +1,5 @@
 import { Call, Dialogs } from "@wailsio/runtime";
-import { getDocumentFileFilters } from "../formats/registry";
+import { getDocumentFileFilters } from "../formats/catalog";
 import type { DirectoryTree, DocumentFile, ImageFile, PastedImageFile, PdfPreviewFile } from "./types";
 
 export type UnsavedDocumentDecision = "save" | "discard" | "cancel";
@@ -195,10 +195,6 @@ export function readSiblingPdfPreview(sourcePath: string, forceCompile = false):
         sourcePath,
         forceCompile,
     ) as Promise<PdfPreviewFile>;
-}
-
-export function createUntitledMarkdownDocument(baseFilePath: string): Promise<DocumentFile> {
-    return Call.ByName("glyph/internal/documents.Service.CreateUntitledMarkdownDocument", baseFilePath) as Promise<DocumentFile>;
 }
 
 export function renameDocument(oldPath: string, newPath: string): Promise<void> {

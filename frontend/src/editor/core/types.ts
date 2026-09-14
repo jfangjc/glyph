@@ -61,11 +61,8 @@ export type BlockIndexBuildContext = {
 export type BlockIndexBuilder = (doc: string, context?: BlockIndexBuildContext) => BlockIndex;
 
 export type ProjectionCapability = {
-    sourceOffsetToDomPoint?: (offset: number) => { node: Node; offset: number } | null;
-    domPointToSourceOffset?: (node: Node, offset: number) => number | null;
     resolveSelectionRange?: (state: EditorState) => { from: DocOffset; to: DocOffset } | null;
     shouldUseNativePointer?: (target: Element) => boolean | null;
-    reconcileInteractiveSource?: () => void;
     readVisualHiddenRanges?: (state: EditorState) => Array<{
         from: DocOffset;
         to: DocOffset;

@@ -25,15 +25,10 @@ import {
     installSourceStateDocumentIntegration,
     loadDocument,
     serializeDocument,
-    syncBlockViewContext,
-    syncDocumentFormatUi,
     toggleMarkdownEditingMode,
 } from "../documents/document-session";
-import { installFileTree } from "../documents/file-tree";
+import { extensionFromPath, titleFromFileName } from "../formats/file-names";
 import { syncDocumentPreview } from "../documents/document-preview";
-import {
-    appMenuCommandEvent,
-} from "../platform/window-controls/window-controls";
 import {
     createAppMenuController,
 } from "./controllers/app-menu-controller";
@@ -50,7 +45,6 @@ import {
     syncDocumentOutlineToBlock,
 } from "./document-outline";
 import { readEditorDom } from "./editor-dom";
-import { installEditorEventListeners } from "./editor-events";
 import {
     syncActiveBlockIndicator,
 } from "./editor-ui-state";
@@ -75,24 +69,21 @@ export function installEditorController(): void {
     const dom = readEditorDom();
 
     installDocumentOutline(dom.shell);
-    const fileTree = installFileTree(dom.shell, {
-        openDocumentPath,
-    });
     const findReplaceController = installFindReplaceController({
         editor: dom.editor,
         shell: dom.shell,
     });
     const openFind = (): void => {
-        fileTree.close();
+        writingInterface.close();
         findReplaceController.openFind();
     };
     const openReplace = (): void => {
-        fileTree.close();
+        writingInterface.close();
         findReplaceController.openReplace();
     };
     const toggleFileTree = (): void => {
         findReplaceController.close();
-        fileTree.toggle();
+        writingInterface.toggleFiles();
     };
     const inputController = createEditorInputController({
         syncActiveBlockIndicator: syncFocusedBlockUi,
@@ -114,125 +105,113 @@ export function installEditorController(): void {
         isComposingText: inputController.isComposingText,
     });
     const appMenuController = createAppMenuController({
-        editor: dom.editor,
         surface: dom.surface,
         openFind,
         openReplace,
         createNewDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
         openDocument,
-        openDirectory: fileTree.openDirectory,
+        openDirectory: () => writingInterface.openDirectory(),
         saveDocument: saveDocumentFromEditor,
         ensureExportSaved,
         toggleFileTree,
         toggleMarkdownEditingMode,
-        canToggleMarkdownEditingMode: () => getActiveDocumentFormat().descriptor.id === "markdown",
-        isMarkdownSourceMode,
         canExport: () => Boolean(getActiveDocumentFormat().export),
         executeEditorCommand: inputController.executeCommand,
         canExecuteEditorCommand: inputController.canExecuteCommand,
         isEditorCommandActive: inputController.isCommandActive,
     });
-    installWritingInterface({ fileTree, inputController });
-    document.addEventListener("selectionchange", () => appMenuController.syncMenuState());
+    const writingInterface = installWritingInterface({
+        openDocumentPath,
+        readCommandState: appMenuController.readCommandState,
+        executeCommand: appMenuController.executeCommand,
+    });
 
     let previousSession = -1;
     let previousFormat = "";
     let previousMode = "";
     let previousPath: string | null | undefined;
     let previousFileName = "";
+    let previousCommittedFileName = "";
     let previousSaving: boolean | undefined;
     let previousDirty: boolean | undefined;
 
-    installEditorEventListeners(
-        { surface: dom.surface, editor: dom.editor, title: dom.title },
-        {
-            onSurfaceMouseDown: handleDocumentSurfaceMouseDown,
-            onSurfaceMouseMove: handleDocumentSurfaceMouseMove,
-            onSurfaceMouseLeave: clearGutterHoverBlock,
-            onSurfaceMouseOver: handleDocumentSurfaceMouseOver,
-            onSurfaceMouseOut: handleDocumentSurfaceMouseOut,
-            onDocumentMouseMove: handleDocumentMouseMove,
-            onDocumentMouseUp: handleDocumentMouseUp,
-            onEditorKeydown: inputController.handleEditorKeydown,
-            onEditorMouseDown: inputController.handleEditorMouseDown,
-            onEditorBeforeInput: inputController.handleEditorBeforeInput,
-            onEditorCopy: inputController.handleEditorCopy,
-            onEditorCut: inputController.handleEditorCut,
-            onEditorPaste: inputController.handleEditorPaste,
-            onEditorDragStart: inputController.handleEditorDragStart,
-            onEditorDragEnd: inputController.handleEditorDragEnd,
-            onEditorDragOver: inputController.handleEditorDragOver,
-            onEditorDrop: inputController.handleEditorDrop,
-            onEditorChange: inputController.handleEditorChange,
-            onEditorClick: inputController.handleEditorClick,
-            onEditorCompositionStart: inputController.handleEditorCompositionStart,
-            onEditorCompositionEnd: inputController.handleEditorCompositionEnd,
-            onEditorFocusOut: (event) => {
-                if (
-                    (!(event.relatedTarget instanceof Node) || !dom.editor.contains(event.relatedTarget)) &&
-                    !inputController.containsExternalInteractionTarget(event.relatedTarget) &&
-                    !(event.relatedTarget instanceof Element && event.relatedTarget.closest(".writing-panel, .writing-header"))
-                ) {
-                    inputController.deactivate();
-                }
-            },
-            onTitleBeforeInput: titleController.handleTitleBeforeInput,
-            onTitleKeydown: titleController.handleTitleKeydown,
-            onTitleInput: titleController.handleTitleInput,
-            onTitleFocus: titleController.handleTitleFocus,
-            onTitleBlur: titleController.handleTitleBlur,
-            onSelectionChange: () => {
-                selectionController.handleEditorSelectionChange();
-                inputController.handleEditorSelectionChange();
-            },
-            onWindowKeydown: (event) =>
-                handleGlobalKeydown(event, {
-                    openFind,
-                    openReplace,
-                    newDocument: () => createNewMarkdownDocument(getSuggestedFileName()),
-                    openDocument,
-                    openDirectory: fileTree.openDirectory,
-                    saveDocument: saveDocumentFromEditor,
-                    toggleFileTree,
-                    toggleMarkdownEditingMode,
-                }),
-            onWindowKeyup: syncLinkOpenIntentFromKeyboard,
-            onWindowBlur: () => {
-                clearLinkOpenIntent();
-                inputController.deactivate();
-            },
-            onDocumentStateChanged: () => {
-                const reinitialized = previousSession !== documentState.sessionId ||
-                    previousFormat !== documentState.activeFormatId || previousMode !== documentState.editingMode;
-                const pathChanged = previousPath !== documentState.activeFilePath;
-                const dirtyChanged = previousDirty !== documentState.hasUnsavedChanges;
-                const formatUiChanged = reinitialized || pathChanged || previousFileName !== documentState.fileName ||
-                    previousSaving !== documentState.isSavingDocument;
-                previousSession = documentState.sessionId;
-                previousFormat = documentState.activeFormatId;
-                previousMode = documentState.editingMode;
-                previousPath = documentState.activeFilePath;
-                previousFileName = documentState.fileName;
-                previousSaving = documentState.isSavingDocument;
-                previousDirty = documentState.hasUnsavedChanges;
-                if (reinitialized) {
-                    selectionController.refresh();
-                    refreshDocumentOutline();
-                    findReplaceController.refresh();
-                }
-                if (formatUiChanged) syncDocumentFormatUi();
-                else if (dirtyChanged) syncDocumentPreview(getActiveDocumentFormat(), {
-                    activeFilePath: documentState.activeFilePath,
-                    isSavingDocument: documentState.isSavingDocument,
-                });
-                if (reinitialized || pathChanged) syncBlockViewContext();
-                syncDocumentWindowTitle();
-                appMenuController.syncMenuState();
-            },
-        },
-        documentStateChangedEvent,
-    );
-    window.addEventListener(appMenuCommandEvent, appMenuController.handleAppMenuCommand as EventListener);
+    dom.surface.addEventListener("pointerdown", handleDocumentSurfaceMouseDown);
+    dom.surface.addEventListener("pointermove", handleDocumentSurfaceMouseMove);
+    dom.surface.addEventListener("pointerleave", clearGutterHoverBlock);
+    dom.surface.addEventListener("mouseover", handleDocumentSurfaceMouseOver);
+    dom.surface.addEventListener("mouseout", handleDocumentSurfaceMouseOut);
+    document.addEventListener("pointermove", handleDocumentMouseMove);
+    document.addEventListener("pointerup", handleDocumentMouseUp);
+    document.addEventListener("pointercancel", handleDocumentMouseUp);
+    dom.editor.addEventListener("keydown", inputController.handleEditorKeydown);
+    dom.editor.addEventListener("pointerdown", inputController.handleEditorMouseDown);
+    dom.editor.addEventListener("beforeinput", inputController.handleEditorBeforeInput);
+    dom.editor.addEventListener("copy", inputController.handleEditorCopy);
+    dom.editor.addEventListener("cut", inputController.handleEditorCut);
+    dom.editor.addEventListener("paste", inputController.handleEditorPaste);
+    dom.editor.addEventListener("dragstart", inputController.handleEditorDragStart);
+    dom.editor.addEventListener("dragend", inputController.handleEditorDragEnd);
+    dom.editor.addEventListener("dragover", inputController.handleEditorDragOver);
+    dom.editor.addEventListener("drop", inputController.handleEditorDrop);
+    dom.editor.addEventListener("change", inputController.handleEditorChange);
+    dom.editor.addEventListener("click", inputController.handleEditorClick);
+    dom.editor.addEventListener("compositionstart", inputController.handleEditorCompositionStart);
+    dom.editor.addEventListener("compositionend", inputController.handleEditorCompositionEnd);
+    dom.editor.addEventListener("focusout", (event) => {
+        if (
+            (!(event.relatedTarget instanceof Node) || !dom.editor.contains(event.relatedTarget)) &&
+            !inputController.containsExternalInteractionTarget(event.relatedTarget) &&
+            !(event.relatedTarget instanceof Element && event.relatedTarget.closest(".writing-panel, .writing-header"))
+        ) {
+            inputController.deactivate();
+        }
+    });
+    dom.title.addEventListener("beforeinput", titleController.handleTitleBeforeInput);
+    dom.title.addEventListener("keydown", titleController.handleTitleKeydown);
+    dom.title.addEventListener("input", titleController.handleTitleInput);
+    dom.title.addEventListener("focus", titleController.handleTitleFocus);
+    dom.title.addEventListener("blur", titleController.handleTitleBlur);
+    document.addEventListener("selectionchange", () => {
+        selectionController.handleEditorSelectionChange();
+        inputController.handleEditorSelectionChange();
+    });
+    window.addEventListener("keydown", (event) => handleGlobalKeydown(event, appMenuController.executeCommand));
+    window.addEventListener("keyup", syncLinkOpenIntentFromKeyboard);
+    window.addEventListener("blur", () => {
+        clearLinkOpenIntent();
+        inputController.deactivate();
+    });
+    function syncDocumentPresentation(): void {
+        const reinitialized = previousSession !== documentState.sessionId ||
+            previousFormat !== documentState.activeFormatId || previousMode !== documentState.editingMode;
+        const pathChanged = previousPath !== documentState.activeFilePath;
+        const dirtyChanged = previousDirty !== documentState.hasUnsavedChanges;
+        const formatUiChanged = reinitialized || pathChanged || previousFileName !== documentState.fileName ||
+            previousSaving !== documentState.isSavingDocument;
+        if (previousSession !== documentState.sessionId || previousCommittedFileName !== documentState.committedFileName) {
+            dom.title.value = titleFromFileName(documentState.committedFileName);
+        }
+        previousCommittedFileName = documentState.committedFileName;
+        previousSession = documentState.sessionId;
+        previousFormat = documentState.activeFormatId;
+        previousMode = documentState.editingMode;
+        previousPath = documentState.activeFilePath;
+        previousFileName = documentState.fileName;
+        previousSaving = documentState.isSavingDocument;
+        previousDirty = documentState.hasUnsavedChanges;
+        if (reinitialized) {
+            selectionController.refresh();
+            refreshDocumentOutline();
+            findReplaceController.refresh();
+        }
+        if (formatUiChanged) syncDocumentFormatUi();
+        else if (dirtyChanged) syncDocumentPreview(getActiveDocumentFormat(), {
+            activeFilePath: documentState.activeFilePath,
+            isSavingDocument: documentState.isSavingDocument,
+        });
+        syncDocumentWindowTitle();
+    }
+    window.addEventListener(documentStateChangedEvent, syncDocumentPresentation);
     configureCaret({
         onBlockFocused: (block) => {
             syncFocusedBlockUi(block);
@@ -245,7 +224,6 @@ export function installEditorController(): void {
     installSourceStateDocumentIntegration(() => {
         refreshDocumentOutline();
         findReplaceController.refresh();
-        appMenuController.syncMenuState();
     });
     if (documentState.sessionId === 0) {
         loadDocument({
@@ -260,10 +238,7 @@ export function installEditorController(): void {
     void restoreStartupDocument();
     startDocumentAutosave();
 
-    syncDocumentFormatUi();
-    syncBlockViewContext();
-    syncDocumentWindowTitle();
-    appMenuController.syncMenuState();
+    syncDocumentPresentation();
 }
 
 async function restoreStartupDocument(): Promise<void> {
@@ -292,5 +267,39 @@ async function ensureExportSaved(): Promise<boolean> {
     return saveCurrentDocument({
         promptForPath: !documentState.activeFilePath,
         suggestedFileName: getSuggestedFileName(),
+    });
+}
+
+let formatUiSignature = "";
+
+function syncDocumentFormatUi(): void {
+    const { shell, surface, title, extension, markdownModeToggle } = readEditorDom();
+    const format = getActiveDocumentFormat();
+
+    const activeExtension = extensionFromPath(documentState.fileName) || format.descriptor.defaultExtension;
+    const signature = JSON.stringify([format.descriptor.id, format.descriptor.editableTitle, activeExtension, documentState.editingMode]);
+    if (signature !== formatUiSignature) {
+        formatUiSignature = signature;
+        title.hidden = false;
+        title.readOnly = !format.descriptor.editableTitle;
+        title.setAttribute("aria-readonly", String(title.readOnly));
+        extension.textContent = `.${activeExtension}`;
+        extension.setAttribute("aria-label", `${activeExtension} file extension`);
+        surface.dataset.documentFormat = format.descriptor.id;
+        shell.dataset.documentFormat = format.descriptor.id;
+        surface.dataset.editingMode = documentState.editingMode;
+        shell.dataset.editingMode = documentState.editingMode;
+        const canToggleMarkdownMode = format.descriptor.id === "markdown";
+        markdownModeToggle.hidden = !canToggleMarkdownMode;
+        markdownModeToggle.textContent = isMarkdownSourceMode() ? "Source" : "Live Preview";
+        markdownModeToggle.setAttribute("aria-pressed", String(isMarkdownSourceMode()));
+        markdownModeToggle.title = isMarkdownSourceMode()
+            ? "Switch to Markdown Live Preview"
+            : "Switch to Markdown source mode";
+    }
+
+    syncDocumentPreview(format, {
+        activeFilePath: documentState.activeFilePath,
+        isSavingDocument: documentState.isSavingDocument,
     });
 }

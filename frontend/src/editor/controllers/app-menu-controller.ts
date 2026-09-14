@@ -1,12 +1,11 @@
 import { Window } from "@wailsio/runtime";
-import { commands } from "../../app/commands";
+import { commands, type AppMenuCommand, type CommandMetadata, type EditorCommand } from "../../app/commands";
+import { canUseDesktopFileSystem } from "../../documents/document-actions";
+import { getActiveDocumentFormat, isMarkdownSourceMode } from "../../documents/document-session";
 import { applyZoomShortcut } from "../../app/zoom";
 import { canUseWindowPrintRuntime } from "../../platform/runtime";
-import type { AppMenuCommandDetail } from "../../platform/window-controls/window-controls";
-import type { EditorCommand } from "./editor-input-controller";
 
 type AppMenuControllerOptions = {
-    editor: HTMLElement;
     surface: HTMLElement;
     openFind: () => void;
     openReplace: () => void;
@@ -17,28 +16,41 @@ type AppMenuControllerOptions = {
     ensureExportSaved: () => Promise<boolean>;
     toggleFileTree: () => void;
     toggleMarkdownEditingMode: () => void;
-    canToggleMarkdownEditingMode: () => boolean;
-    isMarkdownSourceMode: () => boolean;
     canExport: () => boolean;
-    executeEditorCommand: (command: EditorCommand, focusOwner?: Element | null) => Promise<void>;
     canExecuteEditorCommand: (command: EditorCommand) => boolean;
     isEditorCommandActive: (command: EditorCommand) => boolean;
+    executeEditorCommand: (command: EditorCommand, focusOwner?: Element | null) => Promise<void>;
 };
 
 export function createAppMenuController(options: AppMenuControllerOptions) {
     return {
-        handleAppMenuCommand,
-        syncMenuState,
+        executeCommand,
+        readCommandState,
     };
 
-    function handleAppMenuCommand(event: CustomEvent<AppMenuCommandDetail>): void {
-        const editorCommand = commands.find(command => command.id === event.detail.command)?.editor;
+    function readCommandState(id: AppMenuCommand): { enabled: boolean; active?: boolean } {
+        const metadata: CommandMetadata | undefined = commands.find(command => command.id === id);
+        const editorCommand = metadata?.editor;
+        return {
+            enabled: editorCommand ? options.canExecuteEditorCommand(editorCommand)
+                : id === "file:export" ? options.canExport()
+                : id.startsWith("file:") ? (id === "file:new" || canUseDesktopFileSystem())
+                : id === "view:toggle-markdown-source" ? getActiveDocumentFormat().descriptor.id === "markdown"
+                : true,
+            active: editorCommand && !id.startsWith("edit:") ? options.isEditorCommandActive(editorCommand)
+                : id === "view:toggle-markdown-source" ? isMarkdownSourceMode() : undefined,
+        };
+    }
+
+    function executeCommand(command: AppMenuCommand, focusOwner: Element | null = null): void {
+        const metadata: CommandMetadata | undefined = commands.find(item => item.id === command);
+        const editorCommand = metadata?.editor;
         if (editorCommand) {
-            void options.executeEditorCommand(editorCommand, event.detail.focusOwner).finally(syncMenuState);
+            void options.executeEditorCommand(editorCommand, focusOwner);
             return;
         }
 
-        switch (event.detail.command) {
+        switch (command) {
             case "file:new":
                 void options.createNewDocument();
                 return;
@@ -56,24 +68,6 @@ export function createAppMenuController(options: AppMenuControllerOptions) {
                 return;
             case "file:export":
                 void exportCurrentDocumentToPdf();
-                return;
-            case "edit:undo":
-                void options.executeEditorCommand("undo", event.detail.focusOwner);
-                return;
-            case "edit:redo":
-                void options.executeEditorCommand("redo", event.detail.focusOwner);
-                return;
-            case "edit:cut":
-                void options.executeEditorCommand("cut", event.detail.focusOwner);
-                return;
-            case "edit:copy":
-                void options.executeEditorCommand("copy", event.detail.focusOwner);
-                return;
-            case "edit:paste":
-                void options.executeEditorCommand("paste", event.detail.focusOwner);
-                return;
-            case "edit:select-all":
-                void options.executeEditorCommand("select-all", event.detail.focusOwner);
                 return;
             case "edit:find":
                 options.openFind();
@@ -99,6 +93,12 @@ export function createAppMenuController(options: AppMenuControllerOptions) {
             case "help:about":
                 showAboutDialog();
                 return;
+            case "edit:undo":
+            case "edit:redo":
+            case "edit:cut":
+            case "edit:copy":
+            case "edit:paste":
+            case "edit:select-all":
             case "format:bold":
             case "format:italic":
             case "format:strike":
@@ -119,7 +119,7 @@ export function createAppMenuController(options: AppMenuControllerOptions) {
             case "insert:rule":
                 return;
             default:
-                assertUnhandledMenuCommand(event.detail.command);
+                assertUnhandledMenuCommand(command);
         }
     }
 
@@ -148,44 +148,6 @@ export function createAppMenuController(options: AppMenuControllerOptions) {
             delete document.body.dataset.printingMarkdown;
             if (focusOwner?.isConnected) {
                 focusOwner.focus({ preventScroll: true });
-            }
-        }
-    }
-
-    function syncMenuState(): void {
-        const exportButton = document.querySelector<HTMLButtonElement>('[data-app-command="file:export"]');
-        if (!exportButton) {
-            return;
-        }
-
-        setDisabled(exportButton, !options.canExport());
-        const editorCommands: Array<[string, EditorCommand]> = [
-            ["edit:undo", "undo"],
-            ["edit:redo", "redo"],
-            ["edit:cut", "cut"],
-            ["edit:copy", "copy"],
-            ["edit:paste", "paste"],
-            ["edit:select-all", "select-all"],
-        ];
-        for (const [menuCommand, editorCommand] of editorCommands) {
-            const button = document.querySelector<HTMLButtonElement>(`[data-app-command="${menuCommand}"]`);
-            if (button) setDisabled(button, !options.canExecuteEditorCommand(editorCommand));
-        }
-
-        const sourceModeButton = document.querySelector<HTMLButtonElement>(
-            '[data-app-command="view:toggle-markdown-source"]',
-        );
-        if (sourceModeButton) {
-            setDisabled(sourceModeButton, !options.canToggleMarkdownEditingMode());
-            setChecked(sourceModeButton, options.isMarkdownSourceMode());
-        }
-
-        for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>("[data-editor-command]"))) {
-            const command = button.dataset.editorCommand as EditorCommand | undefined;
-            if (!command) continue;
-            setDisabled(button, !options.canExecuteEditorCommand(command));
-            if (button.getAttribute("role") === "menuitemcheckbox" || button.getAttribute("role") === "menuitemradio") {
-                setChecked(button, options.isEditorCommandActive(command));
             }
         }
     }
@@ -249,13 +211,4 @@ function showAboutDialog(): void {
 
 function assertUnhandledMenuCommand(command: never): never {
     throw new Error(`Unhandled app menu command: ${command}`);
-}
-
-function setDisabled(button: HTMLButtonElement, disabled: boolean): void {
-    if (button.disabled !== disabled) button.disabled = disabled;
-}
-
-function setChecked(button: HTMLButtonElement, checked: boolean): void {
-    const value = String(checked);
-    if (button.getAttribute("aria-checked") !== value) button.setAttribute("aria-checked", value);
 }

@@ -22,9 +22,8 @@ export function createSelectionController(options: SelectionControllerOptions) {
     };
 
     function handleEditorSelectionChange(): void {
-        if (!options.isComposingText()) {
-            syncStateSelectionFromDom();
-        }
+        if (options.isComposingText()) return;
+        syncStateSelectionFromDom();
         const selectionState = readSelectionState();
 
         if (selectionState.signature === lastSelectionSignature) {

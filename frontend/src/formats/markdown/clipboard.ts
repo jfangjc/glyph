@@ -1,3 +1,4 @@
+import { maxRichClipboardHtmlLength } from "../../bridge/clipboard";
 import { escapeHtml } from "../../utils/text";
 import { parseMarkdownFragment } from "./parse";
 import { renderInlineMarkdown } from "./inline";
@@ -9,8 +10,6 @@ import type {
     ClipboardReadResult,
     ClipboardSelectionContext,
 } from "../types";
-
-const maxClipboardHtmlLength = 5 * 1024 * 1024;
 
 export function createMarkdownClipboardPayload(context: ClipboardSelectionContext): ClipboardPayload {
     const markdown = context.state.doc.slice(context.from, context.to);
@@ -45,7 +44,7 @@ export function readMarkdownClipboardInsert(clipboard: DataTransfer | null | und
 
     if (clipboard.types.includes("text/html")) {
         const html = clipboard.getData("text/html");
-        if (html.length > maxClipboardHtmlLength) {
+        if (html.length > maxRichClipboardHtmlLength) {
             return {
                 kind: "plain",
                 value: normalizeLines(new DOMParser().parseFromString(html, "text/html").body.textContent ?? ""),

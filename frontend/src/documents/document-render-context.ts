@@ -2,12 +2,9 @@ import {
     configureBlockView,
     applyBlockProperties,
     createBlock,
-    findBlock,
     getBlockText,
     getTodoCheckbox,
     getEditorBlocks,
-    isRichTextBlockType,
-    readEditorBlock,
     readBlockCodeFence,
     readBlockCodeFenceClosed,
     readBlockHeadingId,
@@ -25,54 +22,51 @@ import { updateCodeBlockBodyContent } from "../editor/blocks/rendering";
 import { readBlockType, type ParsedBlock } from "../editor/blocks/model";
 import { applySourceBlockProjectionMetadata } from "../editor/core/projection";
 import type { EditorState, SourceBlock } from "../editor/core/types";
-import { focusBlockAtOffset, getCurrentBlockOffset } from "../editor/selection/caret";
 import { readEditorDom } from "../editor/editor-dom";
 import type {
     DocumentFormat,
-    DocumentReferenceMap,
     DocumentRenderContext,
 } from "../formats/types";
 
-let documentReferences: DocumentReferenceMap = {};
-let documentRenderContext: DocumentRenderContext = { references: documentReferences };
-let documentReferencesSnapshot = "{}";
-let referenceRerenderRequestId = 0;
+// Source properties share strict equality; DOM properties below have distinct defaults.
+const renderBlockPropertyKeys = [
+    "indent",
+    "checked",
+    "codeFence",
+    "codeFenceClosed",
+    "codeInfo",
+    "listMarker",
+    "listNumber",
+    "listDelimiter",
+    "todoMarker",
+    "quoteLevel",
+    "continuationPrefix",
+    "ruleMarker",
+    "mathSource",
+    "headingId",
+    "headingIdExplicit",
+    "headingSourcePrefix",
+    "headingSourceSuffix",
+] as const satisfies readonly (keyof ParsedBlock)[];
+
+let documentRenderContext: DocumentRenderContext = { references: {} };
+let documentRenderContextSnapshot = "{}";
 let footerHtml: string | undefined;
 
 export function loadDocumentRenderContext(
     format: DocumentFormat,
     blocks: ParsedBlock[],
-    fallbackReferences: DocumentReferenceMap,
 ): boolean {
-    const nextContext = readFormatRenderContext(format, blocks, fallbackReferences);
+    const nextContext = format.render.readRenderContext?.(blocks) ?? { references: {} };
+    // Snapshot before rendering: Markdown rendering mutates footnote cursors.
     const nextSnapshot = JSON.stringify(nextContext);
-    if (nextSnapshot === documentReferencesSnapshot) {
+    if (nextSnapshot === documentRenderContextSnapshot) {
         return false;
     }
 
     documentRenderContext = nextContext;
-    documentReferences = documentRenderContext.references;
-    documentReferencesSnapshot = nextSnapshot;
+    documentRenderContextSnapshot = nextSnapshot;
     return true;
-}
-
-export function syncDocumentReferences(activeFormat: DocumentFormat, activeFilePath: string | null): void {
-    const blocks = getEditorBlocks().map(readEditorBlock);
-    const nextContext = readFormatRenderContext(activeFormat, blocks, activeFormat.render.readReferences?.(blocks) ?? {});
-    const nextReferencesSnapshot = JSON.stringify(nextContext);
-    if (nextReferencesSnapshot === documentReferencesSnapshot) {
-        applyDocumentRenderContext(activeFormat);
-        syncDocumentFooter(activeFormat);
-        return;
-    }
-
-    documentRenderContext = nextContext;
-    documentReferences = nextContext.references;
-    documentReferencesSnapshot = nextReferencesSnapshot;
-    syncBlockViewContext(activeFormat, activeFilePath);
-    applyDocumentRenderContext(activeFormat);
-    syncDocumentFooter(activeFormat);
-    rerenderInlineContentBlocks();
 }
 
 export function syncBlockViewContext(format: DocumentFormat, activeFilePath: string | null = null): void {
@@ -131,22 +125,7 @@ function sourceBlocksEquivalent(
     return (
         block.type === previousBlock.type &&
         state.doc.slice(block.contentFrom, block.contentTo) === previous.doc.slice(previousBlock.contentFrom, previousBlock.contentTo) &&
-        block.indent === previousBlock.indent &&
-        block.checked === previousBlock.checked &&
-        block.codeFence === previousBlock.codeFence &&
-        block.codeFenceClosed === previousBlock.codeFenceClosed &&
-        block.codeInfo === previousBlock.codeInfo &&
-        block.listMarker === previousBlock.listMarker &&
-        block.listNumber === previousBlock.listNumber &&
-        block.listDelimiter === previousBlock.listDelimiter &&
-        block.todoMarker === previousBlock.todoMarker &&
-        block.quoteLevel === previousBlock.quoteLevel &&
-        block.ruleMarker === previousBlock.ruleMarker &&
-        block.mathSource === previousBlock.mathSource &&
-        block.headingId === previousBlock.headingId &&
-        block.headingIdExplicit === previousBlock.headingIdExplicit &&
-        block.headingSourcePrefix === previousBlock.headingSourcePrefix &&
-        block.headingSourceSuffix === previousBlock.headingSourceSuffix
+        renderBlockPropertyKeys.every((key) => block[key] === previousBlock[key])
     );
 }
 
@@ -160,6 +139,7 @@ function projectedBlockNeedsUpdate(element: HTMLElement, block: ParsedBlock): bo
         readBlockListDelimiter(element) !== block.listDelimiter ||
         readBlockTodoMarker(element) !== block.todoMarker ||
         readBlockQuoteLevel(element) !== block.quoteLevel ||
+        element.dataset.continuationPrefix !== block.continuationPrefix ||
         readBlockCodeFence(element) !== block.codeFence ||
         readBlockCodeFenceClosed(element) !== block.codeFenceClosed ||
         (element.dataset.codeInfo ?? "") !== (block.codeInfo ?? "") ||
@@ -219,7 +199,6 @@ export function readParsedBlocksFromSourceState(state: EditorState): ParsedBlock
 function createBlockViewContext(format: DocumentFormat, activeFilePath: string | null): void {
     configureBlockView({
         context: documentRenderContext,
-        references: documentReferences,
         activeFilePath,
         renderInlineContent: format.render.renderInline,
         renderPlainTextContent: format.render.renderPlainTextContent,
@@ -231,91 +210,14 @@ function createBlockViewContext(format: DocumentFormat, activeFilePath: string |
     });
 }
 
-function readFormatRenderContext(
-    format: DocumentFormat,
-    blocks: ParsedBlock[],
-    fallbackReferences: DocumentReferenceMap,
-): DocumentRenderContext {
-    return format.render.readRenderContext?.(blocks) ?? { references: fallbackReferences };
-}
-
 function readParsedBlockFromSourceState(state: EditorState, block: SourceBlock): ParsedBlock {
-    return {
+    const parsed: ParsedBlock = {
         type: block.type,
         text: state.doc.slice(block.contentFrom, block.contentTo),
-        indent: block.indent,
-        checked: block.checked,
-        codeFence: block.codeFence,
-        codeFenceClosed: block.codeFenceClosed,
-        codeInfo: block.codeInfo,
-        listMarker: block.listMarker,
-        listNumber: block.listNumber,
-        listDelimiter: block.listDelimiter,
-        todoMarker: block.todoMarker,
-        quoteLevel: block.quoteLevel,
-        ruleMarker: block.ruleMarker,
-        mathSource: block.mathSource,
-        headingId: block.headingId,
-        headingIdExplicit: block.headingIdExplicit,
-        headingSourcePrefix: block.headingSourcePrefix,
-        headingSourceSuffix: block.headingSourceSuffix,
     };
-}
-
-function rerenderInlineContentBlocks(): void {
-    const requestId = referenceRerenderRequestId + 1;
-    referenceRerenderRequestId = requestId;
-
-    const selection = document.getSelection();
-    const activeBlock = findBlock(selection?.focusNode ?? null);
-    const activeOffset = activeBlock ? getCurrentBlockOffset(activeBlock) : null;
-    const richTextBlocks = getEditorBlocks().filter((block) => isRichTextBlockType(readBlockType(block.dataset.type)));
-
-    if (richTextBlocks.length <= 100) {
-        for (const block of richTextBlocks) {
-            setBlockText(block, getBlockText(block));
-        }
-
-        restoreActiveBlockFocus(activeBlock, activeOffset);
-        return;
+    function copyProperty<K extends typeof renderBlockPropertyKeys[number]>(key: K): void {
+        parsed[key] = block[key];
     }
-
-    if (activeBlock && richTextBlocks.includes(activeBlock)) {
-        setBlockText(activeBlock, getBlockText(activeBlock));
-        restoreActiveBlockFocus(activeBlock, activeOffset);
-    }
-
-    const remainingBlocks = richTextBlocks.filter((block) => block !== activeBlock);
-    rerenderInlineContentBlocksInChunks(remainingBlocks, requestId);
-}
-
-function rerenderInlineContentBlocksInChunks(blocks: HTMLElement[], requestId: number): void {
-    const chunkSize = 50;
-    let cursor = 0;
-
-    const renderNextChunk = () => {
-        if (requestId !== referenceRerenderRequestId) {
-            return;
-        }
-
-        const end = Math.min(blocks.length, cursor + chunkSize);
-        for (; cursor < end; cursor += 1) {
-            const block = blocks[cursor];
-            if (block.isConnected) {
-                setBlockText(block, getBlockText(block));
-            }
-        }
-
-        if (cursor < blocks.length) {
-            window.requestAnimationFrame(renderNextChunk);
-        }
-    };
-
-    window.requestAnimationFrame(renderNextChunk);
-}
-
-function restoreActiveBlockFocus(activeBlock: HTMLElement | null, activeOffset: number | null): void {
-    if (activeBlock?.isConnected && activeOffset !== null) {
-        focusBlockAtOffset(activeBlock, Math.min(activeOffset, getBlockText(activeBlock).length), { scroll: "none" });
-    }
+    renderBlockPropertyKeys.forEach(copyProperty);
+    return parsed;
 }

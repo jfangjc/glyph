@@ -19,6 +19,7 @@ export type DocumentReferenceMap = Record<string, DocumentReference>;
 export type DocumentRenderContext = {
     references: DocumentReferenceMap;
     data?: unknown;
+    inlineContinuationPrefix?: string;
 };
 
 export type DocumentPreviewContext = {
@@ -64,7 +65,6 @@ export type DocumentFormatDescriptor = {
 };
 
 export type RenderCapability = {
-    readReferences?: (blocks: ParsedBlock[]) => DocumentReferenceMap;
     readRenderContext?: (blocks: ParsedBlock[]) => DocumentRenderContext;
     applyRenderContext?: (blocks: HTMLElement[], context: DocumentRenderContext) => void;
     renderDocumentFooter?: (context: DocumentRenderContext) => string;

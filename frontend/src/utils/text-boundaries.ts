@@ -1,5 +1,3 @@
-export type TextBoundaryDirection = "backward" | "forward";
-
 const graphemeSegmenter = createSegmenter("grapheme");
 const wordSegmenter = createSegmenter("word");
 

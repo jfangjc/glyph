@@ -19,7 +19,6 @@ import type { DocumentFormat, DocumentFormatDescriptor } from "../types";
 import { readMarkdownBlockSource } from "./block-source";
 import { hydrateMarkdownImagePreviews } from "./images";
 import { renderInlineMarkdown } from "./inline";
-import { readMarkdownReferences } from "./parse";
 import {
     applyMarkdownRenderContext,
     readMarkdownRenderContext,
@@ -40,7 +39,6 @@ export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescripto
         descriptor,
         index: { build: buildBlockIndex },
         render: {
-            readReferences: readMarkdownReferences,
             readRenderContext: readMarkdownRenderContext,
             applyRenderContext: applyMarkdownRenderContext,
             renderDocumentFooter: renderMarkdownDocumentFooter,

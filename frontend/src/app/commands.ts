@@ -1,7 +1,22 @@
-import type { AppMenuCommand } from "./keymap";
-import type { EditorCommand } from "../editor/controllers/editor-input-controller";
-export type CommandMetadata = { id: AppMenuCommand; label: string; group: string; editor?: EditorCommand };
-export const commands: CommandMetadata[] = [
+import type { BlockFormatCommand, InsertContentCommand } from "../formats/types";
+
+export type EditorCommand =
+    | "undo"
+    | "redo"
+    | "select-all"
+    | "bold"
+    | "italic"
+    | "strike"
+    | "inline-code"
+    | "link"
+    | `block:${BlockFormatCommand}`
+    | `insert:${InsertContentCommand}`
+    | "copy"
+    | "cut"
+    | "paste";
+
+export type CommandMetadata = { id: string; label: string; group: string; editor?: EditorCommand };
+export const commands = [
     {
         id: "file:new",
         label: "New",
@@ -36,31 +51,37 @@ export const commands: CommandMetadata[] = [
         id: "edit:undo",
         label: "Undo",
         group: "Edit",
+        editor: "undo",
     },
     {
         id: "edit:redo",
         label: "Redo",
         group: "Edit",
+        editor: "redo",
     },
     {
         id: "edit:cut",
         label: "Cut",
         group: "Edit",
+        editor: "cut",
     },
     {
         id: "edit:copy",
         label: "Copy",
         group: "Edit",
+        editor: "copy",
     },
     {
         id: "edit:paste",
         label: "Paste",
         group: "Edit",
+        editor: "paste",
     },
     {
         id: "edit:select-all",
         label: "Select All",
         group: "Edit",
+        editor: "select-all",
     },
     {
         id: "edit:find",
@@ -210,4 +231,6 @@ export const commands: CommandMetadata[] = [
         label: "About Glyph",
         group: "Help",
     },
-];
+] as const satisfies readonly CommandMetadata[];
+
+export type AppMenuCommand = (typeof commands)[number]["id"];

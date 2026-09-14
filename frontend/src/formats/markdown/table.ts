@@ -25,29 +25,6 @@ export type MarkdownTableCellBoundary = {
     end: number;
 };
 
-export function createMarkdownTableFromHeader(headerLine: string): { text: string; firstBodyCellOffset: number } | null {
-    if (!isPotentialTableRow(headerLine)) {
-        return null;
-    }
-
-    const header = splitTableRow(headerLine).map((cell) => cell.trim());
-    if (header.length < 2 || header.every((cell) => cell === "")) {
-        return null;
-    }
-
-    const text = formatMarkdownTableSource([
-        serializeTableRow(header),
-        serializeTableRow(header.map(() => ":---")),
-        serializeTableRow(header.map(() => "")),
-    ].join("\n"));
-    const firstBodyCellOffset = readMarkdownTableCellStart(text, 2, 0);
-
-    return {
-        text,
-        firstBodyCellOffset: firstBodyCellOffset ?? text.length,
-    };
-}
-
 export function readMarkdownTable(lines: string[], index: number): MarkdownTableBlock | null {
     const headerLine = lines[index];
     const delimiterLine = lines[index + 1];
@@ -104,10 +81,6 @@ export function formatMarkdownTableSource(text: string): string {
         serializeTableDelimiterRow(table.alignments, widths),
         ...table.rows.map((row) => serializeAlignedTableRow(row, widths, table.alignments)),
     ].join("\n");
-}
-
-export function readMarkdownTableCellStart(text: string, lineIndex: number, cellIndex: number): number | null {
-    return readMarkdownTableCellRange(text, lineIndex, cellIndex)?.start ?? null;
 }
 
 export function readMarkdownTableCellRange(
@@ -304,51 +277,7 @@ function isPotentialTableRow(line: string | undefined): line is string {
 }
 
 function splitTableRow(line: string): string[] {
-    let trimmed = line.trim();
-    if (trimmed.startsWith("|")) {
-        trimmed = trimmed.slice(1);
-    }
-
-    if (trimmed.endsWith("|") && !isEscapedAt(trimmed, trimmed.length - 1)) {
-        trimmed = trimmed.slice(0, -1);
-    }
-
-    const cells: string[] = [];
-    let cell = "";
-    let codeMarkerLength = 0;
-
-    for (let index = 0; index < trimmed.length; index += 1) {
-        const character = trimmed[index];
-
-        if (character === "`" && !isEscapedAt(trimmed, index)) {
-            const markerLength = countRun(trimmed, index, "`");
-            cell += trimmed.slice(index, index + markerLength);
-            if (codeMarkerLength === 0) {
-                codeMarkerLength = markerLength;
-            } else if (codeMarkerLength === markerLength) {
-                codeMarkerLength = 0;
-            }
-            index += markerLength - 1;
-            continue;
-        }
-
-        if (codeMarkerLength === 0 && character === "\\" && trimmed[index + 1] === "|") {
-            cell += "|";
-            index += 1;
-            continue;
-        }
-
-        if (codeMarkerLength === 0 && character === "|") {
-            cells.push(cell);
-            cell = "";
-            continue;
-        }
-
-        cell += character;
-    }
-
-    cells.push(cell);
-    return cells;
+    return readMarkdownTableRowCellRanges(line, 0).map(({ start, end }) => line.slice(start, end));
 }
 
 function countRun(text: string, index: number, character: string): number {
@@ -407,26 +336,12 @@ function createDelimiterCell(alignment: TableAlignment, width: number): string {
 
 export function readMarkdownTableRowCellRanges(line: string, lineStart: number): Array<{ start: number; end: number }> {
     const ranges: Array<{ start: number; end: number }> = [];
-    const leadingPipe = line.startsWith("|");
-    let cellStart = leadingPipe ? 1 : 0;
-    let codeMarkerLength = 0;
+    const first = line.search(/\S/);
+    const leadingPipe = first >= 0 && line[first] === "|";
+    let cellStart = leadingPipe ? first + 1 : 0;
+    let trailingPipe = false;
 
-    for (let index = cellStart; index <= line.length; index += 1) {
-        if (index < line.length && line[index] === "`" && !isEscapedAt(line, index)) {
-            const markerLength = countRun(line, index, "`");
-            if (codeMarkerLength === 0) {
-                codeMarkerLength = markerLength;
-            } else if (codeMarkerLength === markerLength) {
-                codeMarkerLength = 0;
-            }
-            index += markerLength - 1;
-            continue;
-        }
-
-        if (index < line.length && (line[index] !== "|" || codeMarkerLength > 0 || isEscapedAt(line, index))) {
-            continue;
-        }
-
+    for (const index of [...readTableSeparators(line).filter(index => index >= cellStart), line.length]) {
         const rawCell = line.slice(cellStart, index);
         let start = cellStart;
         let end = index;
@@ -435,20 +350,51 @@ export function readMarkdownTableRowCellRanges(line: string, lineStart: number):
             end -= rawCell.endsWith(" ") ? 1 : 0;
             end = Math.max(start, end);
         } else {
-            while (start < end && line[start] === " ") {
+            while (start < end && /\s/.test(line[start])) {
                 start += 1;
             }
-            while (end > start && line[end - 1] === " ") {
+            while (end > start && /\s/.test(line[end - 1])) {
                 end -= 1;
             }
         }
         ranges.push({ start: lineStart + start, end: lineStart + end });
+        if (index < line.length) trailingPipe = line.slice(index + 1).trim() === "";
         cellStart = index + 1;
     }
 
-    if (leadingPipe && ranges.length > 0 && ranges[ranges.length - 1].start === lineStart + line.length) {
+    if (trailingPipe && ranges.length > 1) {
         ranges.pop();
     }
 
     return ranges;
+}
+
+/** Cell inputs edit Markdown source. Escape only pipes that would split a row. */
+export function escapeMarkdownTableCell(value: string): string {
+    const line = value.replace(/\r\n?|\n/g, " ");
+    const separators = new Set(readTableSeparators(line));
+    return line.split("").map((character, index) => separators.has(index) ? `\\${character}` : character).join("");
+}
+
+// A pipe separates cells iff it has even escape parity and is outside a
+// matched code span. Unmatched backticks remain literal source characters.
+function readTableSeparators(line: string): number[] {
+    const separators: number[] = [];
+    for (let index = 0; index < line.length; index += 1) {
+        if (line[index] === "`" && !isEscapedAt(line, index)) {
+            const length = countRun(line, index, "`");
+            let closing = index + length;
+            while (closing < line.length) {
+                closing = line.indexOf("`", closing);
+                if (closing < 0) break;
+                const run = countRun(line, closing, "`");
+                if (run === length) break;
+                closing += run;
+            }
+            index = closing >= 0 && closing < line.length ? closing + length - 1 : index + length - 1;
+        } else if (line[index] === "|" && !isEscapedAt(line, index)) {
+            separators.push(index);
+        }
+    }
+    return separators;
 }

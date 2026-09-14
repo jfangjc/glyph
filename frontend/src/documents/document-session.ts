@@ -1,5 +1,5 @@
 import type { DocumentFile } from "../bridge/types";
-import { syncDocumentWindowTitle } from "../app/window-title";
+import { cancelPendingEdit, flushPendingEdit, hasDirtyPendingEdit } from "../editor/core/pending-edit";
 import {
     clearSourceHistory,
     configureBlockIndexBuilder,
@@ -19,7 +19,6 @@ import {
 } from "../editor/core/projection";
 import { readEditorDom } from "../editor/editor-dom";
 import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
-import { extensionFromPath, titleFromFileName } from "../formats/file-names";
 import type { DocumentFormat } from "../formats/types";
 import { createSourceViewDocumentFormat } from "../formats/source/document";
 import { pruneUnreferencedPendingImages, resetPendingImagesForSession } from "../formats/markdown/pending-images";
@@ -31,9 +30,7 @@ import {
     replaceEditorBlocksFromSourceState,
     syncBlockViewContext as syncRenderBlockViewContext,
     syncDocumentFooter,
-    syncDocumentReferences,
 } from "./document-render-context";
-import { syncDocumentPreview } from "./document-preview";
 import {
     beginDocumentSession,
     documentState,
@@ -46,7 +43,6 @@ import { fileNameFromPath } from "../utils/text";
 let sourceStateIntegrationInstalled = false;
 let sourceViewFormat: DocumentFormat | null = null;
 let initializingEditor = false;
-let formatUiSignature = "";
 
 export function getActiveDocumentFormat(): DocumentFormat {
     return getDocumentFormatById(documentState.activeFormatId);
@@ -62,6 +58,7 @@ export function toggleMarkdownEditingMode(): void {
         return;
     }
 
+    flushPendingEdit();
     syncStateSelectionFromDom();
     clearSourceReveal();
     const { editor, shell } = readEditorDom();
@@ -103,8 +100,9 @@ export function installSourceStateDocumentIntegration(onContentChanged: () => vo
 }
 
 export function loadDocument(documentFile: DocumentFile): void {
+    cancelPendingEdit();
     const format = getDocumentFormatForPath(documentFile.path || documentFile.name);
-    const { editor, title } = readEditorDom();
+    const { editor } = readEditorDom();
     const fileName = documentFile.name || format.descriptor.defaultFileName;
     const decoded = decodeDocumentSource(documentFile.content);
 
@@ -118,13 +116,11 @@ export function loadDocument(documentFile: DocumentFile): void {
     sourceViewFormat = null;
     resetPendingImagesForSession();
     delete editor.dataset.virtualEofCaret;
-    title.value = titleFromFileName(fileName);
     initializeDocumentEditor(decoded.source);
     clearSourceHistory();
     recordSavedDocumentContent(serializeDocument());
     documentState.hasUnsavedChanges = false;
     notifyDocumentStateChanged();
-    syncDocumentWindowTitle();
 }
 
 export function serializeDocument(): string {
@@ -143,7 +139,6 @@ export function commitSavedDocument(path: string, savedContent: string): void {
     documentState.committedFileName = documentState.fileName;
     documentState.fileNameDirty = false;
     recordSavedDocumentContent(savedContent);
-    readEditorDom().title.value = titleFromFileName(documentState.fileName);
 
     if (formatChanged) {
         if (nextFormat.descriptor.id !== "markdown") {
@@ -152,19 +147,19 @@ export function commitSavedDocument(path: string, savedContent: string): void {
         sourceViewFormat = null;
         initializeDocumentEditor(getDocumentSource(), getEditorState().selection);
     } else {
-        syncBlockViewContext();
+        const format = getActiveEditorFormat();
+        syncRenderBlockViewContext(format, documentState.activeFilePath);
+        syncDocumentFooter(format);
     }
 
     syncEditorDirtyState();
-    syncDocumentWindowTitle();
 }
 
 export function syncEditorDirtyState(): void {
     documentState.hasUnsavedChanges =
         getDocumentSource() !== documentState.lastSavedSource ||
-        documentState.fileNameDirty;
+        documentState.fileNameDirty || hasDirtyPendingEdit();
     notifyDocumentStateChanged();
-    syncDocumentWindowTitle();
 }
 
 function initializeDocumentEditor(source: string, selection?: ReturnType<typeof getEditorState>["selection"]): void {
@@ -181,45 +176,6 @@ function initializeDocumentEditor(source: string, selection?: ReturnType<typeof 
     }
     invalidateMarkdownImageCache();
     syncDocumentProjectionFromState(getEditorState());
-    syncDocumentReferences(format, documentState.activeFilePath);
-    syncDocumentFormatUi();
-}
-
-export function syncBlockViewContext(): void {
-    syncRenderBlockViewContext(getActiveEditorFormat(), documentState.activeFilePath);
-}
-
-export function syncDocumentFormatUi(): void {
-    const { shell, surface, title, extension, markdownModeToggle } = readEditorDom();
-    const format = getActiveDocumentFormat();
-
-    const activeExtension = extensionFromPath(documentState.fileName) || format.descriptor.defaultExtension;
-    const signature = JSON.stringify([format.descriptor.id, format.descriptor.editableTitle, activeExtension, documentState.editingMode]);
-    if (signature !== formatUiSignature) {
-        formatUiSignature = signature;
-        title.hidden = false;
-        title.readOnly = !format.descriptor.editableTitle;
-        title.setAttribute("aria-readonly", String(title.readOnly));
-        extension.textContent = `.${activeExtension}`;
-        extension.setAttribute("aria-label", `${activeExtension} file extension`);
-        surface.dataset.documentFormat = format.descriptor.id;
-        shell.dataset.documentFormat = format.descriptor.id;
-        surface.dataset.editingMode = documentState.editingMode;
-        shell.dataset.editingMode = documentState.editingMode;
-        const canToggleMarkdownMode = format.descriptor.id === "markdown";
-        markdownModeToggle.hidden = !canToggleMarkdownMode;
-        markdownModeToggle.textContent = isMarkdownSourceMode() ? "Source" : "Live Preview";
-        markdownModeToggle.setAttribute("aria-pressed", String(isMarkdownSourceMode()));
-        markdownModeToggle.title = isMarkdownSourceMode()
-            ? "Switch to Markdown Live Preview"
-            : "Switch to Markdown source mode";
-    }
-
-    syncDocumentPreview(format, {
-        activeFilePath: documentState.activeFilePath,
-        isSavingDocument: documentState.isSavingDocument,
-    });
-    syncDocumentFooter(getActiveEditorFormat());
 }
 
 function syncDocumentProjectionFromState(
@@ -233,7 +189,7 @@ function syncDocumentProjectionFromState(
     const renderContextStartedAt = readPerformanceNow();
     const blocks = refreshRenderContext ? readParsedBlocksFromSourceState(state) : null;
     const renderContextChanged = blocks
-        ? loadDocumentRenderContext(format, blocks, format.render.readReferences?.(blocks) ?? {})
+        ? loadDocumentRenderContext(format, blocks)
         : false;
     measureEditorPerformance("glyph:render-context", renderContextStartedAt);
     if (renderContextChanged || !previous) {
@@ -241,13 +197,9 @@ function syncDocumentProjectionFromState(
     }
     replaceEditorBlocksFromSourceState(state, previous, renderContextChanged);
     syncInlineTypingSourceReveal(state, transaction);
-    if (renderContextChanged) {
+    if (renderContextChanged || !previous) {
         applyDocumentRenderContext(format);
         syncDocumentFooter(format);
-        syncDocumentPreview(format, {
-            activeFilePath: documentState.activeFilePath,
-            isSavingDocument: documentState.isSavingDocument,
-        });
     }
     const selectionStartedAt = readPerformanceNow();
     syncDomSelectionFromState({ focus: "preserve" });

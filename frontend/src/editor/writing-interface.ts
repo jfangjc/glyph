@@ -2,20 +2,23 @@ import { createDocumentOutlinePanel } from "./document-outline";
 import "./writing-interface.css";
 import { commands } from "../app/commands";
 import { readShortcutCommand, readShortcutLabel, type AppMenuCommand } from "../app/keymap";
-import { appMenuCommandEvent } from "../platform/window-controls/window-controls";
 import { documentState, documentStateChangedEvent } from "../documents/document-state";
 import { canUseDesktopFileSystem, saveCurrentDocument } from "../documents/document-actions";
 import { saveAndCompileLatex } from "../formats/latex/preview";
-import { getActiveDocumentFormat, isMarkdownSourceMode, toggleMarkdownEditingMode } from "../documents/document-session";
-import type { FileTreeController } from "../documents/file-tree";
-import type { createEditorInputController } from "./controllers/editor-input-controller";
+import { isMarkdownSourceMode, toggleMarkdownEditingMode } from "../documents/document-session";
+import { installFileTree } from "../documents/file-tree";
+import type { createAppMenuController } from "./controllers/app-menu-controller";
 import { createSelectionBookmark, dispatch } from "./core/store";
 import { syncDomSelectionFromState } from "./core/projection";
 
-type Options = { fileTree: FileTreeController; inputController: ReturnType<typeof createEditorInputController> };
+type Options = {
+    openDocumentPath: (path: string) => Promise<void>;
+    readCommandState: ReturnType<typeof createAppMenuController>["readCommandState"];
+    executeCommand: (command: AppMenuCommand, focusOwner: Element | null) => void;
+};
 type Item = { id: string; label: string; group: string; shortcut?: string | null; enabled: boolean; active?: boolean; run: () => void };
 
-export function installWritingInterface(options: Options): void {
+export function installWritingInterface(options: Options) {
     const header = document.getElementById("writing-header")!;
     const editor = document.getElementById("editor")!;
     const panel = document.createElement("section");
@@ -47,12 +50,22 @@ export function installWritingInterface(options: Options): void {
     const titleRow = document.querySelector<HTMLElement>(".document-title-row")!;
     const titleHome = titleRow.parentElement!;
     titleRow.hidden = true;
-    const fileFrame = document.querySelector<HTMLElement>(".file-tree-frame")!;
+    const fileContent = document.createElement("section");
+    fileContent.setAttribute("aria-label", "File tree");
+    const fileTree = installFileTree(fileContent, {
+        openDocumentPath: options.openDocumentPath,
+        focusSearch: () => {
+            if (!panel.hidden && kind === "files") panel.querySelector<HTMLElement>("#explorer-query")?.focus({ preventScroll: true });
+        },
+        showFiles: () => {
+            if (panel.hidden || kind !== "files") open("files");
+        },
+    });
     const outline = createDocumentOutlinePanel();
     const parking = document.createElement("div");
     parking.hidden = true;
     document.body.append(parking);
-    parking.append(fileFrame, outline);
+    parking.append(fileContent, outline);
     let kind = "";
     let group = "";
     let initiator: HTMLElement | null = null;
@@ -106,13 +119,8 @@ export function installWritingInterface(options: Options): void {
             label: command.id === "file:open-directory" ? "Open Folder" : command.label,
             group: command.group,
             shortcut: readShortcutLabel(command.id),
-            enabled: command.editor ? options.inputController.canExecuteCommand(command.editor)
-                : command.id === "file:export" ? Boolean(getActiveDocumentFormat().export)
-                : command.id.startsWith("file:") ? (command.id === "file:new" || native)
-                : command.id === "view:toggle-markdown-source" ? markdown
-                : ["edit:undo", "edit:redo", "edit:cut", "edit:copy"].includes(command.id) ? options.inputController.canExecuteCommand(command.id.slice(5) as "undo" | "redo" | "cut" | "copy") : true,
-            active: command.editor ? options.inputController.isCommandActive(command.editor) : command.id === "view:toggle-markdown-source" ? isMarkdownSourceMode() : undefined,
-            run: () => { if (command.id === "file:open-directory") { open("files"); void options.fileTree.openDirectory().catch(error => note(String(error))); } else dispatchCommand(command.id); },
+            ...options.readCommandState(command.id),
+            run: () => dispatchCommand(command.id),
         }));
         for (const mode of ["Live Preview", "Source"]) result.push({ id: `markdown:${mode}`, label: `Markdown: ${mode}`, group: "View", enabled: markdown, active: markdown && isMarkdownSourceMode() === (mode === "Source"), run: () => { if (isMarkdownSourceMode() !== (mode === "Source")) toggleMarkdownEditingMode(); } });
         for (const mode of ["source", "split", "pdf"]) result.push({ id: `latex:${mode}`, label: `LaTeX: ${mode.toUpperCase() === "PDF" ? "PDF" : mode[0].toUpperCase() + mode.slice(1)}`, group: "View", enabled: latex && (mode !== "split" || window.innerWidth > 700), active: latex && latexView === mode, run: () => { latexView = mode; sync(); if (mode === "pdf") document.getElementById("latex-preview")?.focus(); } });
@@ -123,7 +131,7 @@ export function installWritingInterface(options: Options): void {
         return result;
     }
     function dispatchCommand(command: AppMenuCommand): void {
-        window.dispatchEvent(new CustomEvent(appMenuCommandEvent, { detail: { command, focusOwner: editor } }));
+        options.executeCommand(command, editor);
     }
     function restoreSelection(): void {
         const selection = session === documentState.sessionId ? bookmark?.read() : null;
@@ -147,8 +155,8 @@ export function installWritingInterface(options: Options): void {
         nav.setAttribute("aria-expanded", "false");
     }
     function park(): void {
-        parking.append(fileFrame, outline);
-        options.fileTree.close();
+        parking.append(fileContent, outline);
+        fileTree.setVisible(false);
         titleRow.hidden = true;
         titleHome.prepend(titleRow);
     }
@@ -269,8 +277,8 @@ export function installWritingInterface(options: Options): void {
         const openFolder = button("Open Folder", () => {
             search.value = "";
             update();
-            void options.fileTree.openDirectory().then(() => {
-                if (kind === "files") options.fileTree.setQuery(search.value);
+            void fileTree.openDirectory().then(() => {
+                if (kind === "files") fileTree.setQuery(search.value);
             }).catch(error => noteResult(String(error)));
         });
         openFile.disabled = openFolder.disabled = !canUseDesktopFileSystem();
@@ -282,7 +290,7 @@ export function installWritingInterface(options: Options): void {
             message.textContent = text;
             results.append(message);
         };
-        function update(): void {
+        function update(deferFileQuery = false): void {
             const previousKind = kind;
             if (search.value.startsWith(">")) kind = "commands";
             else if (search.value.startsWith("@")) kind = "outline";
@@ -298,8 +306,8 @@ export function installWritingInterface(options: Options): void {
                 control.setAttribute("aria-selected", String(selected));
                 control.tabIndex = selected ? 0 : -1;
             });
-            parking.append(fileFrame, outline);
-            if (kind !== "files") options.fileTree.close();
+            parking.append(fileContent, outline);
+            if (kind !== "files") fileTree.setVisible(false);
             results.replaceChildren();
             if (kind === "commands") {
                 renderItems(results, query);
@@ -312,19 +320,20 @@ export function installWritingInterface(options: Options): void {
                     : "No headings yet. Add a Markdown heading to build an outline.");
                 else if (headings.every(item => item.hidden)) noteResult("No matching headings.");
             } else {
-                results.append(fileFrame);
-                options.fileTree.show();
-                options.fileTree.setQuery(query);
+                results.append(fileContent);
+                fileTree.setVisible(true);
+                fileTree.setQuery(query, deferFileQuery);
                 if (!canUseDesktopFileSystem()) {
-                    fileFrame.querySelectorAll<HTMLButtonElement>("[data-file-tree-open-directory]").forEach(button => button.disabled = true);
+                    fileContent.querySelectorAll<HTMLButtonElement>("[data-file-tree-open-directory]").forEach(button => button.disabled = true);
                     noteResult("File and folder dialogs are available in the desktop app.");
                 }
             }
         }
-        search.addEventListener("input", event => { if (!(event as InputEvent).isComposing) update(); });
-        search.addEventListener("compositionend", update);
+        search.addEventListener("input", event => { if (!(event as InputEvent).isComposing) update(true); });
+        search.addEventListener("compositionend", () => update());
         search.addEventListener("keydown", event => {
             if (event.isComposing || !["ArrowDown", "Enter"].includes(event.key)) return;
+            if (kind === "files") fileTree.flushQuery();
             const candidates = Array.from(results.querySelectorAll<HTMLButtonElement>(kind === "files" ? "[data-file-tree-selectable=\"true\"]" : "button:not(:disabled)")).filter(button => button.getClientRects().length > 0);
             const first = (kind === "files" ? candidates.find(button => button.dataset.selected === "true") : null) ?? candidates[0];
             if (!first) return;
@@ -431,6 +440,20 @@ export function installWritingInterface(options: Options): void {
         }
     }, true);
     sync();
+    return {
+        close,
+        openDirectory: async () => {
+            open("files");
+            await fileTree.openDirectory();
+        },
+        toggleFiles: () => {
+            if (!panel.hidden && kind === "files") close();
+            else {
+                open("files");
+                fileTree.refresh();
+            }
+        },
+    };
 }
 function button(label: string, action: () => void): HTMLButtonElement {
     const element = document.createElement("button");

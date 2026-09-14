@@ -1,42 +1,5 @@
-export type AppMenuCommand =
-    | "file:new"
-    | "file:open"
-    | "file:open-directory"
-    | "file:save"
-    | "file:save-as"
-    | "file:export"
-    | "edit:undo"
-    | "edit:redo"
-    | "edit:cut"
-    | "edit:copy"
-    | "edit:paste"
-    | "edit:select-all"
-    | "edit:find"
-    | "edit:replace"
-    | "view:toggle-file-tree"
-    | "view:toggle-markdown-source"
-    | "view:zoom-in"
-    | "view:zoom-out"
-    | "view:zoom-reset"
-    | "format:bold"
-    | "format:italic"
-    | "format:strike"
-    | "format:inline-code"
-    | "format:link"
-    | "format:block:paragraph"
-    | "format:block:heading-1"
-    | "format:block:heading-2"
-    | "format:block:heading-3"
-    | "format:block:list"
-    | "format:block:ordered-list"
-    | "format:block:todo"
-    | "format:block:quote"
-    | "format:block:code"
-    | "insert:table"
-    | "insert:image"
-    | "insert:math"
-    | "insert:rule"
-    | "help:about";
+import type { AppMenuCommand } from "./commands";
+export type { AppMenuCommand } from "./commands";
 
 export type ShellCommand = "ui:commands" | "ui:files" | "ui:outline" | "ui:focus";
 export type AppCommand = AppMenuCommand | ShellCommand;
@@ -394,4 +357,9 @@ function readBindingSignature(binding: ShortcutBinding): string {
         shift: binding.shift ?? false,
         alt: binding.alt ?? false,
     });
+}
+
+export function isShellCommand(command: AppCommand): command is ShellCommand {
+    return command === "ui:commands" || command === "ui:files" ||
+        command === "ui:outline" || command === "ui:focus";
 }

@@ -22,3 +22,7 @@ export function fileNameFromPath(path: string): string {
 export function escapeHtml(value: string): string {
     return value.replace(/[&<>"']/g, (character) => htmlEscapes[character]);
 }
+
+export function normalizeHeadingId(value: string | undefined): string {
+    return (value ?? "").trim().replace(/\s+/g, "-");
+}

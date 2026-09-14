@@ -33,6 +33,7 @@ export type ParsedBlock = {
     listDelimiter?: "." | ")";
     todoMarker?: "[ ]" | "[x]" | "[X]";
     quoteLevel?: number;
+    continuationPrefix?: string;
     ruleMarker?: string;
     mathSource?: string;
     headingId?: string;

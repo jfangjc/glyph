@@ -38,7 +38,3 @@ export function countIndentColumns(value: string): number {
 
     return columns;
 }
-
-export function serializeListIndent(indent: number | undefined): string {
-    return "  ".repeat(Math.max(0, Math.min(indent ?? 0, 3)));
-}

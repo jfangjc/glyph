@@ -80,17 +80,6 @@ export function getCaretOffset(root: HTMLElement, anchorNode: Node, anchorOffset
     return getRenderedContentBoundaryOffset(root, anchorNode, anchorOffset);
 }
 
-export function getCurrentBlockOffset(block: HTMLElement): number {
-    const content = getBlockContent(block);
-    const selection = document.getSelection();
-
-    if (selection?.focusNode && (selection.focusNode === content || content.contains(selection.focusNode))) {
-        return getCaretOffset(content, selection.focusNode, selection.focusOffset);
-    }
-
-    return getBlockText(block).length;
-}
-
 export function getTextPosition(root: HTMLElement, offset: number): { node: Node; offset: number } {
     const position = findRenderedContentTextPosition(root, Math.max(0, offset));
 

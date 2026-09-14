@@ -1,5 +1,5 @@
 import { headingTypes, type BlockType, type ParsedBlock } from "../../editor/blocks/model";
-import { escapeHtml } from "../../utils/text";
+import { escapeHtml, normalizeHeadingId } from "../../utils/text";
 import type { DocumentRenderContext } from "../types";
 import { normalizeReferenceLabel } from "./references";
 import { renderInlineMarkdown } from "./inline";
@@ -152,10 +152,6 @@ function readMarkdownHeadingIds(blocks: ParsedBlock[]): string[] {
     }
 
     return ids;
-}
-
-function normalizeHeadingId(value: string | undefined): string {
-    return (value ?? "").trim().replace(/\s+/g, "-");
 }
 
 function readMarkdownFootnotes(blocks: ParsedBlock[]): MarkdownRenderData["footnotes"] {

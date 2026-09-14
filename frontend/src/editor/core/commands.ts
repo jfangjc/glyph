@@ -6,7 +6,23 @@ import {
     previousLineBoundary,
     previousWordBoundary,
 } from "../../utils/text-boundaries";
-import type { EditorState, Transaction } from "./types";
+import type { Change, EditorState, Transaction } from "./types";
+
+export function createIndentSourceTransaction(state: EditorState, outdent: boolean): Transaction {
+    const from = Math.min(state.selection.anchor, state.selection.head);
+    const to = Math.max(state.selection.anchor, state.selection.head);
+    if (from === to && !outdent) return createInsertTextTransaction(state, "\t");
+    const changes: Change[] = [];
+    let start = from === 0 ? 0 : state.doc.lastIndexOf("\n", from - 1) + 1;
+    do {
+        const width = state.doc.slice(start).match(/^(?:\t| {1,4})/)?.[0].length ?? 0;
+        if (!outdent || width) changes.push({ from: start, to: start + (outdent ? width : 0), insert: outdent ? "" : "\t" });
+        const next = state.doc.indexOf("\n", start);
+        if (next < 0) break;
+        start = next + 1;
+    } while (start < to);
+    return { changes, annotations: { userEvent: "input", historyMode: "discrete" } };
+}
 
 export type DeleteDirection = "backward" | "forward";
 export type DeleteGranularity = "grapheme" | "word" | "soft-line" | "hard-line";

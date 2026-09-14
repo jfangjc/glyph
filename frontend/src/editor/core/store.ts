@@ -45,6 +45,9 @@ const selectionBookmarks = new Set<MutableSelectionBookmark>();
 let isRestoringHistory = false;
 let isNotifying = false;
 let queuedTransactions: Transaction[] = [];
+let documentRevision = 0;
+
+export function getDocumentRevision(): number { return documentRevision; }
 
 export function getEditorState(): EditorState {
     return editorState;
@@ -76,6 +79,7 @@ export function replaceDocumentState(
     source: string,
     selection: SelectionRange = { anchor: 0, head: 0 },
 ): void {
+    documentRevision += 1;
     disposeAllSelectionBookmarks();
     flushSourceHistoryBatch();
     dispatch({
@@ -192,6 +196,7 @@ function applyDispatch(transaction: Transaction): void {
     const applied = applyTransactionToDoc(previous.doc, previous.selection, transaction);
     const normalizedTransaction = { ...transaction, changes: applied.changes };
     const nextDocChanged = applied.doc !== previous.doc;
+    if (nextDocChanged) documentRevision += 1;
     const nextSelection = normalizeSelection(applied.selection, applied.doc.length);
     const blockIndexStartedAt = readPerformanceNow();
     const blocks = nextDocChanged || blockIndexInvalidated

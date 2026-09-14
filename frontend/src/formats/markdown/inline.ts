@@ -137,6 +137,16 @@ function renderInlineTokenAt(
     depth: number,
 ): { html: string; length: number } | null {
     const character = text[index];
+    const continuation = context.inlineContinuationPrefix;
+    if (continuation && text[index - 1] === "\n" && text.startsWith(continuation, index)) {
+        return {
+            html: `<span data-source-raw="${escapeHtml(continuation)}" contenteditable="false" hidden></span>`,
+            length: continuation.length,
+        };
+    }
+    if (continuation && character === "\n") {
+        return { html: "\n", length: 1 };
+    }
 
     if (character === " ") {
         const hardBreak = readHardBreakToken(text, index);

@@ -26,7 +26,7 @@ export function buildBlockIndex(doc: string, options?: BlockIndexBuildContext): 
     });
 
     if (doc.endsWith("\n")) {
-        const lastLine = blocks[blocks.length - 1]?.lineTo ?? -1;
+        const eofLine = doc.split("\n").length - 1;
         blocks.push({
             id: readReusableId({
                 type: "paragraph",
@@ -39,8 +39,8 @@ export function buildBlockIndex(doc: string, options?: BlockIndexBuildContext): 
             sourceTo: doc.length,
             contentFrom: doc.length,
             contentTo: doc.length,
-            lineFrom: lastLine + 1,
-            lineTo: lastLine + 1,
+            lineFrom: eofLine,
+            lineTo: eofLine,
         });
     }
 

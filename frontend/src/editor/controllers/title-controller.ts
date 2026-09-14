@@ -1,4 +1,3 @@
-import { syncDocumentWindowTitle } from "../../app/window-title";
 import { documentState, notifyDocumentStateChanged } from "../../documents/document-state";
 import { syncEditorDirtyState } from "../../documents/document-session";
 import { titleFromFileName } from "../../formats/file-names";
@@ -43,7 +42,6 @@ export function createTitleController(options: TitleControllerOptions) {
                 return;
             }
             notifyDocumentStateChanged();
-            syncDocumentWindowTitle();
             void options.saveDocument();
         }
     }
@@ -70,7 +68,6 @@ export function createTitleController(options: TitleControllerOptions) {
             return;
         }
         notifyDocumentStateChanged();
-        syncDocumentWindowTitle();
     }
 
     function commitInputValue(): boolean {

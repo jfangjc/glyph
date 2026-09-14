@@ -24,10 +24,6 @@ button:focus-visible,input:focus-visible,.latex-divider:focus-visible { outline:
 .navigation-tabs { display:flex; border-bottom:1px solid var(--glyph-border); padding-bottom:6px }
 .navigation-tabs button[aria-selected="true"] { background:var(--glyph-control-hover); font-weight:600 }
 .file-actions { display:flex; gap:8px; margin:8px 0 }
-.writing-panel .file-tree-frame { position:static; width:100%; height:auto; max-height:none; transform:none; opacity:1; visibility:visible }
-.writing-panel .centered-frame-content { display:flex; flex-direction:column; gap:8px; height:auto }
-.writing-panel .centered-frame-content > * { border-radius:5px; box-shadow:none; background:var(--glyph-surface) }
-.writing-panel .file-tree-results { max-height:52vh; overflow:auto }
 .writing-panel .file-tree { height:auto; max-height:none }
 .writing-panel .document-outline { display:block!important; position:static; width:100%; max-height:none; padding:10px 0; opacity:1; visibility:visible; pointer-events:auto; transform:none }
 .writing-panel .document-outline-list { padding:0 }
@@ -107,21 +103,15 @@ body.app-titlebar-host .document-surface { padding-top:38px }
 .navigation-controls .file-actions { width: 100%; margin: 0; padding-top: 6px; border-top: 1px solid var(--glyph-border); }
 .writing-panel .frame-close { flex: 0 0 30px; width: 30px; height: 30px; padding: 0; text-align: center; font-size: 20px; line-height: 1; color: var(--glyph-text-muted); }
 .writing-panel:is([data-kind="files"], [data-kind="outline"], [data-kind="commands"]) > p { margin: 0; padding: 10px; }
-.writing-panel[data-kind="files"] .file-tree-frame { min-height: 0; flex: 0 1 auto; }
-.writing-panel[data-kind="files"] .centered-frame-content { gap: 8px; max-height: 100%; min-height: 0; }
-.writing-panel[data-kind="files"] .centered-frame-content > *,
 .writing-panel[data-kind="outline"] .outline-panel {
     border: 0; border-radius: 0; box-shadow: none; background: transparent;
     -webkit-backdrop-filter: none; backdrop-filter: none;
 }
-.writing-panel[data-kind="files"] .file-tree-search-surface { min-height: 38px; flex: 0 0 auto; }
-.writing-panel[data-kind="files"] .file-tree-search-hint { display: none; }
-.writing-panel[data-kind="files"] .file-tree-results { min-height: 0; max-height: min(520px, calc(100dvh - var(--navigation-top) - 190px)); overflow: auto; }
 .writing-panel[data-kind="outline"] .outline-panel, .writing-panel .command-results { min-height: 0; flex: 0 1 auto; overflow-y: auto; padding: 2px; }
 .writing-panel .document-outline-list { gap: 2px; }
 .writing-panel .document-outline-button, .writing-panel .command-row, .writing-panel .file-tree-row { min-height: 34px; font-size: 13px; padding-block: 7px; }
 .writing-panel .document-outline-text { font-size: 13px; }
-body:has(.writing-panel:not([hidden]):is([data-kind="files"], [data-kind="outline"], [data-kind="commands"]))::after { opacity: 1; }
+body:has(.writing-panel:not([hidden]):is([data-kind="files"], [data-kind="outline"], [data-kind="commands"]))::after { opacity: 1; transition-duration: 160ms; transition-timing-function: cubic-bezier(0, 0, 0.2, 1); }
 .editor-status[data-state="error"] {
     position: fixed;
     top: calc(var(--glyph-titlebar-height, 40px) + 16px);
@@ -193,8 +183,6 @@ body:has(.writing-panel:not([hidden]):is([data-kind="files"], [data-kind="outlin
     top: 0; bottom: 0; left: calc(20px + var(--file-tree-depth, 0) * 18px);
     border-left: 1px solid var(--glyph-border);
 }
-.writing-panel .file-tree-search-surface { display: none !important; }
-.writing-panel[data-kind="files"] .file-tree-results { max-height: none; overflow: visible; }
 .writing-panel .explorer-results .file-tree { overflow: visible; }
 .writing-panel .explorer-results .outline-panel { overflow: visible; }
 .writing-panel .explorer-results h3 { margin: 8px 10px 4px; font-size: 11px; color: var(--glyph-text-muted); font-weight: 500; }
@@ -273,4 +261,23 @@ body:has(.writing-panel:not([hidden]):is([data-kind="files"], [data-kind="outlin
 .writing-panel button:focus-visible:not(:disabled),
 .writing-panel .explorer-results button:hover:not(:disabled) {
     background: var(--glyph-control-active);
+}
+
+body::after {
+    position: fixed;
+    z-index: 25;
+    inset: 0;
+    background: rgb(28 28 30 / 2.25%);
+    content: "";
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms cubic-bezier(0.4, 0, 1, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body::after { transition-duration: 0.01ms; }
+}
+
+@media print {
+    body::after { display: none; }
 }

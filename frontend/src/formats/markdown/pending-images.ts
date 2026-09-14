@@ -1,3 +1,4 @@
+import { isSupportedPastedImage } from "../../bridge/clipboard";
 import { savePastedImage } from "../../bridge/documents";
 import { documentState } from "../../documents/document-state";
 import { dispatch, getEditorState, readRetainedSourceDocuments, rewriteSourceHistory } from "../../editor/core/store";
@@ -6,7 +7,6 @@ const maxImageBytes = 20 * 1024 * 1024;
 const maxPendingBytes = 100 * 1024 * 1024;
 const maxPendingImages = 20;
 const pendingScheme = "glyph-pending-image://";
-const supportedTypes = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 type PendingImage = {
     id: string;
@@ -37,7 +37,7 @@ export function stagePendingImages(files: File[]): StagedPendingImages {
     let totalBytes = Array.from(pendingImages.values()).reduce((sum, item) => sum + item.file.size, 0);
 
     for (const [inputIndex, file] of files.entries()) {
-        if (!supportedTypes.has(file.type.toLowerCase())) {
+        if (!isSupportedPastedImage(file)) {
             rejected.push(`${file.name || "Image"} has an unsupported image type.`);
             continue;
         }
@@ -181,10 +181,6 @@ export function pruneUnreferencedPendingImages(): void {
         URL.revokeObjectURL(item.objectUrl);
         pendingImages.delete(item.id);
     }
-}
-
-export function isSupportedPastedImage(file: File): boolean {
-    return supportedTypes.has(file.type.toLowerCase());
 }
 
 export async function persistImageFiles(

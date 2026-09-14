@@ -134,23 +134,6 @@ export function isMarkdownHtmlBlockStart(line: string | undefined): boolean {
     return Boolean(readMarkdownHtmlBlockStart(line));
 }
 
-export function readSingleLineMarkdownHtmlBlock(line: string): ParsedBlock | null {
-    if (line.includes("\n")) {
-        return null;
-    }
-
-    const start = readMarkdownHtmlBlockStart(line);
-    if (!start) {
-        return null;
-    }
-
-    if (start.end === "pattern" && !start.closingPattern.test(line)) {
-        return null;
-    }
-
-    return { type: "html", text: line };
-}
-
 export function renderMarkdownHtmlBlock(source: string): string {
     const template = document.createElement("template");
     template.innerHTML = source;

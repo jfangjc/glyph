@@ -14,7 +14,8 @@ import {
     readMarkdownTableColumnCount,
 } from "./table";
 import { isCompleteInlineFormatToken, readInlineSourceTokenRanges } from "./inline";
-import { mapOffset } from "../../editor/core/transaction";
+import { applyTransactionToDoc, mapOffset } from "../../editor/core/transaction";
+import { buildBlockIndex } from "./block-index";
 import type { BlockFormatCommand, InlineFormatCommand, InsertContentCommand } from "../types";
 
 export type DeleteDirection = "backward" | "forward";
@@ -47,11 +48,17 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
     }
     if (range.from !== range.to) {
         const semanticRange = expandInlineVisualSelectionRange(state, range);
-        return createReplaceSelectionTransaction(
-            { ...state, selection: { anchor: semanticRange.from, head: semanticRange.to } },
-            options.shiftKey ? "  \n" : "\n\n",
-            "input",
-        );
+        const doc = state.doc.slice(0, semanticRange.from) + state.doc.slice(semanticRange.to);
+        const selection = { anchor: semanticRange.from, head: semanticRange.from, source: state.selection.source };
+        const afterDelete = { ...state, doc, selection, blocks: buildBlockIndex(doc) };
+        const split = createEnterTransaction(afterDelete, options);
+        const result = applyTransactionToDoc(doc, selection, split);
+        let from = 0;
+        while (from < state.doc.length && from < result.doc.length && state.doc[from] === result.doc[from]) from += 1;
+        let to = state.doc.length;
+        let end = result.doc.length;
+        while (to > from && end > from && state.doc[to - 1] === result.doc[end - 1]) { to -= 1; end -= 1; }
+        return { changes: [{ from, to, insert: result.doc.slice(from, end) }], selection: result.selection, annotations: { userEvent: "input", historyMode: "discrete" } };
     }
 
     const block = findSourceBlockAtOffset(state.blocks, range.from);
@@ -69,7 +76,7 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
         return tableEnter;
     }
 
-    if (block && canExitEmptyContinuationBlock(block) && range.from === block.contentFrom) {
+    if (!options.shiftKey && block && canExitEmptyContinuationBlock(block) && range.from === block.contentFrom) {
         return {
             changes: [{ from: block.sourceFrom, to: block.sourceTo, insert: "" }],
             selection: { anchor: block.sourceFrom, head: block.sourceFrom },
@@ -79,7 +86,9 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
 
     const continuation = block ? readLineContinuationPrefix(block) : "";
     if (block && continuation && range.from >= block.contentFrom && range.from <= block.contentTo) {
-        const insert = `\n${continuation}`;
+        const prefix = state.doc.slice(block.sourceFrom, block.contentFrom);
+        const hardBreakPrefix = block.type === "quote" ? continuation : " ".repeat(prefix.length);
+        const insert = options.shiftKey ? `  \n${hardBreakPrefix}` : `\n${continuation}`;
         const head = range.from + insert.length;
         return {
             changes: [{ from: range.from, to: range.from, insert }],
@@ -356,6 +365,41 @@ export function createDeleteTransaction(
     const codeBoundaryNavigation = createCodeBoundaryNavigationTransaction(state, offset, direction);
     if (codeBoundaryNavigation) {
         return codeBoundaryNavigation;
+    }
+
+    if (granularity === "grapheme" && !isSourceSelection(state.selection)) {
+        const blocks = state.blocks.blocks;
+        const leftIndex = direction === "forward"
+            ? blocks.findIndex(block => block.contentTo === offset)
+            : blocks.findIndex(block => block.contentFrom === offset) - 1;
+        const left = blocks[leftIndex];
+        const right = blocks[leftIndex + 1];
+        if (left && right) {
+            const separator = state.doc.slice(left.sourceTo, right.sourceFrom);
+            const paragraphs = left.type === "paragraph" && right.type === "paragraph" && /^\n{1,2}$/.test(separator);
+            const lists = isListBlock(left) && isListBlock(right) && left.type === right.type &&
+                (left.indent ?? 0) === (right.indent ?? 0) && /^\r?\n$/.test(separator);
+            if (paragraphs) {
+                const empty = left.contentFrom === left.contentTo ? left : right.contentFrom === right.contentTo ? right : null;
+                const emptyIndex = empty === left ? leftIndex : leftIndex + 1;
+                const before = blocks[emptyIndex - 1];
+                const after = blocks[emptyIndex + 1];
+                // An odd run of three newlines has one editable blank between
+                // two paragraphs. Removing it retains their two-line separator.
+                if (empty && before && after && /^\n{3}$/.test(state.doc.slice(before.sourceTo, after.sourceFrom))) {
+                    return empty === right
+                        ? createDeleteRangeTransaction(left.contentTo, left.contentTo + 1, "delete")
+                        : createDeleteRangeTransaction(right.contentFrom - 1, right.contentFrom, "delete");
+                }
+                return createDeleteRangeTransaction(left.contentTo, right.contentFrom, "delete");
+            }
+            if (lists) return createDeleteRangeTransaction(left.contentTo, right.contentFrom, "delete");
+            // Incompatible structures require an explicit second action inside
+            // the neighbor instead of exposing its hidden marker by accident.
+            if (direction === "forward" && right.contentFrom > right.sourceFrom && /^\r?\n$/.test(separator)) {
+                return createSelectionTransaction(right.contentFrom);
+            }
+        }
     }
 
     if (direction === "backward" && !isSourceSelection(state.selection)) {

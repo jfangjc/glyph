@@ -1,4 +1,5 @@
 import { Events } from "@wailsio/runtime";
+import { flushPendingEdit, hasDirtyPendingEdit, hasPendingEdit } from "../editor/core/pending-edit";
 import {
     chooseDocumentToOpen,
     chooseDocumentToSave,
@@ -40,6 +41,7 @@ type DocumentActionHost = {
 };
 
 type SaveDocumentOptions = {
+    automatic?: boolean;
     promptForPath?: boolean;
     suggestedFileName?: string;
 };
@@ -82,7 +84,7 @@ export async function openPendingLaunchDocuments(): Promise<boolean> {
 }
 
 export function startDocumentAutosave(): void {
-    window.setInterval(() => void saveCurrentDocument(), autoSaveIntervalMs);
+    window.setInterval(() => void saveCurrentDocument({ automatic: true }), autoSaveIntervalMs);
 }
 
 export async function restoreLastOpenDocument(): Promise<void> {
@@ -134,36 +136,15 @@ export function canUseDesktopFileSystem(): boolean {
     return canUseNativeRuntime();
 }
 
-export async function openDocument(): Promise<void> {
-    if (documentState.isOpeningDocument || !canUseDesktopFileSystem()) {
-        return;
-    }
-
-    documentState.isOpeningDocument = true;
-    notifyDocumentStateChanged();
-
-    try {
-        if (!(await prepareToLeaveDocument())) {
-            return;
-        }
-
-        const selectedPath = await chooseDocumentToOpen();
-        if (!selectedPath) {
-            return;
-        }
-
-        getHost().loadDocument(await readDocument(selectedPath));
-        rememberLastOpenDocumentPath(selectedPath);
-    } catch (error) {
-        console.error("Failed to open file:", error);
-        reportEditorError(error instanceof Error ? error.message : "Could not open the document.");
-    } finally {
-        documentState.isOpeningDocument = false;
-        notifyDocumentStateChanged();
-    }
+export function openDocument(): Promise<void> {
+    return openDocumentWithPath();
 }
 
-export async function openDocumentPath(path: string): Promise<void> {
+export function openDocumentPath(path: string): Promise<void> {
+    return openDocumentWithPath(path);
+}
+
+async function openDocumentWithPath(path?: string): Promise<void> {
     if (documentState.isOpeningDocument || !canUseDesktopFileSystem()) {
         return;
     }
@@ -174,6 +155,14 @@ export async function openDocumentPath(path: string): Promise<void> {
     try {
         if (!(await prepareToLeaveDocument())) {
             return;
+        }
+
+        if (path === undefined) {
+            const selectedPath = await chooseDocumentToOpen();
+            if (!selectedPath) {
+                return;
+            }
+            path = selectedPath;
         }
 
         getHost().loadDocument(await readDocument(path));
@@ -215,6 +204,9 @@ export async function createNewMarkdownDocument(suggestedFileName?: string): Pro
 }
 
 export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Promise<boolean> {
+    // Autosave waits for the native input edit to finish; manual Save flushes it.
+    if (options.automatic && hasPendingEdit()) return false;
+    flushPendingEdit();
     if (!canUseDesktopFileSystem()) {
         return false;
     }
@@ -307,7 +299,7 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
 }
 
 async function confirmUnsavedDocumentAction(options: SaveDocumentOptions = {}): Promise<boolean> {
-    if (!documentState.hasUnsavedChanges) {
+    if (!documentState.hasUnsavedChanges && !hasDirtyPendingEdit()) {
         return true;
     }
 
@@ -327,7 +319,7 @@ async function confirmUnsavedDocumentAction(options: SaveDocumentOptions = {}): 
 }
 
 async function prepareToLeaveDocument(options: SaveDocumentOptions = {}): Promise<boolean> {
-    if (!documentState.hasUnsavedChanges) {
+    if (!documentState.hasUnsavedChanges && !hasDirtyPendingEdit()) {
         return true;
     }
 
