@@ -7,7 +7,7 @@ import { buildBlockIndex } from "../../formats/markdown/block-index";
 import type { Transaction } from "../core/types";
 import { documentState } from "../../documents/document-state";
 import { syncEditorDirtyState } from "../../documents/document-session";
-import { syncDomSelectionFromState } from "../core/projection";
+import { setBlockSourceActive, syncDomSelectionFromState } from "../core/projection";
 import { registerPendingEdit } from "../core/pending-edit";
 
 type ActiveTableCellEditor = {
@@ -63,7 +63,7 @@ export function createTableCellController() {
         const source = getEditorState().doc.slice(sourceBlock.sourceFrom, sourceBlock.sourceTo);
         const range = readMarkdownTableCellRange(source, row, column);
         if (!range) return;
-        delete block.dataset.blockSourceActive;
+        setBlockSourceActive(block, false);
 
         const input = document.createElement("input");
         const shell = document.getElementById("app");
@@ -189,7 +189,7 @@ export function createTableCellController() {
         if (!range || !commit) {
             if (range && restoreFocus) {
                 dispatch({ changes: [], selection: { anchor: range.from, head: range.from, source: true }, annotations: { addToHistory: false } });
-                syncDomSelectionFromState({ focus: "editor" });
+                syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
             }
             syncEditorDirtyState();
             return;

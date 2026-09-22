@@ -15,6 +15,7 @@ export const latexPreviewBehavior: DocumentPreviewBehavior = {
             requestId++;
             sourcePath = null;
             latexFrame.removeAttribute("src");
+            latexPreview.dataset.pdfAvailable = "false";
             latexPreview.dataset.state = "empty";
             latexStatus.textContent = "Save this LaTeX document to compile a PDF. A TeX compiler must be installed.";
             return;
@@ -28,6 +29,7 @@ export const latexPreviewBehavior: DocumentPreviewBehavior = {
         feedback = "";
         const { latexPreview, latexFrame, latexStatus } = readEditorDom();
         latexFrame.removeAttribute("src");
+        latexPreview.dataset.pdfAvailable = "false";
         latexPreview.dataset.state = "hidden";
         latexStatus.textContent = "";
     },
@@ -46,6 +48,7 @@ async function load(path: string, compile = false): Promise<void> {
     const sameSource = sourcePath === path;
     sourcePath = path;
     if (!sameSource) latexFrame.removeAttribute("src");
+    latexPreview.dataset.pdfAvailable = String(latexFrame.hasAttribute("src"));
     latexPreview.dataset.state = "loading";
     latexStatus.textContent = compile ? "Source saved. Compiling PDF..." : "Loading PDF preview...";
     if (!canUseNativeRuntime()) {
@@ -57,6 +60,7 @@ async function load(path: string, compile = false): Promise<void> {
         const pdf = await readSiblingPdfPreview(path, compile);
         if (id !== requestId) return;
         latexFrame.src = `${pdf.dataUrl}#toolbar=0&navpanes=0&view=FitH`;
+        latexPreview.dataset.pdfAvailable = "true";
         stale = pdf.stale ?? false;
         feedback = pdf.stale === undefined ? "Preview freshness is unavailable from this backend." : "";
         latexPreview.dataset.state = "ready";

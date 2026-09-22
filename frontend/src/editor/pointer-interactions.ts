@@ -24,6 +24,7 @@ import {
     readSourceTokenEditOffsetFromPreviewOffset,
     readSourceTokenDocumentRange,
     sourceOffsetToDomPoint,
+    setBlockSourceActive,
     syncDomSelectionFromState,
     syncStateSelectionFromDom,
 } from "./core/projection";
@@ -634,7 +635,7 @@ function readPointerBlockSourceTarget(
         if (!source) {
             return null;
         }
-        block.dataset.blockSourceActive = "true";
+        setBlockSourceActive(block, true);
     }
 
     for (const source of sources) {

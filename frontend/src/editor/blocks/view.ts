@@ -37,6 +37,7 @@ let renderContext: BlockRenderContext = {
 };
 
 type RenderCacheEntry = {
+    inputKey?: string;
     inlineHtml?: string;
     inlineRevision?: number;
     previewHtml?: string;
@@ -189,6 +190,13 @@ export function setBlockText(block: HTMLElement, text: string): void {
         return;
     }
 
+    const cache = getRenderCache(content);
+    const inputKey = JSON.stringify([type, text, serializeBlockSource(source), block.dataset.continuationPrefix, renderRevision]);
+    // Footnote rendering advances context cursors and cannot use this shortcut.
+    if (cache.inputKey === inputKey && !text.includes("[^")) {
+        if (cache.previewHtml !== undefined && canReusePreviewContent(block, content, text, classNameForPreview(type), source)) return;
+        if (cache.inlineHtml !== undefined && canReuseInlineContent(content, text, source)) return;
+    }
     const blockHtml = renderContext.renderBlockContent?.(type, text, renderContext.context);
     if (blockHtml !== undefined && blockHtml !== null) {
         const previewHtml = `${serializeBlockSource(source)}\u0000${blockHtml}`;
@@ -204,6 +212,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
         renderPreviewBlockContent(content, text, blockHtml, classNameForPreview(type), source);
         cache.previewHtml = previewHtml;
         cache.previewRevision = renderRevision;
+        cache.inputKey = inputKey;
         renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
         return;
     }
@@ -224,7 +233,6 @@ export function setBlockText(block: HTMLElement, text: string): void {
 
     const html = renderBlockInnerHtml(type, text, source, block.dataset.continuationPrefix);
 
-    const cache = getRenderCache(content);
     if (
         cache.inlineHtml === html &&
         cache.inlineRevision === renderRevision &&
@@ -236,6 +244,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
     replaceRenderedHtml(content, html);
     cache.inlineHtml = html;
     cache.inlineRevision = renderRevision;
+    cache.inputKey = inputKey;
     renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
 }
 

@@ -63,7 +63,7 @@ export type BlockIndexBuilder = (doc: string, context?: BlockIndexBuildContext) 
 export type ProjectionCapability = {
     resolveSelectionRange?: (state: EditorState) => { from: DocOffset; to: DocOffset } | null;
     shouldUseNativePointer?: (target: Element) => boolean | null;
-    readVisualHiddenRanges?: (state: EditorState) => Array<{
+    readVisualHiddenRanges?: (state: EditorState, range?: { from: number; to: number }) => Array<{
         from: DocOffset;
         to: DocOffset;
         visibleFrom: DocOffset;
@@ -114,6 +114,10 @@ export function findSourceBlockAtOffset(
 
     const candidate = index.blocks[candidateIndex];
     const next = index.blocks[candidateIndex + 1];
+    const previous = index.blocks[candidateIndex - 1];
+    if (affinity === "upstream" && previous && offset === candidate.sourceFrom && previous.sourceTo === offset) {
+        return previous;
+    }
     if (
         affinity === "downstream" &&
         next &&
@@ -136,4 +140,46 @@ export function readVisibleListPrefixLength(block: SourceBlock): number {
         return `${block.listMarker ?? "-"} ${block.todoMarker ?? (block.checked ? "[x]" : "[ ]")} `.length;
     }
     return `${block.listMarker ?? "-"} `.length;
+}
+
+/** Only blocks intersecting the canonical source range, in source order. */
+export function* sourceBlocksInRange(index: BlockIndex, from: number, to: number): Generator<SourceBlock> {
+    let low = 0, high = index.blocks.length;
+    while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (index.blocks[middle].sourceTo < from) low = middle + 1;
+        else high = middle;
+    }
+    for (let i = low; i < index.blocks.length && index.blocks[i].sourceFrom <= to; i += 1) {
+        yield index.blocks[i];
+    }
+}
+
+/** Separators have no live-preview caret host; source and revealed syntax do. */
+export function resolveVisibleSourceOffset(index: BlockIndex, offset: number, direction: "backward" | "forward"): number {
+    let low = 0, high = index.blocks.length;
+    while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (index.blocks[middle].sourceFrom <= offset) low = middle + 1;
+        else high = middle;
+    }
+    const previous = index.blocks[low - 1];
+    const next = index.blocks[low];
+    if (previous && offset <= previous.sourceTo) return offset;
+    return direction === "forward"
+        ? next?.sourceFrom ?? previous?.sourceTo ?? offset
+        : previous?.sourceTo ?? next?.sourceFrom ?? offset;
+}
+
+/** Left enters a list marker only after reaching the start of its body. */
+export function resolveListNavigationAffinity(state: EditorState, target: number, affinity: SourceAffinity): SourceAffinity {
+    const block = findSourceBlockAtOffset(state.blocks, target);
+    if (!block || !["list", "ordered-list", "todo"].includes(block.type)) return affinity;
+    // The first source character belongs to this item even when approached
+    // from the right. Upstream ownership here would hide the entire marker.
+    if (target === block.sourceFrom) return "downstream";
+    // Arriving at the text's start from inside the body is still a body stop.
+    // The next Left moves into the prefix and reveals it character by character.
+    if (target === block.contentFrom && state.selection.head > target) return "downstream";
+    return affinity;
 }

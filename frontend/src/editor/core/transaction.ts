@@ -25,7 +25,7 @@ export function normalizeSelection(selection: SelectionRange, docLength: number)
     return {
         anchor,
         head,
-        anchorAffinity: selection.anchorAffinity ?? "downstream",
+        anchorAffinity: anchor === head ? selection.headAffinity ?? "downstream" : selection.anchorAffinity ?? "downstream",
         headAffinity: selection.headAffinity ?? "downstream",
         source: selection.source === true,
     };

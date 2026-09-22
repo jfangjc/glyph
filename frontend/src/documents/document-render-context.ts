@@ -20,7 +20,7 @@ import {
 } from "../editor/blocks/view";
 import { updateCodeBlockBodyContent } from "../editor/blocks/rendering";
 import { readBlockType, type ParsedBlock } from "../editor/blocks/model";
-import { applySourceBlockProjectionMetadata } from "../editor/core/projection";
+import { applySourceBlockProjectionMetadata, registerProjectedBlocks } from "../editor/core/projection";
 import type { EditorState, SourceBlock } from "../editor/core/types";
 import { readEditorDom } from "../editor/editor-dom";
 import type {
@@ -93,7 +93,7 @@ export function replaceEditorBlocksFromSourceState(state: EditorState, previous?
     const currentById = new Map(currentBlocks.map((block) => [block.dataset.blockId, block]));
     const previousById = new Map(previous?.blocks.blocks.map((block) => [block.id, block]) ?? []);
     const nextBlocks = state.blocks.blocks.map((sourceBlock) => {
-        const current = currentById.get(sourceBlock.id);
+        const current = previous ? currentById.get(sourceBlock.id) : undefined;
         const previousBlock = previousById.get(sourceBlock.id);
         const sourceChanged = !previous || !previousBlock || !sourceBlocksEquivalent(state, sourceBlock, previous, previousBlock);
         let element = current;
@@ -113,7 +113,14 @@ export function replaceEditorBlocksFromSourceState(state: EditorState, previous?
         return element;
     });
 
-    reconcileEditorBlocks(editor, currentBlocks, nextBlocks);
+    if (!previous) {
+        const fragment = document.createDocumentFragment();
+        for (const block of nextBlocks) fragment.append(block);
+        editor.replaceChildren(fragment);
+    } else {
+        reconcileEditorBlocks(editor, currentBlocks, nextBlocks);
+    }
+    registerProjectedBlocks(nextBlocks);
 }
 
 function sourceBlocksEquivalent(

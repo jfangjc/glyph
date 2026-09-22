@@ -3,6 +3,7 @@ import {
 } from "../blocks/view";
 import {
     clearSourceReveal,
+    isProjectedDomSelection,
     syncDomSelectionFromState,
     syncStateSelectionFromDom,
 } from "../core/projection";
@@ -23,6 +24,7 @@ export function createSelectionController(options: SelectionControllerOptions) {
 
     function handleEditorSelectionChange(): void {
         if (options.isComposingText()) return;
+        const projected = isProjectedDomSelection();
         syncStateSelectionFromDom();
         const selectionState = readSelectionState();
 
@@ -33,7 +35,7 @@ export function createSelectionController(options: SelectionControllerOptions) {
         lastSelectionSignature = selectionState.signature;
         options.syncActiveBlockIndicator(selectionState.focusBlock);
         if (selectionState.focusBlock) {
-            syncDomSelectionFromState({ focus: "preserve" });
+            if (!projected) syncDomSelectionFromState({ focus: "preserve" });
         } else {
             clearSourceReveal();
         }
@@ -59,6 +61,8 @@ function readSelectionState() {
     const signature = [
         state.selection.anchor,
         state.selection.head,
+        state.selection.anchorAffinity,
+        state.selection.headAffinity,
         state.selection.source ? "source" : "visual",
         focusBlock?.dataset.blockId ?? "",
     ].join(":");

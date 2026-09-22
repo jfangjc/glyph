@@ -73,6 +73,7 @@ import {
     setCompositionSurface,
 } from "../core/projection";
 import { reportEditorError } from "../editor-status";
+import { resolveListNavigationAffinity, resolveVisibleSourceOffset } from "../core/types";
 import { replaceEditorBlocksFromSourceState } from "../../documents/document-render-context";
 import { handleEditorMouseDown as handleEditorMouseDownCommand } from "../pointer-interactions";
 import { getCaretPositionFromPoint } from "../selection/caret";
@@ -174,7 +175,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                 canUsePendingInlineFormat(state)
             ) {
                 togglePendingInlineFormat(formatCommand, state.selection.head);
-                syncDomSelectionFromState({ focus: "editor" });
+                syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
                 return;
             }
             clearPendingInlineFormats();
@@ -208,7 +209,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                 );
             if (transaction) {
                 dispatch(transaction);
-                syncDomSelectionFromState({ focus: "editor" });
+                syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
             }
             return;
         }
@@ -226,7 +227,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                 selection: { anchor: 0, head: getEditorState().doc.length, source: true },
                 annotations: { userEvent: "programmatic", addToHistory: false },
             });
-            syncDomSelectionFromState();
+            syncDomSelectionFromState({ scrollIntoView: true });
             return;
         }
 
@@ -749,7 +750,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             },
             annotations: { userEvent: "programmatic", addToHistory: false },
         });
-        syncDomSelectionFromState({ focus: "editor" });
+        syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
     }
 
     function selectInlineObject(token: HTMLElement): void {
@@ -824,7 +825,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                 },
             annotations: { userEvent: "programmatic", addToHistory: false },
         });
-        syncDomSelectionFromState({ focus: "editor" });
+        syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
     }
 
     function handleSourceKeydown(event: KeyboardEvent): boolean {
@@ -852,7 +853,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                     selection: { anchor: from, head: from },
                     annotations: { userEvent: "delete", historyMode: "discrete" },
                 });
-                syncDomSelectionFromState({ focus: "editor" });
+                syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
                 return true;
             }
             if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -864,7 +865,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                     selection: { anchor: target, head: target },
                     annotations: { userEvent: "programmatic", addToHistory: false },
                 });
-                syncDomSelectionFromState({ focus: "editor" });
+                syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
                 return true;
             }
         }
@@ -902,7 +903,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                     : null)
                 ?? createSourceInsertTextTransaction(state, "\n"),
             );
-            syncDomSelectionFromState();
+            syncDomSelectionFromState({ scrollIntoView: true });
             return true;
         }
 
@@ -924,13 +925,13 @@ export function createEditorInputController(options: EditorInputControllerOption
                 }
                 event.preventDefault();
                 dispatch(createIndentSourceTransaction(state, event.shiftKey));
-                syncDomSelectionFromState();
+                syncDomSelectionFromState({ scrollIntoView: true });
                 return true;
             }
 
             event.preventDefault();
             dispatch(transaction);
-            syncDomSelectionFromState();
+            syncDomSelectionFromState({ scrollIntoView: true });
             return true;
         }
 
@@ -945,7 +946,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             if (transaction) {
                 dispatch(transaction);
                 if (transaction.changes.length === 0) {
-                    syncDomSelectionFromState({ focus: "editor" });
+                    syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
                 }
             }
             return true;
@@ -979,7 +980,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                     },
                     annotations: { userEvent: "programmatic", addToHistory: false },
                 });
-                syncDomSelectionFromState({ focus: "editor" });
+                syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
                 return true;
             }
         }
@@ -1043,6 +1044,11 @@ export function createEditorInputController(options: EditorInputControllerOption
                 : nextGraphemeBoundary(state.doc, currentHead);
         }
 
+        target = resolveVisibleSourceOffset(state.blocks, target, backward ? "backward" : "forward");
+        const defaultAffinity = event.key === "End" || event.key === "ArrowLeft" ? "upstream" as const : "downstream" as const;
+        const affinity = event.key === "ArrowLeft"
+            ? resolveListNavigationAffinity(state, target, defaultAffinity)
+            : defaultAffinity;
         const extendedAnchor = state.selection.anchor === state.selection.head
             ? currentHead
             : state.selection.anchor;
@@ -1050,8 +1056,8 @@ export function createEditorInputController(options: EditorInputControllerOption
         const nextSelection = {
             anchor: event.shiftKey ? extendedAnchor : target,
             head: target,
-            anchorAffinity: event.shiftKey ? state.selection.anchorAffinity : state.selection.headAffinity,
-            headAffinity: event.key === "End" ? "upstream" as const : "downstream" as const,
+            anchorAffinity: event.shiftKey ? state.selection.anchorAffinity : affinity,
+            headAffinity: affinity,
         };
         dispatch({
             changes: [],
@@ -1061,7 +1067,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             },
             annotations: { userEvent: "programmatic", addToHistory: false },
         });
-        syncDomSelectionFromState({ focus: "editor" });
+        syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
         return true;
     }
 
@@ -1075,7 +1081,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             if (/^(?:insert|delete|format)/.test(event.inputType)) {
                 event.preventDefault();
                 console.warn(`Cancelled unsupported beforeinput operation: ${event.inputType}`);
-                syncDomSelectionFromState();
+                syncDomSelectionFromState({ scrollIntoView: true });
                 reportEditorError("An unsupported editing operation was safely cancelled.");
                 return true;
             }
@@ -1088,7 +1094,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (nextTransaction) {
             dispatch(nextTransaction);
             if (nextTransaction.changes.length === 0) {
-                syncDomSelectionFromState({ focus: "editor" });
+                syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
             }
         }
         return true;
@@ -1228,7 +1234,7 @@ export function createEditorInputController(options: EditorInputControllerOption
 
         event.preventDefault();
         if (!writeSourceClipboard(event.clipboardData)) {
-            syncDomSelectionFromState();
+            syncDomSelectionFromState({ scrollIntoView: true });
         }
         return true;
     }
@@ -1250,7 +1256,7 @@ export function createEditorInputController(options: EditorInputControllerOption
 
         event.preventDefault();
         if (!writeSourceClipboard(event.clipboardData)) {
-            syncDomSelectionFromState();
+            syncDomSelectionFromState({ scrollIntoView: true });
             return true;
         }
         dispatch(transaction);
@@ -1274,7 +1280,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         }
 
         event.preventDefault();
-        syncDomSelectionFromState();
+        syncDomSelectionFromState({ scrollIntoView: true });
         return true;
     }
 
@@ -1454,7 +1460,7 @@ export function createEditorInputController(options: EditorInputControllerOption
                     sources.join(" "),
                 ));
                 if (lease.focusOwner && document.activeElement === lease.focusOwner) {
-                    syncDomSelectionFromState({ focus: "editor" });
+                    syncDomSelectionFromState({ focus: "editor", scrollIntoView: true });
                 }
             }
         } catch (error) {

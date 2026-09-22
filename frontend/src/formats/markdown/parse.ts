@@ -313,9 +313,11 @@ function scanMarkdownBlocks(lines: string[], editableBlanks = false): { blocks: 
         const fence = readCodeFence(line);
 
         if (fence) {
-            const closingFenceIndex = lines.findIndex((candidate, candidateIndex) => (
-                candidateIndex > index && isClosingCodeFence(candidate, fence.marker)
-            ));
+            let closingFenceIndex = index + 1;
+            while (closingFenceIndex < lines.length && !isClosingCodeFence(lines[closingFenceIndex], fence.marker)) {
+                closingFenceIndex += 1;
+            }
+            if (closingFenceIndex === lines.length) closingFenceIndex = -1;
             if (closingFenceIndex < 0) {
                 append({
                     type: "paragraph",

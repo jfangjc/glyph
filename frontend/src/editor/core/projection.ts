@@ -1,5 +1,7 @@
 import {
+    sourceBlocksInRange,
     findSourceBlockAtOffset,
+    resolveVisibleSourceOffset,
     isSourceSelection,
     type SelectionRange,
     type SourceAffinity,
@@ -44,6 +46,44 @@ type DomSelectionSnapshot = {
     focusNode: Node | null;
     focusOffset: number;
 };
+
+const projectedBlocks = new Map<string, HTMLElement>();
+const activeSourceTokens = new Set<HTMLElement>();
+const activeSourceBlocks = new Set<HTMLElement>();
+
+export function registerProjectedBlocks(blocks: HTMLElement[]): void {
+    projectedBlocks.clear();
+    for (const block of blocks) if (block.dataset.blockId) projectedBlocks.set(block.dataset.blockId, block);
+    readActiveSourceTokens();
+    for (const block of activeSourceBlocks) if (!block.isConnected) activeSourceBlocks.delete(block);
+}
+
+export function setBlockSourceActive(block: HTMLElement, active: boolean): void {
+    if (active) {
+        activeSourceBlocks.add(block);
+        if (block.dataset.blockSourceActive !== "true") block.dataset.blockSourceActive = "true";
+    } else {
+        activeSourceBlocks.delete(block);
+        if (block.dataset.blockSourceActive !== undefined) delete block.dataset.blockSourceActive;
+    }
+}
+
+function readActiveSourceTokens(): HTMLElement[] {
+    for (const token of activeSourceTokens) {
+        if (!token.isConnected || token.dataset.active !== "true") activeSourceTokens.delete(token);
+    }
+    return Array.from(activeSourceTokens);
+}
+
+function sourceTokensInRange(from: number, to: number): HTMLElement[] {
+    return Array.from(sourceBlocksInRange(getEditorState().blocks, from, to)).flatMap(block =>
+        Array.from(findProjectedBlockElement(block.id)?.querySelectorAll<HTMLElement>(".markdown-token[data-source-raw]") ?? []));
+}
+
+export function isProjectedDomSelection(): boolean {
+    const selection = document.getSelection();
+    return Boolean(selection && projectedDomSelection && domSelectionMatchesSnapshot(selection, projectedDomSelection));
+}
 
 let projectedDomSelection: DomSelectionSnapshot | null = null;
 let compositionSurface: HTMLElement | null = null;
@@ -135,7 +175,7 @@ export function sourceOffsetToDomPoint(offset: number, options: SourceOffsetToDo
     applySourceBlockProjectionMetadata(blockElement, sourceBlock, state.doc);
 
     const content = getBlockContent(blockElement);
-    const sourcePoint = findSourceElementDomPoint(content, clampedOffset, options.revealSource ?? false);
+    const sourcePoint = findSourceElementDomPoint(content, clampedOffset, options.revealSource ?? false, options.affinity ?? "downstream");
     if (sourcePoint) {
         return sourcePoint;
     }
@@ -176,7 +216,10 @@ export function moveSourceSelectionVertically(
 
     const preferredColumn = verticalNavigationAffinity?.preferredColumn
         ?? readNavigationColumn(state, currentLine, state.selection.head);
-    const target = visual?.offset ?? (targetLine ? readVerticalNavigationTarget(state, currentLine, targetLine, preferredColumn, direction) : null);
+    // Grid/list boundaries can leave Selection.modify at the same source
+    // position. Do not consume an arrow without trying the source-line fallback.
+    const movedVisual = visual?.offset !== state.selection.head ? visual : null;
+    const target = movedVisual?.offset ?? (targetLine ? readVerticalNavigationTarget(state, currentLine, targetLine, preferredColumn, direction) : null);
     if (target === null) {
         resetVerticalNavigationAffinity();
         return false;
@@ -197,10 +240,10 @@ export function moveSourceSelectionVertically(
     });
     verticalNavigationAffinity = {
         preferredColumn,
-        preferredX: visual?.preferredX,
+        preferredX: movedVisual?.preferredX ?? verticalNavigationAffinity?.preferredX,
         revision: getEditorState().revision,
     };
-    syncDomSelectionFromState();
+    syncDomSelectionFromState({ scrollIntoView: true });
     return true;
 }
 
@@ -255,12 +298,14 @@ function readVisualNavigationTarget(
 }
 
 function readCaretGeometry(offset: number, affinity: SourceAffinity = "downstream"): DOMRect | null {
-    const doc = getEditorState().doc;
+    const state = getEditorState();
+    const doc = state.doc;
     const backward = affinity === "upstream" || offset === doc.length;
     const adjacent = backward ? previousGraphemeBoundary(doc, offset) : nextGraphemeBoundary(doc, offset);
     if (adjacent === offset || doc.slice(Math.min(offset, adjacent), Math.max(offset, adjacent)).includes("\n")) return null;
-    const start = sourceOffsetToDomPoint(Math.min(offset, adjacent));
-    const end = sourceOffsetToDomPoint(Math.max(offset, adjacent));
+    const options = { revealSource: isSourceSelection(state.selection), affinity };
+    const start = sourceOffsetToDomPoint(Math.min(offset, adjacent), options);
+    const end = sourceOffsetToDomPoint(Math.max(offset, adjacent), options);
     const range = document.createRange();
     range.setStart(start.node, start.offset);
     range.setEnd(end.node, end.offset);
@@ -300,13 +345,29 @@ function readVerticalNavigationTarget(
     }
 
     const target = Math.min(targetLine.to, targetLine.from + preferredColumn);
-    return target === state.doc.length ? target : previousGraphemeBoundary(state.doc, nextGraphemeBoundary(state.doc, target));
+    const snapped = target === state.doc.length ? target : previousGraphemeBoundary(state.doc, nextGraphemeBoundary(state.doc, target));
+    return resolveVisibleSourceOffset(state.blocks, snapped, direction === "up" ? "backward" : "forward");
 }
 
 // Projection-only DOM reader: translates a browser DOM point to a canonical
 // EditorState.doc UTF-16 offset. It must not be used to recover source text.
 export function domPointToSourceOffset(node: Node, offset: number): number {
     const state = getEditorState();
+    if (node === document.getElementById("editor")) {
+        // Native movement across grid items can return a point on the editor
+        // itself, not a text node. Resolve that boundary into the next visible
+        // body (or the previous body's end at EOF), independently of old state.
+        const children = Array.from(node.childNodes);
+        for (let index = offset; index < children.length; index += 1) {
+            const child = children[index];
+            if (child instanceof HTMLElement && child.dataset.blockId) return readProjectedBlockBoundary(child, "start");
+        }
+        for (let index = Math.min(offset, children.length) - 1; index >= 0; index -= 1) {
+            const child = children[index];
+            if (child instanceof HTMLElement && child.dataset.blockId) return readProjectedBlockBoundary(child, "end");
+        }
+        return 0;
+    }
     const source = findBlockSourceElement(node);
     if (source) {
         const sourceFrom = readDatasetNumber(source.dataset.sourceFrom);
@@ -335,7 +396,10 @@ export function domPointToSourceOffset(node: Node, offset: number): number {
     }
 
     if (node === block) {
-        return offset <= 0 ? readDatasetNumber(block.dataset.sourceFrom) ?? contentFrom : readDatasetNumber(block.dataset.sourceTo) ?? contentTo;
+        // Task items have a checkbox before their content. A point after that
+        // checkbox is still before the text, not at the end of the item.
+        const contentIndex = Array.from(block.childNodes).indexOf(content);
+        return readProjectedBlockBoundary(block, offset <= contentIndex ? "start" : "end");
     }
 
     const atomicBoundaryOffset = sourceBlock
@@ -365,8 +429,17 @@ export function domPointToSourceOffset(node: Node, offset: number): number {
     return clampOffset(contentFrom + localOffset, contentTo);
 }
 
+function readProjectedBlockBoundary(block: HTMLElement, edge: "start" | "end"): number {
+    const sourceVisible = block.dataset.blockSourceActive === "true";
+    const atomic = ["table", "math", "html", "definition-list", "rule"].includes(block.dataset.type ?? "");
+    const boundary = edge === "start"
+        ? sourceVisible || atomic ? block.dataset.sourceFrom : block.dataset.contentFrom
+        : sourceVisible || atomic ? block.dataset.sourceTo : block.dataset.contentTo;
+    return readDatasetNumber(boundary) ?? 0;
+}
+
 export function syncDomSelectionFromState(
-    options: { focus?: "preserve" | "editor" } = { focus: "editor" },
+    options: { focus?: "preserve" | "editor"; scrollIntoView?: boolean } = { focus: "editor" },
 ): void {
     if (isCompositionSurfaceActive()) return;
     const state = getEditorState();
@@ -409,14 +482,15 @@ export function syncDomSelectionFromState(
     if (options.focus !== "preserve") {
         editor.focus({ preventScroll: true });
     }
-    range.setStart(anchor.node, anchor.offset);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-
-    if (state.selection.anchor !== state.selection.head) {
-        selection.extend(head.node, head.offset);
+    if (selection.anchorNode !== anchor.node || selection.anchorOffset !== anchor.offset ||
+        selection.focusNode !== head.node || selection.focusOffset !== head.offset) {
+        range.setStart(anchor.node, anchor.offset);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        if (state.selection.anchor !== state.selection.head) selection.extend(head.node, head.offset);
     }
+    if (options.scrollIntoView) scrollSelectionHeadIntoView(head);
 
     projectedDomSelection = readDomSelectionSnapshot(selection);
 
@@ -514,7 +588,7 @@ function domSelectionMatchesSnapshot(selection: Selection, snapshot: DomSelectio
 }
 
 function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditorState>): void {
-    const activeTokens = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"));
+    const activeTokens = readActiveSourceTokens();
     const blocksToRender = new Set<HTMLElement>();
 
     for (const token of activeTokens) {
@@ -545,7 +619,7 @@ function reconcileActiveSourceTokensFromState(state: ReturnType<typeof getEditor
     }
 
     for (const block of blocksToRender) {
-        const sourceBlock = state.blocks.blocks.find((candidate) => candidate.id === block.dataset.blockId);
+        const sourceBlock = findSourceBlockAtOffset(state.blocks, Number(block.dataset.sourceFrom));
         if (sourceBlock) {
             setBlockText(block, state.doc.slice(sourceBlock.contentFrom, sourceBlock.contentTo));
         }
@@ -570,7 +644,7 @@ export function syncInlineTypingSourceReveal(
     }
 
     const insertionEnd = change.from + change.insert.length;
-    const candidates = Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-source-raw]"))
+    const candidates = sourceTokensInRange(insertionEnd, insertionEnd)
         .map((token) => ({ token, range: readSourceTokenDocumentRange(token) }))
         .filter((candidate): candidate is { token: HTMLElement; range: { from: number; to: number } } => Boolean(
             candidate.range &&
@@ -607,9 +681,9 @@ function isMarkdownDelimiterCharacter(character: string): boolean {
     return "*_~`$[]()".includes(character);
 }
 
-function revealSourceTokensInRange(selectionFrom: number, selectionTo: number): boolean {
+function revealSourceTokensInRange(selectionFrom: number, selectionTo: number, reconcileOthers = true): boolean {
     const blocksToRender = new Set<HTMLElement>();
-    for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
+    for (const token of reconcileOthers ? readActiveSourceTokens() : []) {
         const tokenRange = readSourceTokenDocumentRange(token);
         if (
             !tokenRange ||
@@ -622,9 +696,7 @@ function revealSourceTokensInRange(selectionFrom: number, selectionTo: number): 
     }
 
     let changed = rerenderActiveSourceTokenBlocks(Array.from(blocksToRender));
-    const sourceTokens = Array.from(
-        document.querySelectorAll<HTMLElement>(".markdown-token[data-source-raw]"),
-    );
+    const sourceTokens = sourceTokensInRange(selectionFrom, selectionTo);
     for (const token of sourceTokens) {
         const tokenRange = readSourceTokenDocumentRange(token);
         if (
@@ -657,16 +729,17 @@ function hasNestedSourceTokenContainingSelection(
 }
 
 export function setPinnedSourceRevealRange(range: { from: number; to: number } | null): void {
-    for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-source-pinned='true']"))) {
-        delete token.dataset.sourcePinned;
+    for (const token of readActiveSourceTokens().filter(token => token.dataset.sourcePinned === "true")) {
+        const tokenRange = readSourceTokenDocumentRange(token);
+        if (!range || !tokenRange || range.from >= tokenRange.to || range.to <= tokenRange.from) delete token.dataset.sourcePinned;
     }
     pinnedSourceRevealRange = range;
     if (range) {
         revealSourceTokensInRange(range.from, range.to);
-        for (const token of Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
+        for (const token of readActiveSourceTokens()) {
             const tokenRange = readSourceTokenDocumentRange(token);
             if (tokenRange && range.from < tokenRange.to && range.to > tokenRange.from) {
-                token.dataset.sourcePinned = "true";
+                if (token.dataset.sourcePinned !== "true") token.dataset.sourcePinned = "true";
             }
         }
     } else {
@@ -679,11 +752,7 @@ function doesSelectionOwnSourceToken(
     tokenFrom: number,
     tokenTo: number,
 ): boolean {
-    const selectionFrom = Math.min(selection.anchor, selection.head);
-    const selectionTo = Math.max(selection.anchor, selection.head);
-    return isSourceSelection(selection) && (selectionFrom === selectionTo
-        ? selectionFrom >= tokenFrom && selectionFrom <= tokenTo
-        : selectionFrom < tokenTo && selectionTo > tokenFrom);
+    return isSourceSelection(selection) && selectionIntersectsSourceRange(selection, tokenFrom, tokenTo);
 }
 
 export function selectionTouchesSource(next: SelectionRange): boolean {
@@ -697,22 +766,20 @@ function selectionTouchesMarkdownSource(
 ): boolean {
     const from = Math.min(selection.anchor, selection.head);
     const to = Math.max(selection.anchor, selection.head);
-    const touches = (range: { from: number; to: number }) => from === to
-        ? from >= range.from && from <= range.to
-        : from < range.to && to > range.from;
-    if ((activeProjectionCapability?.readVisualHiddenRanges?.(state) ?? [])
+    const touches = (range: { from: number; to: number }) => selectionIntersectsSourceRange(selection, range.from, range.to);
+    if ((activeProjectionCapability?.readVisualHiddenRanges?.(state, { from, to }) ?? [])
         .some(touches)) {
         return true;
     }
 
-    return state.blocks.blocks.some((block) => selectionTouchesBlockSource(block, from, to));
+    return Array.from(sourceBlocksInRange(state.blocks, from, to)).some((block) => selectionTouchesBlockSource(block, from, to, selection.headAffinity));
 }
 
-function selectionTouchesBlockSource(block: SourceBlock, from: number, to: number): boolean {
+function selectionTouchesBlockSource(block: SourceBlock, from: number, to: number, affinity: SourceAffinity = "downstream"): boolean {
     const touches = (rangeFrom: number, rangeTo: number) => rangeFrom < rangeTo && (from === to
-        ? from >= rangeFrom && from <= rangeTo
+        ? selectionIntersectsSourceRange({ anchor: from, head: to, headAffinity: affinity }, rangeFrom, rangeTo)
         : from < rangeTo && to > rangeFrom);
-    return block.type === "code"
+    return ["code", "table", "math", "html", "definition-list", "rule"].includes(block.type)
         ? touches(block.sourceFrom, block.sourceTo)
         : touches(block.sourceFrom, block.contentFrom) || touches(block.contentTo, block.sourceTo);
 }
@@ -725,9 +792,7 @@ export function clearSourceReveal(): void {
     if (isCompositionSurfaceActive()) return;
     clearInlineTypingSourceReveal();
     rerenderActiveSourceTokenBlocks(readAllActiveSourceTokenBlocks());
-    for (const block of document.querySelectorAll<HTMLElement>("[data-block-source-active='true']")) {
-        delete block.dataset.blockSourceActive;
-    }
+    for (const block of activeSourceBlocks) setBlockSourceActive(block, false);
     if (pinnedSourceRevealRange) setPinnedSourceRevealRange(pinnedSourceRevealRange);
 }
 
@@ -882,10 +947,11 @@ function applyPrefixSourceElementRange(source: HTMLElement | null, sourceFrom: n
 }
 
 function findProjectedBlockElement(blockId: string): HTMLElement | null {
-    return document.querySelector<HTMLElement>(`[data-block][data-block-id="${CSS.escape(blockId)}"]`);
+    const block = projectedBlocks.get(blockId);
+    return block?.isConnected ? block : null;
 }
 
-function findSourceElementDomPoint(content: HTMLElement, offset: number, activateBlockSource: boolean): DomPoint | null {
+function findSourceElementDomPoint(content: HTMLElement, offset: number, activateBlockSource: boolean, affinity: SourceAffinity): DomPoint | null {
     for (const source of Array.from(content.querySelectorAll<HTMLElement>(".format-block-source"))) {
         const sourceFrom = readDatasetNumber(source.dataset.sourceFrom);
         const sourceTo = readDatasetNumber(source.dataset.sourceTo);
@@ -893,7 +959,7 @@ function findSourceElementDomPoint(content: HTMLElement, offset: number, activat
         const ownsBlockSource = activateBlockSource && sourceBlockElement?.dataset.blockSourceActive === "true";
         if (
             sourceFrom === null || sourceTo === null ||
-            !isOffsetInsideSourceElement(source, offset, sourceFrom, sourceTo, ownsBlockSource)
+            !isOffsetInsideSourceElement(source, offset, sourceFrom, sourceTo, ownsBlockSource, affinity)
         ) {
             continue;
         }
@@ -911,6 +977,16 @@ function findSourceElementDomPoint(content: HTMLElement, offset: number, activat
 function syncSourceRevealFromState(): void {
     const state = getEditorState();
     reconcileActiveSourceTokensFromState(state);
+    // A local block rerender can also replace a pinned token in that block.
+    if (pinnedSourceRevealRange) {
+        revealSourceTokensInRange(pinnedSourceRevealRange.from, pinnedSourceRevealRange.to, false);
+        for (const token of readActiveSourceTokens()) {
+            const range = readSourceTokenDocumentRange(token);
+            if (range && doesRangeIntersectPinnedSource(range.from, range.to) && token.dataset.sourcePinned !== "true") {
+                token.dataset.sourcePinned = "true";
+            }
+        }
+    }
     syncBlockSourceActivationFromState(state);
 }
 
@@ -919,23 +995,20 @@ function syncBlockSourceActivationFromState(state: ReturnType<typeof getEditorSt
     if (isSourceSelection(state.selection)) {
         const selectionFrom = Math.min(state.selection.anchor, state.selection.head);
         const selectionTo = Math.max(state.selection.anchor, state.selection.head);
-        for (const sourceBlock of state.blocks.blocks) {
-            const atomicSource = ["table", "math", "html", "definition-list"].includes(sourceBlock.type) &&
-                (selectionFrom === selectionTo
-                    ? selectionFrom >= sourceBlock.sourceFrom && selectionFrom <= sourceBlock.sourceTo
-                    : selectionFrom < sourceBlock.sourceTo && selectionTo > sourceBlock.sourceFrom);
-            if (atomicSource || selectionTouchesBlockSource(sourceBlock, selectionFrom, selectionTo)) {
+        for (const sourceBlock of sourceBlocksInRange(state.blocks, selectionFrom, selectionTo)) {
+            if (selectionTouchesBlockSource(sourceBlock, selectionFrom, selectionTo, state.selection.headAffinity)) {
                 activeBlockIds.add(sourceBlock.id);
             }
         }
     }
-    for (const block of Array.from(document.querySelectorAll<HTMLElement>("[data-block]"))) {
-        if (block.dataset.blockId && activeBlockIds.has(block.dataset.blockId)) {
-            ensureBlockSourceRendered(block);
-            block.dataset.blockSourceActive = "true";
-        } else {
-            delete block.dataset.blockSourceActive;
-        }
+    for (const block of activeSourceBlocks) {
+        if (!block.isConnected || !activeBlockIds.has(block.dataset.blockId ?? "")) setBlockSourceActive(block, false);
+    }
+    for (const id of activeBlockIds) {
+        const block = findProjectedBlockElement(id);
+        if (!block) continue;
+        ensureBlockSourceRendered(block);
+        setBlockSourceActive(block, true);
     }
 }
 
@@ -974,15 +1047,18 @@ function isOffsetInsideSourceElement(
     sourceFrom: number,
     sourceTo: number,
     ownsBlockSource: boolean,
+    affinity: SourceAffinity,
 ): boolean {
     const position = readBlockSourcePosition(source);
     const isCodeSource = source.closest<HTMLElement>("[data-block]")?.dataset.type === "code";
     if (position === "prefix") {
-        return offset >= sourceFrom && (ownsBlockSource || isCodeSource ? offset <= sourceTo : offset < sourceTo);
+        return offset >= sourceFrom && (offset < sourceTo || offset === sourceTo &&
+            (isCodeSource || ownsBlockSource && affinity === "upstream"));
     }
 
     if (position === "suffix") {
-        return (ownsBlockSource || isCodeSource ? offset >= sourceFrom : offset > sourceFrom) && offset <= sourceTo;
+        return offset <= sourceTo && (offset > sourceFrom || offset === sourceFrom &&
+            (isCodeSource || ownsBlockSource && affinity === "downstream"));
     }
 
     return offset >= sourceFrom && offset <= sourceTo;
@@ -1353,6 +1429,7 @@ function activateRawSourceTokenAtOffset(token: HTMLElement, rawSource: string, o
     if (token.classList.contains("markdown-code-token")) {
         token.style.setProperty("--markdown-token-preview-width", `${token.getBoundingClientRect().width}px`);
     }
+    activeSourceTokens.add(token);
     token.dataset.active = "true";
     delete token.dataset.sourceRaw;
     token.classList.add(markdownTokenEditingClass);
@@ -1576,7 +1653,7 @@ function readNestedSourceSearchLength(node: Node): number {
 function readAllActiveSourceTokenBlocks(): HTMLElement[] {
     return Array.from(
         new Set(
-            Array.from(document.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))
+            readActiveSourceTokens()
                 .filter((token) => token.dataset.sourcePinned !== "true")
                 .map((token) => findBlock(token))
                 .filter((block): block is HTMLElement => Boolean(block)),
@@ -1734,4 +1811,50 @@ function readDatasetNumber(value: string | undefined): number | null {
 
 function clampOffset(offset: number, docLength: number): number {
     return Math.max(0, Math.min(Math.trunc(offset), docLength));
+}
+
+function selectionIntersectsSourceRange(selection: SelectionRange, from: number, to: number): boolean {
+    const start = Math.min(selection.anchor, selection.head);
+    const end = Math.max(selection.anchor, selection.head);
+    if (start !== end) return start < to && end > from;
+    return start > from && start < to ||
+        start === from && selection.headAffinity !== "upstream" ||
+        start === to && selection.headAffinity === "upstream";
+}
+
+function scrollSelectionHeadIntoView(head: DomPoint): void {
+    const editor = getElement<HTMLElement>("editor");
+    const range = document.createRange();
+    range.setStart(head.node, head.offset);
+    range.collapse(true);
+    let rect = range.getClientRects()[0];
+    if (!rect || rect.height === 0) {
+        const element = head.node instanceof HTMLElement ? head.node : head.node.parentElement;
+        rect = element?.getBoundingClientRect() as DOMRect;
+    }
+    if (!rect) return;
+    // Scroll only the editor's own containers, including a split-view source
+    // pane. Never let focus or scrollIntoView move the window or PDF pane.
+    for (let parent: HTMLElement | null = editor; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        const vertical = /auto|scroll/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight;
+        const horizontal = /auto|scroll/.test(style.overflowX) && parent.scrollWidth > parent.clientWidth;
+        if (!vertical && !horizontal) {
+            if (parent.classList.contains("editor-shell")) break;
+            continue;
+        }
+        const bounds = parent.getBoundingClientRect();
+        const scaleY = parent.offsetHeight ? bounds.height / parent.offsetHeight : 1;
+        const scaleX = parent.offsetWidth ? bounds.width / parent.offsetWidth : 1;
+        const top = bounds.top + parent.clientTop * scaleY + 8;
+        const bottom = bounds.top + (parent.clientTop + parent.clientHeight) * scaleY - 8;
+        const left = bounds.left + parent.clientLeft * scaleX + 8;
+        const right = bounds.left + (parent.clientLeft + parent.clientWidth) * scaleX - 8;
+        const dy = vertical ? rect.top < top ? rect.top - top : rect.bottom > bottom ? rect.bottom - bottom : 0 : 0;
+        const dx = horizontal ? rect.left < left ? rect.left - left : rect.right > right ? rect.right - right : 0 : 0;
+        parent.scrollTop += dy / scaleY;
+        parent.scrollLeft += dx / scaleX;
+        rect = new DOMRect(rect.x - dx, rect.y - dy, rect.width, rect.height);
+        if (parent.classList.contains("editor-shell")) break;
+    }
 }

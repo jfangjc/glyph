@@ -1,77 +1,120 @@
 const graphemeSegmenter = createSegmenter("grapheme");
 const wordSegmenter = createSegmenter("word");
 
-export function previousGraphemeBoundary(text: string, offset: number): number {
-    const clamped = clampOffset(text, offset);
-    let previous = 0;
+type LineSegments = {
+    text: string;
+    graphemes?: Intl.Segments;
+    words?: Intl.Segments;
+    fallbackGraphemes?: number[];
+    fallbackWords?: Array<{ from: number; to: number }>;
+};
+const lineCache = new Map<string, LineSegments>();
+let cachedCharacters = 0;
+let currentLine: { doc: string; from: number; to: number; segments: LineSegments } | null = null;
 
-    for (const boundary of readGraphemeBoundaries(text)) {
-        if (boundary >= clamped) {
-            break;
+// Cache by source content, never by the selection revision. Intl.Segments.containing
+// seeks directly using Unicode boundaries, including on exceptionally long lines;
+// no fixed substring can split a ZWJ sequence or change regional-indicator parity.
+function lineAt(text: string, offset: number) {
+    if (currentLine?.doc === text && offset >= currentLine.from && offset < currentLine.to) return currentLine;
+    const from = offset === 0 ? 0 : text.lastIndexOf("\n", offset - 1) + 1;
+    const newline = text.indexOf("\n", offset);
+    const to = newline < 0 ? text.length : newline + 1;
+    const source = text.slice(from, to);
+    let segments = lineCache.get(source);
+    if (!segments) {
+        segments = { text: source };
+        lineCache.set(source, segments);
+        cachedCharacters += source.length;
+        // Keep the current long line, but bound retained unrelated source.
+        while (lineCache.size > 1 && (lineCache.size > 64 || cachedCharacters > 2_000_000)) {
+            const oldest = lineCache.keys().next().value!;
+            cachedCharacters -= oldest.length;
+            lineCache.delete(oldest);
         }
-        previous = boundary;
     }
+    currentLine = { doc: text, from, to, segments };
+    return currentLine;
+}
 
-    return previous;
+function upperBound(boundaries: number[], offset: number): number {
+    let low = 0, high = boundaries.length;
+    while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (boundaries[mid] <= offset) low = mid + 1;
+        else high = mid;
+    }
+    return low;
+}
+
+function containing(text: string, offset: number, granularity: "grapheme" | "word") {
+    const line = lineAt(text, offset);
+    const local = offset - line.from;
+    const cache = line.segments;
+    const segmenter = granularity === "grapheme" ? graphemeSegmenter : wordSegmenter;
+    if (segmenter) {
+        const segments = granularity === "grapheme"
+            ? cache.graphemes ??= segmenter.segment(cache.text)
+            : cache.words ??= segmenter.segment(cache.text);
+        const segment = segments.containing(local)!;
+        return { from: line.from + segment.index, to: line.from + segment.index + segment.segment.length };
+    }
+    if (granularity === "grapheme") {
+        const boundaries = cache.fallbackGraphemes ??= readGraphemeBoundaries(cache.text);
+        const index = upperBound(boundaries, local);
+        return { from: line.from + boundaries[index - 1], to: line.from + boundaries[index] };
+    }
+    const segments = cache.fallbackWords ??= readWordSegments(cache.text);
+    let low = 0, high = segments.length;
+    while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (segments[mid].to <= local) low = mid + 1;
+        else high = mid;
+    }
+    const segment = segments[low];
+    return { from: line.from + segment.from, to: line.from + segment.to };
+}
+
+export function previousGraphemeBoundary(text: string, offset: number): number {
+    const cursor = clampOffset(text, offset);
+    return cursor === 0 ? 0 : containing(text, cursor - 1, "grapheme").from;
 }
 
 export function nextGraphemeBoundary(text: string, offset: number): number {
-    const clamped = clampOffset(text, offset);
-    for (const boundary of readGraphemeBoundaries(text)) {
-        if (boundary > clamped) {
-            return boundary;
-        }
-    }
-
-    return text.length;
+    const cursor = clampOffset(text, offset);
+    return cursor === text.length ? cursor : containing(text, cursor, "grapheme").to;
 }
 
 export function previousWordBoundary(text: string, offset: number): number {
-    const clamped = clampOffset(text, offset);
-    if (clamped === 0) {
-        return 0;
+    let cursor = clampOffset(text, offset);
+    while (cursor > 0) {
+        const previous = previousGraphemeBoundary(text, cursor);
+        if (!isWhitespace(text.slice(previous, cursor))) break;
+        cursor = previous;
     }
-
-    const segments = readWordSegments(text);
-    let cursor = clamped;
-    while (cursor > 0 && isWhitespace(text.slice(previousGraphemeBoundary(text, cursor), cursor))) {
-        cursor = previousGraphemeBoundary(text, cursor);
-    }
-
-    const containing = [...segments].reverse().find((segment) => segment.from < cursor && segment.to >= cursor);
-    return containing?.from ?? previousGraphemeBoundary(text, cursor);
+    return cursor === 0 ? 0 : containing(text, cursor - 1, "word").from;
 }
 
 export function nextWordBoundary(text: string, offset: number): number {
-    const clamped = clampOffset(text, offset);
-    if (clamped >= text.length) {
-        return text.length;
-    }
-
-    const segments = readWordSegments(text);
-    let cursor = clamped;
+    let cursor = clampOffset(text, offset);
     while (cursor < text.length) {
         const next = nextGraphemeBoundary(text, cursor);
-        if (!isWhitespace(text.slice(cursor, next))) {
-            break;
-        }
+        if (!isWhitespace(text.slice(cursor, next))) break;
         cursor = next;
     }
-
-    const containing = segments.find((segment) => segment.from <= cursor && segment.to > cursor);
-    let boundary = containing?.to ?? nextGraphemeBoundary(text, cursor);
+    if (cursor === text.length) return cursor;
+    let boundary = containing(text, cursor, "word").to;
     while (boundary < text.length) {
         const next = nextGraphemeBoundary(text, boundary);
-        if (!isHorizontalWhitespace(text.slice(boundary, next))) {
-            break;
-        }
+        if (!isHorizontalWhitespace(text.slice(boundary, next))) break;
         boundary = next;
     }
     return boundary;
 }
 
 export function previousLineBoundary(text: string, offset: number): number {
-    return text.lastIndexOf("\n", Math.max(0, clampOffset(text, offset) - 1)) + 1;
+    const cursor = clampOffset(text, offset);
+    return cursor === 0 ? 0 : text.lastIndexOf("\n", cursor - 1) + 1;
 }
 
 export function nextLineBoundary(text: string, offset: number): number {

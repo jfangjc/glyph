@@ -1,4 +1,4 @@
-import { findSourceBlockAtOffset, isSourceSelection, readVisibleListPrefixLength, type Change, type EditorState, type SourceBlock, type Transaction } from "../../editor/core/types";
+import { sourceBlocksInRange, findSourceBlockAtOffset, isSourceSelection, readVisibleListPrefixLength, type Change, type EditorState, type SourceBlock, type Transaction } from "../../editor/core/types";
 import {
     nextGraphemeBoundary,
     nextLineBoundary,
@@ -77,10 +77,17 @@ export function createEnterTransaction(state: EditorState, options: { shiftKey?:
     }
 
     if (!options.shiftKey && block && canExitEmptyContinuationBlock(block) && range.from === block.contentFrom) {
+        // Keep a separator on either side of the editable paragraph. The
+        // parser consumes the first blank after a block as a separator.
+        const before = state.doc.slice(0, block.sourceFrom);
+        const after = state.doc.slice(block.sourceTo);
+        const leading = before && !before.endsWith("\n\n") ? "\n" : "";
+        const trailing = after && !after.startsWith("\n\n") ? "\n" : "";
+        const head = block.sourceFrom + leading.length;
         return {
-            changes: [{ from: block.sourceFrom, to: block.sourceTo, insert: "" }],
-            selection: { anchor: block.sourceFrom, head: block.sourceFrom },
-            annotations: { userEvent: "input" },
+            changes: [{ from: block.sourceFrom, to: block.sourceTo, insert: leading + trailing }],
+            selection: { anchor: head, head },
+            annotations: { userEvent: "input", historyMode: "discrete" },
         };
     }
 
@@ -798,16 +805,29 @@ export function readMarkdownVisualSelectionRange(state: EditorState): { from: nu
     return from <= to ? { from, to } : null;
 }
 
-export function readMarkdownVisualHiddenRanges(state: EditorState): Array<{
+const inlineRangeCache = new Map<string, { source: string; tokens: ReturnType<typeof readInlineSourceTokenRanges> }>();
+
+function cachedInlineRanges(state: EditorState, block: SourceBlock) {
+    const source = state.doc.slice(block.contentFrom, block.contentTo);
+    const cached = inlineRangeCache.get(block.id);
+    if (cached?.source === source) return cached.tokens;
+    const tokens = readInlineSourceTokenRanges(source);
+    inlineRangeCache.set(block.id, { source, tokens });
+    if (inlineRangeCache.size > 10000) inlineRangeCache.delete(inlineRangeCache.keys().next().value!);
+    return tokens;
+}
+
+export function readMarkdownVisualHiddenRanges(state: EditorState, range?: { from: number; to: number }): Array<{
     from: number;
     to: number;
     visibleFrom: number;
     visibleTo: number;
     atomic?: boolean;
 }> {
-    return state.blocks.blocks.flatMap((block) => {
+    const blocks = range ? Array.from(sourceBlocksInRange(state.blocks, range.from, range.to)) : state.blocks.blocks;
+    return blocks.flatMap((block) => {
         if (!isRichMarkdownBlock(block.type)) return [];
-        return readInlineSourceTokenRanges(state.doc.slice(block.contentFrom, block.contentTo)).map((token) => {
+        return cachedInlineRanges(state, block).map((token) => {
             const from = block.contentFrom + token.from;
             const to = block.contentFrom + token.to;
             return token.contentFrom === null || token.contentTo === null
@@ -905,8 +925,7 @@ function expandInlineVisualSelectionRange(
             continue;
         }
 
-        const content = state.doc.slice(block.contentFrom, block.contentTo);
-        const tokens = readInlineSourceTokenRanges(content).map((token) => ({
+        const tokens = cachedInlineRanges(state, block).map((token) => ({
             from: block.contentFrom + token.from,
             to: block.contentFrom + token.to,
             contentFrom: token.contentFrom === null ? null : block.contentFrom + token.contentFrom,
@@ -993,7 +1012,7 @@ function isStandaloneImageBlock(state: EditorState, block: SourceBlock): boolean
     if (block.type !== "paragraph") return false;
     const content = state.doc.slice(block.contentFrom, block.contentTo);
     if (!content.startsWith("![")) return false;
-    const tokens = readInlineSourceTokenRanges(content);
+    const tokens = cachedInlineRanges(state, block);
     return tokens.length === 1 && tokens[0].from === 0 && tokens[0].to === content.length;
 }
 

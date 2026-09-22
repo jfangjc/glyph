@@ -104,10 +104,17 @@ body.app-titlebar-host .document-surface[data-document-format="latex"][data-late
     backdrop-filter: var(--glyph-glass-backdrop);
 }
 
-.latex-preview[data-state="ready"] .latex-preview-status {
+.latex-preview-status:empty {
     display: none;
 }
 
-.latex-preview:not([data-state="ready"]) .latex-pdf-frame {
+.latex-preview[data-pdf-available="true"] .latex-preview-status {
+    top: 12px;
+    transform: translateX(-50%);
+    padding: 8px 12px;
+    font-size: 0.82rem;
+}
+
+.latex-preview:not([data-pdf-available="true"]) .latex-pdf-frame {
     visibility: hidden;
 }

@@ -4,6 +4,7 @@ import {
     clearSourceHistory,
     configureBlockIndexBuilder,
     getEditorState,
+    getDocumentRevision,
     getDocumentSource,
     measureEditorPerformance,
     readPerformanceNow,
@@ -66,8 +67,10 @@ export function toggleMarkdownEditingMode(): void {
     const source = getDocumentSource();
     const selection = getEditorState().selection;
 
+    const modeStartedAt = readPerformanceNow();
     documentState.editingMode = mode;
     initializeDocumentEditor(source, selection);
+    measureAfterPaintOpportunity("glyph:mode-switch-to-paint", modeStartedAt);
     notifyDocumentStateChanged();
 
     const session = documentState.sessionId;
@@ -90,7 +93,6 @@ export function installSourceStateDocumentIntegration(onContentChanged: () => vo
     configureProjectionCapability(initialFormat.projection);
     subscribeEditorState((next, previous, transaction) => {
         if (!initializingEditor && next.doc !== previous.doc) {
-            invalidateMarkdownImageCache();
             syncDocumentProjectionFromState(next, previous, transaction);
             pruneUnreferencedPendingImages();
             onContentChanged();
@@ -100,6 +102,7 @@ export function installSourceStateDocumentIntegration(onContentChanged: () => vo
 }
 
 export function loadDocument(documentFile: DocumentFile): void {
+    const loadStartedAt = readPerformanceNow();
     cancelPendingEdit();
     const format = getDocumentFormatForPath(documentFile.path || documentFile.name);
     const { editor } = readEditorDom();
@@ -115,12 +118,14 @@ export function loadDocument(documentFile: DocumentFile): void {
     });
     sourceViewFormat = null;
     resetPendingImagesForSession();
+    invalidateMarkdownImageCache();
     delete editor.dataset.virtualEofCaret;
     initializeDocumentEditor(decoded.source);
     clearSourceHistory();
     recordSavedDocumentContent(serializeDocument());
     documentState.hasUnsavedChanges = false;
     notifyDocumentStateChanged();
+    measureAfterPaintOpportunity("glyph:load-to-paint", loadStartedAt);
 }
 
 export function serializeDocument(): string {
@@ -174,7 +179,6 @@ function initializeDocumentEditor(source: string, selection?: ReturnType<typeof 
     } finally {
         initializingEditor = false;
     }
-    invalidateMarkdownImageCache();
     syncDocumentProjectionFromState(getEditorState());
 }
 
@@ -202,7 +206,12 @@ function syncDocumentProjectionFromState(
         syncDocumentFooter(format);
     }
     const selectionStartedAt = readPerformanceNow();
-    syncDomSelectionFromState({ focus: "preserve" });
+    const userEdit = transaction?.annotations?.userEvent;
+    const editor = readEditorDom().editor;
+    syncDomSelectionFromState({
+        focus: "preserve",
+        scrollIntoView: Boolean(userEdit && userEdit !== "programmatic" && editor.contains(document.activeElement)),
+    });
     measureEditorPerformance("glyph:selection-restoration", selectionStartedAt);
     measureEditorPerformance("glyph:projection", projectionStartedAt);
 }
@@ -265,4 +274,16 @@ function shouldRefreshDocumentRenderContext(
     }
 
     return false;
+}
+
+/** Two frames bracket a paint opportunity, not a native input-to-paint trace. */
+function measureAfterPaintOpportunity(name: string, startedAt: number): void {
+    if (!import.meta.env.DEV) return;
+    const session = documentState.sessionId;
+    const revision = getDocumentRevision();
+    const mode = documentState.editingMode;
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        if (session !== documentState.sessionId || revision !== getDocumentRevision() || mode !== documentState.editingMode) return;
+        measureEditorPerformance(name, startedAt);
+    }));
 }
