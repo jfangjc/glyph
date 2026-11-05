@@ -1,4 +1,5 @@
 import type { AppMenuCommand } from "./commands";
+import { readHostPlatform } from "../platform/host-platform";
 export type { AppMenuCommand } from "./commands";
 
 export type ShellCommand = "ui:commands" | "ui:files" | "ui:outline" | "ui:focus";
@@ -145,7 +146,7 @@ export const shortcutKeymap = [
         bindings: [{ key: "b", primary: true }],
     },
     {
-        command: "view:toggle-markdown-source",
+        command: "view:toggle-source",
         scopes: ["global", "menu"],
         bindings: [{ key: "/", primary: true }],
     },
@@ -300,21 +301,7 @@ function readBindingLabelKey(binding: ShortcutBinding): string {
 }
 
 function readShortcutLabelPlatform(): ShortcutLabelPlatform {
-    if (typeof navigator === "undefined") {
-        return "windows";
-    }
-
-    const platform = navigator.platform.toLowerCase();
-    const userAgent = navigator.userAgent;
-    if (platform.includes("mac") || userAgent.includes("Mac OS")) {
-        return "mac";
-    }
-
-    if (platform.includes("linux") || userAgent.includes("Linux")) {
-        return "linux";
-    }
-
-    return "windows";
+    return readHostPlatform() ?? "windows";
 }
 
 function hasScope(scopes: readonly ShortcutScope[], scope: ShortcutScope): boolean {
@@ -325,7 +312,7 @@ function normalizeKey(key: string): string {
     return key.length === 1 && /[a-z]/i.test(key) ? key.toLowerCase() : key;
 }
 
-if (import.meta.env.DEV) {
+if (import.meta.env?.DEV) {
     warnForDuplicateBindings();
 }
 

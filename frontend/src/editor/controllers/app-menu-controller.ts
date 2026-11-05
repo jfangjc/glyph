@@ -1,7 +1,7 @@
 import { Window } from "@wailsio/runtime";
 import { commands, type AppMenuCommand, type CommandMetadata, type EditorCommand } from "../../app/commands";
 import { canUseDesktopFileSystem } from "../../documents/document-actions";
-import { getActiveDocumentFormat, isMarkdownSourceMode } from "../../documents/document-session";
+import { getActiveDocumentFormat, isSourceEditingMode } from "../../documents/document-session";
 import { applyZoomShortcut } from "../../app/zoom";
 import { canUseWindowPrintRuntime } from "../../platform/runtime";
 
@@ -15,7 +15,7 @@ type AppMenuControllerOptions = {
     saveDocument: (promptForPath?: boolean) => Promise<void>;
     ensureExportSaved: () => Promise<boolean>;
     toggleFileTree: () => void;
-    toggleMarkdownEditingMode: () => void;
+    toggleDocumentEditingMode: () => void;
     canExport: () => boolean;
     canExecuteEditorCommand: (command: EditorCommand) => boolean;
     isEditorCommandActive: (command: EditorCommand) => boolean;
@@ -23,6 +23,23 @@ type AppMenuControllerOptions = {
 };
 
 export function createAppMenuController(options: AppMenuControllerOptions) {
+    const actions = {
+        "file:new": options.createNewDocument,
+        "file:open": options.openDocument,
+        "file:open-directory": options.openDirectory,
+        "file:save": () => options.saveDocument(),
+        "file:save-as": () => options.saveDocument(true),
+        "file:export": exportCurrentDocumentToPdf,
+        "edit:find": options.openFind,
+        "edit:replace": options.openReplace,
+        "view:toggle-file-tree": options.toggleFileTree,
+        "view:toggle-source": options.toggleDocumentEditingMode,
+        "view:zoom-in": () => applyZoomShortcut("in"),
+        "view:zoom-out": () => applyZoomShortcut("out"),
+        "view:zoom-reset": () => applyZoomShortcut("reset"),
+        "help:about": showAboutDialog,
+    } satisfies Record<Exclude<(typeof commands)[number], { editor: EditorCommand }>["id"], () => void | Promise<void>>;
+
     return {
         executeCommand,
         readCommandState,
@@ -35,92 +52,18 @@ export function createAppMenuController(options: AppMenuControllerOptions) {
             enabled: editorCommand ? options.canExecuteEditorCommand(editorCommand)
                 : id === "file:export" ? options.canExport()
                 : id.startsWith("file:") ? (id === "file:new" || canUseDesktopFileSystem())
-                : id === "view:toggle-markdown-source" ? getActiveDocumentFormat().descriptor.id === "markdown"
+                : id === "view:toggle-source" ? Boolean(getActiveDocumentFormat().livePreview)
                 : true,
             active: editorCommand && !id.startsWith("edit:") ? options.isEditorCommandActive(editorCommand)
-                : id === "view:toggle-markdown-source" ? isMarkdownSourceMode() : undefined,
+                : id === "view:toggle-source" ? isSourceEditingMode() : undefined,
         };
     }
 
     function executeCommand(command: AppMenuCommand, focusOwner: Element | null = null): void {
-        const metadata: CommandMetadata | undefined = commands.find(item => item.id === command);
-        const editorCommand = metadata?.editor;
-        if (editorCommand) {
-            void options.executeEditorCommand(editorCommand, focusOwner);
-            return;
-        }
-
-        switch (command) {
-            case "file:new":
-                void options.createNewDocument();
-                return;
-            case "file:open":
-                void options.openDocument();
-                return;
-            case "file:open-directory":
-                void options.openDirectory();
-                return;
-            case "file:save":
-                void options.saveDocument();
-                return;
-            case "file:save-as":
-                void options.saveDocument(true);
-                return;
-            case "file:export":
-                void exportCurrentDocumentToPdf();
-                return;
-            case "edit:find":
-                options.openFind();
-                return;
-            case "edit:replace":
-                options.openReplace();
-                return;
-            case "view:toggle-file-tree":
-                options.toggleFileTree();
-                return;
-            case "view:toggle-markdown-source":
-                options.toggleMarkdownEditingMode();
-                return;
-            case "view:zoom-in":
-                void applyZoomShortcut("in");
-                return;
-            case "view:zoom-out":
-                void applyZoomShortcut("out");
-                return;
-            case "view:zoom-reset":
-                void applyZoomShortcut("reset");
-                return;
-            case "help:about":
-                showAboutDialog();
-                return;
-            case "edit:undo":
-            case "edit:redo":
-            case "edit:cut":
-            case "edit:copy":
-            case "edit:paste":
-            case "edit:select-all":
-            case "format:bold":
-            case "format:italic":
-            case "format:strike":
-            case "format:inline-code":
-            case "format:link":
-            case "format:block:paragraph":
-            case "format:block:heading-1":
-            case "format:block:heading-2":
-            case "format:block:heading-3":
-            case "format:block:list":
-            case "format:block:ordered-list":
-            case "format:block:todo":
-            case "format:block:quote":
-            case "format:block:code":
-            case "insert:table":
-            case "insert:image":
-            case "insert:math":
-            case "insert:rule":
-                return;
-            default:
-                assertUnhandledMenuCommand(command);
-        }
+        const metadata = commands.find(item => item.id === command);
+        if (!metadata) throw new Error(`Unhandled app menu command: ${command}`);
+        if ("editor" in metadata) void options.executeEditorCommand(metadata.editor, focusOwner);
+        else void actions[metadata.id]();
     }
 
     async function exportCurrentDocumentToPdf(): Promise<void> {
@@ -207,8 +150,4 @@ function showAboutDialog(): void {
         document.body.append(dialog);
     }
     if (!dialog.open) dialog.showModal();
-}
-
-function assertUnhandledMenuCommand(command: never): never {
-    throw new Error(`Unhandled app menu command: ${command}`);
 }

@@ -3,13 +3,15 @@ import "./writing-interface.css";
 import { commands } from "../app/commands";
 import { readShortcutCommand, readShortcutLabel, type AppMenuCommand } from "../app/keymap";
 import { documentState, documentStateChangedEvent } from "../documents/document-state";
-import { canUseDesktopFileSystem, saveCurrentDocument } from "../documents/document-actions";
-import { saveAndCompileLatex } from "../formats/latex/preview";
-import { isMarkdownSourceMode, toggleMarkdownEditingMode } from "../documents/document-session";
+import { canUseDesktopFileSystem, saveCurrentDocument, createNewDocument } from "../documents/document-actions";
+import { getDocumentFormats } from "../formats/registry";
+import { resolvePreviewView, type PdfPreviewView } from "../formats/preview/view";
+import { getActiveDocumentFormat, isSourceEditingMode, toggleDocumentEditingMode } from "../documents/document-session";
 import { installFileTree } from "../documents/file-tree";
 import type { createAppMenuController } from "./controllers/app-menu-controller";
 import { createSelectionBookmark, dispatch } from "./core/store";
 import { syncDomSelectionFromState } from "./core/projection";
+import { isBlockingDialogOpen } from "../utils/dom";
 
 type Options = {
     openDocumentPath: (path: string) => Promise<void>;
@@ -72,12 +74,12 @@ export function installWritingInterface(options: Options) {
     let bookmark: ReturnType<typeof createSelectionBookmark> | null = null;
     let session = 0;
     let focusMode = false;
-    let latexView = "source";
+    let previewView: PdfPreviewView = "source";
     let split = 50;
     const surface = document.getElementById("document-surface")!;
-    document.getElementById("latex-preview")!.tabIndex = 0;
+    document.getElementById("document-preview")!.tabIndex = 0;
     const divider = document.createElement("div");
-    divider.className = "latex-divider";
+    divider.className = "preview-divider";
     divider.tabIndex = 0;
     divider.setAttribute("role", "separator");
     divider.setAttribute("aria-label", "Resize Source and PDF panes");
@@ -87,7 +89,7 @@ export function installWritingInterface(options: Options) {
     editor.after(divider);
     const resizeSplit = (value: number) => {
         split = Math.max(25, Math.min(75, value));
-        surface.style.setProperty("--latex-source-width", `${split}%`);
+        surface.style.setProperty("--preview-source-width", `${split}%`);
         divider.setAttribute("aria-valuenow", String(Math.round(split)));
     };
     resizeSplit(split);
@@ -112,8 +114,9 @@ export function installWritingInterface(options: Options) {
 
     function items(): Item[] {
         const native = canUseDesktopFileSystem();
-        const markdown = documentState.activeFormatId === "markdown";
-        const latex = documentState.activeFormatId === "latex";
+        const format = getActiveDocumentFormat();
+        const livePreview = Boolean(format.livePreview);
+        const pdfPreview = format.preview?.kind === "pdf";
         const result: Item[] = commands.filter(command => command.id !== "view:toggle-file-tree").map(command => ({
             id: command.id,
             label: command.id === "file:open-directory" ? "Open Folder" : command.label,
@@ -122,9 +125,14 @@ export function installWritingInterface(options: Options) {
             ...options.readCommandState(command.id),
             run: () => dispatchCommand(command.id),
         }));
-        for (const mode of ["Live Preview", "Source"]) result.push({ id: `markdown:${mode}`, label: `Markdown: ${mode}`, group: "View", enabled: markdown, active: markdown && isMarkdownSourceMode() === (mode === "Source"), run: () => { if (isMarkdownSourceMode() !== (mode === "Source")) toggleMarkdownEditingMode(); } });
-        for (const mode of ["source", "split", "pdf"]) result.push({ id: `latex:${mode}`, label: `LaTeX: ${mode.toUpperCase() === "PDF" ? "PDF" : mode[0].toUpperCase() + mode.slice(1)}`, group: "View", enabled: latex && (mode !== "split" || window.innerWidth > 700), active: latex && latexView === mode, run: () => { latexView = mode; sync(); if (mode === "pdf") document.getElementById("latex-preview")?.focus(); } });
-        result.push({ id: "latex:compile", label: "Save & Compile", group: "File", enabled: latex && native && !documentState.isSavingDocument, run: () => { void saveAndCompileLatex(() => saveCurrentDocument({ promptForPath: !documentState.activeFilePath })); } });
+        for (const entry of getDocumentFormats()) result.push({
+            id: `file:new:${entry.descriptor.id}`, label: `New ${entry.descriptor.label} Document`,
+            group: "File", enabled: !documentState.isOpeningDocument,
+            run: () => { void createNewDocument(entry.descriptor.id); },
+        });
+        if (livePreview) for (const mode of ["Live Preview", "Source"]) result.push({ id: `document:${mode}`, label: `${format.descriptor.label}: ${mode}`, group: "View", enabled: true, active: isSourceEditingMode() === (mode === "Source"), run: () => { if (isSourceEditingMode() !== (mode === "Source")) toggleDocumentEditingMode(); } });
+        if (pdfPreview) for (const mode of ["source", "split", "pdf"] as const) result.push({ id: `preview:${mode}`, label: `${format.descriptor.label}: ${mode === "pdf" ? "PDF" : mode[0].toUpperCase() + mode.slice(1)}`, group: "View", enabled: mode !== "split" || window.innerWidth > 700, active: surface.dataset.previewView === mode, run: () => { previewView = mode; sync(); if (mode === "pdf") document.getElementById("document-preview")?.focus(); } });
+        result.push({ id: "preview:compile", label: "Save & Compile", group: "File", enabled: Boolean(format.preview?.compile) && native && !documentState.isSavingDocument, run: () => { void format.preview?.compile?.(() => saveCurrentDocument({ promptForPath: !documentState.activeFilePath })); } });
         result.push({ id: "ui:focus", label: focusMode ? "Exit Focus mode" : "Focus mode", group: "View", shortcut: readShortcutLabel("ui:focus"), enabled: true, active: focusMode, run: toggleFocus });
         result.push({ id: "ui:files", label: "Navigate Files", group: "Navigate", shortcut: readShortcutLabel("ui:files"), enabled: true, run: () => open("files") });
         result.push({ id: "ui:outline", label: "Navigate Outline", group: "Navigate", shortcut: readShortcutLabel("ui:outline"), enabled: true, run: () => open("outline") });
@@ -197,10 +205,10 @@ export function installWritingInterface(options: Options) {
         if (kind === "details") {
             note(documentState.activeFilePath || "No file path — this document has not been saved.");
             note(documentState.isSavingDocument ? "Saving…" : documentState.hasUnsavedChanges ? "Unsaved changes" : documentState.activeFilePath ? "Saved" : "Not saved to disk");
-            if (documentState.activeFormatId === "latex") {
-                note(`PDF: ${document.getElementById("latex-preview-status")?.textContent || document.getElementById("latex-preview")?.dataset.state || "Not loaded"}`);
+            if (getActiveDocumentFormat().preview?.kind === "pdf") {
+                note(`PDF: ${document.getElementById("document-preview-status")?.textContent || document.getElementById("document-preview")?.dataset.state || "Not loaded"}`);
             }
-            panel.append(button("Rename", () => {
+            const rename = button("Rename", () => {
                 titleRow.hidden = false;
                 panel.append(titleRow);
                 const input = document.getElementById("document-title") as HTMLInputElement;
@@ -210,11 +218,13 @@ export function installWritingInterface(options: Options) {
                     panel.append(apply);
                 }
                 input.focus(); input.select();
-            }));
+            });
+            rename.disabled = (document.getElementById("document-title") as HTMLInputElement).readOnly;
+            panel.append(rename);
             return;
         }
         if (!group) {
-            for (const id of ["edit:find", "edit:replace", "file:save", "file:save-as", "file:export", "latex:compile", "ui:focus"]) addItem(panel, items().find(item => item.id === id)!);
+            for (const id of ["edit:find", "edit:replace", "file:save", "file:save-as", "file:export", "preview:compile", "ui:focus"]) addItem(panel, items().find(item => item.id === id)!);
             for (const name of ["Formatting", "Insert", "Edit", "View", "File", "Help"]) {
                 const submenu = button(`${name} ›`, () => { group = name; render(); panel.querySelector<HTMLElement>(".command-row")?.focus(); });
                 submenu.setAttribute("aria-haspopup", "menu");
@@ -315,8 +325,8 @@ export function installWritingInterface(options: Options) {
                 results.append(outline);
                 const headings = Array.from(outline.querySelectorAll<HTMLElement>("li"));
                 headings.forEach(item => item.hidden = !item.textContent?.toLowerCase().includes(query.toLowerCase()));
-                if (!headings.length) noteResult(documentState.activeFormatId !== "markdown" || isMarkdownSourceMode()
-                    ? "Headings are available in Markdown Live Preview."
+                if (!headings.length) noteResult(!getActiveDocumentFormat().livePreview || isSourceEditingMode()
+                    ? "Headings are not available in this document view."
                     : "No headings yet. Add a Markdown heading to build an outline.");
                 else if (headings.every(item => item.hidden)) noteResult("No matching headings.");
             } else {
@@ -380,11 +390,8 @@ export function installWritingInterface(options: Options) {
         unsaved.hidden = !documentState.hasUnsavedChanges;
         nav.title = `${documentState.activeFilePath || documentState.fileName}${documentState.hasUnsavedChanges ? " ? Unsaved changes" : ""}\nOpen files, commands and outline`;
         nav.setAttribute("aria-description", `${documentState.fileName}${documentState.hasUnsavedChanges ? ", unsaved changes" : ""}`);
-        surface.dataset.latexView = latexView;
-        if (documentState.activeFormatId === "latex" && latexView === "split" && window.innerWidth <= 700) {
-            latexView = "source";
-            surface.dataset.latexView = latexView;
-        }
+        // Collapse split view temporarily; restore the selected view on widening.
+        surface.dataset.previewView = resolvePreviewView(previewView, window.innerWidth);
     }
     header.addEventListener("pointerdown", event => {
         // Keep the source selection intact until the panel has captured a bookmark.
@@ -403,19 +410,19 @@ export function installWritingInterface(options: Options) {
     window.addEventListener(documentStateChangedEvent, sync);
     window.addEventListener("resize", sync);
     document.addEventListener("keydown", event => {
-        if (event.isComposing || event.defaultPrevented) return;
+        if (event.isComposing || event.defaultPrevented || isBlockingDialogOpen()) return;
         const command = readShortcutCommand(event, "global");
         if (["ui:commands", "ui:files", "ui:outline", "ui:focus", "view:toggle-file-tree"].includes(command ?? "")) {
             event.preventDefault(); event.stopImmediatePropagation();
             if (command === "ui:focus") toggleFocus(); else open(command === "ui:commands" ? "commands" : command === "ui:outline" ? "outline" : "files");
             return;
         }
-        if (!panel.hidden && command && ["edit:find", "edit:replace", "view:toggle-markdown-source"].includes(command)) {
+        if (!panel.hidden && command && ["edit:find", "edit:replace", "view:toggle-source"].includes(command)) {
             restoreSelection(); close(false);
         }
         if (event.key === "F6") {
             event.preventDefault();
-            const regions = [header.querySelector<HTMLElement>("button"), !panel.hidden ? panel.querySelector<HTMLElement>("input,button") : null, !document.getElementById("find-replace-panel")!.hidden ? document.getElementById("find-query") : null, editor, documentState.activeFormatId === "latex" && latexView !== "source" ? document.getElementById("latex-preview") : null, focusMode ? exit : null].filter((node): node is HTMLElement => !!node && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden");
+            const regions = [header.querySelector<HTMLElement>("button"), !panel.hidden ? panel.querySelector<HTMLElement>("input,button") : null, !document.getElementById("find-replace-panel")!.hidden ? document.getElementById("find-query") : null, editor, getActiveDocumentFormat().preview && surface.dataset.previewView !== "source" ? document.getElementById("document-preview") : null, focusMode ? exit : null].filter((node): node is HTMLElement => !!node && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== "hidden");
             const active = document.activeElement;
             const current = regions.findIndex(node => node === editor ? editor.contains(active)
                 : node === regions[0] && header.contains(node) ? header.contains(active)

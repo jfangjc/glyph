@@ -20,15 +20,15 @@ import {
 } from "../documents/document-state";
 import {
     getActiveDocumentFormat,
-    isMarkdownSourceMode,
+    isSourceEditingMode,
     commitSavedDocument,
     installSourceStateDocumentIntegration,
     loadDocument,
     serializeDocument,
-    toggleMarkdownEditingMode,
+    toggleDocumentEditingMode,
 } from "../documents/document-session";
 import { extensionFromPath, titleFromFileName } from "../formats/file-names";
-import { syncDocumentPreview } from "../documents/document-preview";
+import { syncDocumentPreview, installDocumentPreviewEvents } from "../documents/document-preview";
 import {
     createAppMenuController,
 } from "./controllers/app-menu-controller";
@@ -89,9 +89,9 @@ export function installEditorController(): void {
         syncActiveBlockIndicator: syncFocusedBlockUi,
         getActiveDocumentFormat,
         getActiveFilePath: () => documentState.activeFilePath,
-        isSourceMode: isMarkdownSourceMode,
+        isSourceMode: isSourceEditingMode,
     });
-    dom.markdownModeToggle.addEventListener("click", toggleMarkdownEditingMode);
+    dom.editingModeToggle.addEventListener("click", toggleDocumentEditingMode);
     const titleController = createTitleController({
         getActiveDocumentFormat,
         isComposingText: inputController.isComposingText,
@@ -114,7 +114,7 @@ export function installEditorController(): void {
         saveDocument: saveDocumentFromEditor,
         ensureExportSaved,
         toggleFileTree,
-        toggleMarkdownEditingMode,
+        toggleDocumentEditingMode,
         canExport: () => Boolean(getActiveDocumentFormat().export),
         executeEditorCommand: inputController.executeCommand,
         canExecuteEditorCommand: inputController.canExecuteCommand,
@@ -188,8 +188,9 @@ export function installEditorController(): void {
         const dirtyChanged = previousDirty !== documentState.hasUnsavedChanges;
         const formatUiChanged = reinitialized || pathChanged || previousFileName !== documentState.fileName ||
             previousSaving !== documentState.isSavingDocument;
-        if (previousSession !== documentState.sessionId || previousCommittedFileName !== documentState.committedFileName) {
-            dom.title.value = titleFromFileName(documentState.committedFileName);
+        if (previousSession !== documentState.sessionId ||
+            (previousFileName !== documentState.fileName || previousCommittedFileName !== documentState.committedFileName) && document.activeElement !== dom.title) {
+            dom.title.value = titleFromFileName(documentState.fileName);
         }
         previousCommittedFileName = documentState.committedFileName;
         previousSession = documentState.sessionId;
@@ -205,10 +206,7 @@ export function installEditorController(): void {
             findReplaceController.refresh();
         }
         if (formatUiChanged) syncDocumentFormatUi();
-        else if (dirtyChanged) syncDocumentPreview(getActiveDocumentFormat(), {
-            activeFilePath: documentState.activeFilePath,
-            isSavingDocument: documentState.isSavingDocument,
-        });
+        else if (dirtyChanged) syncDocumentPreview(getActiveDocumentFormat());
         syncDocumentWindowTitle();
     }
     window.addEventListener(documentStateChangedEvent, syncDocumentPresentation);
@@ -221,6 +219,7 @@ export function installEditorController(): void {
         onBlockActivated: syncActiveBlockIndicator,
         getProjectionCapability: () => getActiveDocumentFormat().projection,
     });
+    installDocumentPreviewEvents();
     installSourceStateDocumentIntegration(() => {
         refreshDocumentOutline();
         findReplaceController.refresh();
@@ -273,7 +272,7 @@ async function ensureExportSaved(): Promise<boolean> {
 let formatUiSignature = "";
 
 function syncDocumentFormatUi(): void {
-    const { shell, surface, title, extension, markdownModeToggle } = readEditorDom();
+    const { shell, surface, title, extension, editingModeToggle } = readEditorDom();
     const format = getActiveDocumentFormat();
 
     const activeExtension = extensionFromPath(documentState.fileName) || format.descriptor.defaultExtension;
@@ -287,19 +286,17 @@ function syncDocumentFormatUi(): void {
         extension.setAttribute("aria-label", `${activeExtension} file extension`);
         surface.dataset.documentFormat = format.descriptor.id;
         shell.dataset.documentFormat = format.descriptor.id;
+        surface.dataset.previewKind = format.preview?.kind ?? "none";
+        shell.dataset.previewKind = format.preview?.kind ?? "none";
         surface.dataset.editingMode = documentState.editingMode;
         shell.dataset.editingMode = documentState.editingMode;
-        const canToggleMarkdownMode = format.descriptor.id === "markdown";
-        markdownModeToggle.hidden = !canToggleMarkdownMode;
-        markdownModeToggle.textContent = isMarkdownSourceMode() ? "Source" : "Live Preview";
-        markdownModeToggle.setAttribute("aria-pressed", String(isMarkdownSourceMode()));
-        markdownModeToggle.title = isMarkdownSourceMode()
-            ? "Switch to Markdown Live Preview"
-            : "Switch to Markdown source mode";
+        editingModeToggle.hidden = !format.livePreview;
+        editingModeToggle.textContent = isSourceEditingMode() ? "Source" : "Live Preview";
+        editingModeToggle.setAttribute("aria-pressed", String(isSourceEditingMode()));
+        editingModeToggle.title = isSourceEditingMode()
+            ? "Switch to Live Preview"
+            : "Switch to source mode";
     }
 
-    syncDocumentPreview(format, {
-        activeFilePath: documentState.activeFilePath,
-        isSavingDocument: documentState.isSavingDocument,
-    });
+    syncDocumentPreview(format);
 }

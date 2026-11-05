@@ -192,17 +192,15 @@ export function setBlockText(block: HTMLElement, text: string): void {
 
     const cache = getRenderCache(content);
     const inputKey = JSON.stringify([type, text, serializeBlockSource(source), block.dataset.continuationPrefix, renderRevision]);
-    // Footnote rendering advances context cursors and cannot use this shortcut.
-    if (cache.inputKey === inputKey && !text.includes("[^")) {
+    if (cache.inputKey === inputKey) {
         if (cache.previewHtml !== undefined && canReusePreviewContent(block, content, text, classNameForPreview(type), source)) return;
         if (cache.inlineHtml !== undefined && canReuseInlineContent(content, text, source)) return;
     }
-    const blockHtml = renderContext.renderBlockContent?.(type, text, renderContext.context);
+    const blockHtml = cache.inputKey === inputKey && cache.previewHtml !== undefined
+        ? cache.previewHtml : renderContext.renderBlockContent?.(type, text, renderContext.context);
     if (blockHtml !== undefined && blockHtml !== null) {
-        const previewHtml = `${serializeBlockSource(source)}\u0000${blockHtml}`;
-        const cache = getRenderCache(content);
         if (
-            cache.previewHtml === previewHtml &&
+            cache.previewHtml === blockHtml &&
             cache.previewRevision === renderRevision &&
             canReusePreviewContent(block, content, text, classNameForPreview(type), source)
         ) {
@@ -210,7 +208,7 @@ export function setBlockText(block: HTMLElement, text: string): void {
         }
 
         renderPreviewBlockContent(content, text, blockHtml, classNameForPreview(type), source);
-        cache.previewHtml = previewHtml;
+        cache.previewHtml = blockHtml;
         cache.previewRevision = renderRevision;
         cache.inputKey = inputKey;
         renderContext.hydrateRenderedContent?.(content, renderContext.activeFilePath);
@@ -231,7 +229,10 @@ export function setBlockText(block: HTMLElement, text: string): void {
         return;
     }
 
-    const html = renderBlockInnerHtml(type, text, source, block.dataset.continuationPrefix);
+    // Revealing source changes DOM, not render inputs. Reuse the original HTML
+    // so collapsing it cannot advance document-wide footnote cursors again.
+    const html = cache.inputKey === inputKey && cache.inlineHtml !== undefined
+        ? cache.inlineHtml : renderBlockInnerHtml(type, text, source, block.dataset.continuationPrefix);
 
     if (
         cache.inlineHtml === html &&
@@ -363,11 +364,7 @@ function schedulePlainTextHighlight(
         const nextSource = renderContext.readBlockSource?.(block, type, text) ?? source;
 
         renderPlainTextBlockContent(content, text, nextSource, highlightedHtml);
-        getRenderCache(content).plainText = {
-            text,
-            highlightedHtml,
-            revision: renderRevision,
-        };
+        syncPlainTextHighlightCache(content, text, highlightedHtml, false);
 
         if (ownsSelection) syncDomSelectionFromState({ focus: "preserve" });
         if (focusOwner instanceof HTMLElement && focusOwner.isConnected && document.activeElement !== focusOwner) focusOwner.focus({ preventScroll: true });
@@ -752,14 +749,7 @@ function setRuleMarker(block: HTMLElement, ruleMarker: string | undefined): void
 }
 
 export function setBlockHeadingId(block: HTMLElement, headingId: string | undefined, explicit = false): void {
-    if (!headingTypes.has(readBlockType(block.dataset.type))) {
-        delete block.dataset.headingId;
-        delete block.dataset.headingIdExplicit;
-        block.removeAttribute("id");
-        return;
-    }
-
-    const normalized = normalizeHeadingId(headingId);
+    const normalized = headingTypes.has(readBlockType(block.dataset.type)) ? normalizeHeadingId(headingId) : "";
     if (normalized) {
         block.dataset.headingId = normalized;
         block.dataset.headingIdExplicit = explicit ? "true" : "false";
@@ -777,22 +767,10 @@ function setBlockHeadingSource(
     prefix: string | undefined,
     suffix: string | undefined,
 ): void {
-    if (!headingTypes.has(readBlockType(block.dataset.type))) {
-        delete block.dataset.headingSourcePrefix;
-        delete block.dataset.headingSourceSuffix;
-        return;
-    }
-
-    if (prefix !== undefined) {
-        block.dataset.headingSourcePrefix = prefix;
-    } else {
-        delete block.dataset.headingSourcePrefix;
-    }
-
-    if (suffix !== undefined) {
-        block.dataset.headingSourceSuffix = suffix;
-    } else {
-        delete block.dataset.headingSourceSuffix;
+    const isHeading = headingTypes.has(readBlockType(block.dataset.type));
+    for (const [key, value] of [["headingSourcePrefix", prefix], ["headingSourceSuffix", suffix]] as const) {
+        if (isHeading && value !== undefined) block.dataset[key] = value;
+        else delete block.dataset[key];
     }
 }
 
@@ -813,10 +791,6 @@ export function getBlockText(block: HTMLElement): string {
     if (interactiveSource) {
         const source = interactiveSource.textContent ?? "";
         return renderContext.readInteractiveBlockText?.(type, source) ?? source;
-    }
-
-    if (isPlainTextBlockType(type)) {
-        return getRenderedContentText(content);
     }
 
     if (isAtomicBlockType(type)) {

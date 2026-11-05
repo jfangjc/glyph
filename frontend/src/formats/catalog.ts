@@ -6,18 +6,10 @@ type DocumentFileFilter = {
     patterns: string[];
 };
 
-export type CatalogEntry = {
-    id: string;
-    label: string;
-    extensions: string[];
-    defaultExtension: string;
-    defaultFileName: string;
-    adapter?: "markdown" | "latex";
-    editableTitle: boolean;
+export type CatalogEntry = DocumentFormatDescriptor & {
+    adapter?: string;
 };
 
-// Keep adapter validation independent of renderer implementations.
-const catalogAdapters = { markdown: true, latex: true };
 export const catalog = validateCatalog(catalogJson.formats as CatalogEntry[]);
 
 export function getCatalogDescriptor(entry: CatalogEntry): DocumentFormatDescriptor {
@@ -38,7 +30,7 @@ export function getDocumentFileFilters(): DocumentFileFilter[] {
     }));
 }
 
-function validateCatalog(entries: CatalogEntry[]): CatalogEntry[] {
+export function validateCatalog(entries: readonly CatalogEntry[]): CatalogEntry[] {
     if (entries.length === 0) {
         throw new Error("The document format catalog is empty");
     }
@@ -65,8 +57,8 @@ function validateCatalog(entries: CatalogEntry[]): CatalogEntry[] {
         if (!normalizedExtensions.includes(defaultExtension)) {
             throw new Error(`Default extension ${defaultExtension} is not registered for ${id}`);
         }
-        if (entry.adapter && !(entry.adapter in catalogAdapters)) {
-            throw new Error(`Unknown document format adapter: ${entry.adapter}`);
+        if (entry.adapter !== undefined && !/^[a-z][a-z0-9-]*$/.test(entry.adapter)) {
+            throw new Error(`Invalid document format adapter: ${entry.adapter}`);
         }
 
         return {

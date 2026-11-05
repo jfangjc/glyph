@@ -2,9 +2,10 @@ import { canUseDesktopFileSystem } from "../documents/document-actions";
 import { syncLinkOpenIntentFromKeyboard } from "../editor/pointer-interactions";
 import { isShellCommand, readShortcutCommand } from "./keymap";
 import type { AppMenuCommand } from "./commands";
+import { isBlockingDialogOpen } from "../utils/dom";
 
 export function handleGlobalKeydown(event: KeyboardEvent, executeCommand: (command: AppMenuCommand, focusOwner: Element | null) => void): void {
-    if (event.isComposing || event.defaultPrevented) return;
+    if (event.isComposing || event.defaultPrevented || isBlockingDialogOpen()) return;
     syncLinkOpenIntentFromKeyboard(event);
 
     const command = readGlobalShortcutCommand(event);

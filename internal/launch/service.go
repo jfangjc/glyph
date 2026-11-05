@@ -21,7 +21,6 @@ type formatCatalog struct {
 		Extensions       []string `json:"extensions"`
 		DefaultExtension string   `json:"defaultExtension"`
 		DefaultFileName  string   `json:"defaultFileName"`
-		Adapter          string   `json:"adapter"`
 	} `json:"formats"`
 }
 
@@ -60,9 +59,6 @@ func ParseFileAssociations(data []byte) ([]string, error) {
 		}
 		if strings.TrimSpace(format.Label) == "" || strings.TrimSpace(format.DefaultFileName) == "" {
 			return nil, fmt.Errorf("format %q is missing its label or default file name", format.ID)
-		}
-		if format.Adapter != "" && format.Adapter != "markdown" && format.Adapter != "latex" {
-			return nil, fmt.Errorf("unknown format adapter %q for format %q", format.Adapter, format.ID)
 		}
 		if _, exists := ids[format.ID]; exists {
 			return nil, fmt.Errorf("duplicate format id %q", format.ID)

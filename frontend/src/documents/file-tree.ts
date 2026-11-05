@@ -1,6 +1,7 @@
 import { chooseDirectoryToOpen, readDirectoryTree } from "../bridge/documents";
 import type { DirectoryTree, DirectoryTreeItem } from "../bridge/types";
 import { documentState } from "./document-state";
+import { readStoredValue, writeStoredValue, removeStoredValue } from "../utils/storage";
 import { renderFileTreeHtml } from "./file-tree-rendering";
 import { getFileTreeItem, moveFileTreeSelection, syncFileTreeSelectionChange } from "./file-tree-selection";
 
@@ -558,13 +559,13 @@ function getHost(): FileTreeHost {
 }
 
 function getLastOpenDirectoryPath(): string | null {
-    return window.localStorage.getItem(lastOpenDirectoryPathStorageKey);
+    return readStoredValue(lastOpenDirectoryPathStorageKey);
 }
 
 function rememberLastOpenDirectoryPath(path: string): void {
-    window.localStorage.setItem(lastOpenDirectoryPathStorageKey, path);
+    writeStoredValue(lastOpenDirectoryPathStorageKey, path);
 }
 
 function forgetLastOpenDirectoryPath(): void {
-    window.localStorage.removeItem(lastOpenDirectoryPathStorageKey);
+    removeStoredValue(lastOpenDirectoryPathStorageKey);
 }

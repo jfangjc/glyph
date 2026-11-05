@@ -1,12 +1,12 @@
 body.app-titlebar-host { --glyph-titlebar-height:40px }
 .app-titlebar { background:var(--glyph-surface); border-bottom:1px solid var(--glyph-border) }
-.app-titlebar .app-drag-region { position:absolute; inset:0; z-index:-1 }
+.app-titlebar .app-drag-region { position:absolute; inset:0; z-index:0 }
 body.app-titlebar-host.mac-host { --glyph-titlebar-height:50px }
 .writing-header button,.writing-panel button,.exit-focus { font:13px/1.4 var(--glyph-font-text); color:var(--glyph-text); background:transparent; border:0; border-radius:5px; cursor:pointer; --wails-draggable:no-drag }
 .writing-header button { height:30px; min-width:0; padding:4px 8px }
 .writing-header svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.5; vertical-align:middle }
 .writing-header button:hover,.writing-panel button:hover:not(:disabled),.exit-focus:hover { background:var(--glyph-control-hover) }
-button:focus-visible,input:focus-visible,.latex-divider:focus-visible { outline:2px solid var(--glyph-focus-ring)!important; outline-offset:2px }
+button:focus-visible,input:focus-visible { outline:2px solid var(--glyph-focus-ring)!important; outline-offset:2px }
 .writing-panel { position:fixed; top:calc(var(--glyph-titlebar-height) + 8px); right:12px; width:min(360px,calc(100vw - 24px)); max-height:calc(100dvh - var(--glyph-titlebar-height) - 24px); overflow:auto; z-index:70; padding:10px; border:1px solid var(--glyph-border); border-radius:10px; background:var(--glyph-surface); box-shadow:0 12px 40px #0002; font:13px/1.5 var(--glyph-font-text); color:var(--glyph-text) }
 .writing-panel[hidden],[hidden].exit-focus,.document-title-row[hidden] { display:none!important }
 .writing-panel[data-kind="commands"] { width:min(540px,calc(100vw - 24px)); left:50%; right:auto; transform:translateX(-50%) }
@@ -39,7 +39,7 @@ button:focus-visible,input:focus-visible,.latex-divider:focus-visible { outline:
 .writing-panel .document-title-row { display:flex; padding:8px 0 }
 .writing-panel .document-title { font-size:15px; max-width:85% }
 .writing-panel .document-extension { font-size:13px }
-#markdown-mode-toggle { display:none }
+#editing-mode-toggle { display:none }
 body.app-titlebar-host .document-surface { padding-top:38px }
 .block-editor,.editor-shell[data-editing-mode="source"] .block-editor { margin-top:0 }
 .exit-focus { position:fixed; top:5px; left:12px; height:30px; padding:4px 10px; z-index:65 }
@@ -48,36 +48,18 @@ body.app-titlebar-host .document-surface { padding-top:38px }
 .writing-focus .app-titlebar { border-bottom-color:transparent }
 .editor-status[data-state="error"] { z-index:80 }
 .editor-status button { margin-left:12px; font:inherit; cursor:pointer }
-.latex-divider { display:none }
-.document-surface[data-document-format="latex"] { display:grid!important; grid-template-columns:minmax(0,1fr); width:100%; height:100%; min-height:100%!important; padding:0!important }
-.document-surface[data-document-format="latex"] .block-editor { overflow:auto; padding:32px clamp(20px,4vw,48px) 100px; background:var(--glyph-surface) }
-.document-surface[data-document-format="latex"] .latex-preview { display:none }
-.document-surface[data-document-format="latex"][data-latex-view="split"] { grid-template-columns:minmax(0,var(--latex-source-width,50%)) 6px minmax(0,1fr) }
-.document-surface[data-document-format="latex"][data-latex-view="split"] .latex-divider { display:block; cursor:col-resize; background:var(--glyph-border); touch-action:none }
-.document-surface[data-document-format="latex"][data-latex-view="split"] .latex-preview,.document-surface[data-document-format="latex"][data-latex-view="pdf"] .latex-preview { display:block; position:relative; min-width:0; height:100% }
-.document-surface[data-document-format="latex"][data-latex-view="pdf"] .block-editor { display:none }
-.latex-preview[data-state="ready"] .latex-preview-status:not(:empty) { display:block; top:8px; left:8px; transform:none; max-width:calc(100% - 16px); background:var(--glyph-surface) }
 @media(max-width:700px) {
  body.app-titlebar-host .document-surface { padding-top:28px }
- .document-surface[data-document-format="latex"][data-latex-view="split"] { grid-template-columns:minmax(0,1fr) }
- .document-surface[data-document-format="latex"][data-latex-view="split"] .latex-preview,.document-surface[data-document-format="latex"][data-latex-view="split"] .latex-divider { display:none }
  .find-replace-panel { max-width:calc(100vw - 16px) }
  .find-replace-row { flex-wrap:wrap }
  .find-replace-input { flex-basis:100px; min-width:80px }
 }
-@media print { .writing-panel,.exit-focus,.latex-divider,.editor-status { display:none!important } }
 
 .writing-panel .document-outline-button { grid-template-columns:minmax(0,1fr); }
 @media(max-width:700px) { .find-replace-row { display:flex; flex-wrap:wrap; } }
 
 .app-titlebar { background:var(--glyph-surface)!important }
-.document-surface[data-document-format="latex"] { grid-template-rows:minmax(0,1fr); }
-.document-surface[data-document-format="latex"] #editor { grid-column:1; grid-row:1; min-height:0; }
-.document-surface[data-document-format="latex"] .latex-divider { grid-column:2; grid-row:1; }
-.document-surface[data-document-format="latex"] .latex-preview { grid-column:3; grid-row:1; }
-.document-surface[data-document-format="latex"][data-latex-view="pdf"] .latex-preview { grid-column:1; }
 .editor-status:empty { display:none; }
-.latex-preview-status { max-height:80%; overflow:auto; pointer-events:auto; }
 
 /* One restrained frame for all three explorers. */
 .writing-panel:is([data-kind="files"], [data-kind="outline"], [data-kind="commands"]) {
@@ -118,8 +100,8 @@ body:has(.writing-panel:not([hidden]):is([data-kind="files"], [data-kind="outlin
     bottom: auto;
     left: 50%;
     right: auto;
-    transform: translateX(-50%);
     z-index: 90;
+    transform: translateX(-50%);
     display: flex;
     align-items: flex-start;
     gap: 12px;
@@ -192,6 +174,7 @@ body:has(.writing-panel:not([hidden]):is([data-kind="files"], [data-kind="outlin
 .writing-header {
     --header-control-reserve: 12px;
     position: absolute; inset: 0;
+    z-index: 1;
     display: flex; align-items: center; justify-content: center;
     padding-inline: var(--header-control-reserve);
     pointer-events: none;
@@ -200,7 +183,7 @@ body:has(.writing-panel:not([hidden]):is([data-kind="files"], [data-kind="outlin
     --header-control-reserve: calc(var(--windows-caption-button-width, 47px) * 3 + 8px);
 }
 .mac-host .writing-header { --header-control-reserve: 84px; }
-.app-window-controls { margin-left: auto; }
+.app-window-controls { position: relative; z-index: 2; margin-left: auto; }
 .writing-header .header-document-button {
     display: flex; align-items: center; justify-content: center; gap: 6px;
     width: max-content; max-width: min(280px, 100%); min-width: 0;
@@ -246,11 +229,13 @@ body:has(.writing-panel:not([hidden]):is([data-kind="files"], [data-kind="outlin
     transition: none;
 }
 .writing-panel button:focus,
-.writing-panel input:focus,
-.writing-panel button:focus-visible,
-.writing-panel input:focus-visible {
+.writing-panel input:focus {
     outline: none !important;
     box-shadow: none;
+}
+.writing-panel input:focus-visible {
+    outline: 2px solid var(--glyph-focus-ring) !important;
+    outline-offset: -2px;
 }
 .writing-panel button.file-tree-row:is(.is-selected, [data-selected]) {
     background: var(--glyph-control-hover);
@@ -279,5 +264,14 @@ body::after {
 }
 
 @media print {
+    .writing-panel,.exit-focus,.editor-status { display:none!important }
     body::after { display: none; }
+    body.app-titlebar-host .document-surface {
+        min-height: 0;
+        padding: 0;
+        zoom: 1;
+    }
+    .editor-shell[data-editing-mode="source"] .block[data-type="source"] .block-content {
+        min-height: 0;
+    }
 }

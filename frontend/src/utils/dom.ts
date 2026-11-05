@@ -29,3 +29,6 @@ export function getPlainTextBoundaryOffset(current: Node, anchorNode: Node, anch
 
     return offset;
 }
+export function isBlockingDialogOpen(): boolean {
+    return document.querySelector('[aria-modal="true"], dialog[open]') !== null;
+}

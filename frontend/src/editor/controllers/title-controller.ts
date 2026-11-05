@@ -25,6 +25,7 @@ export function createTitleController(options: TitleControllerOptions) {
     };
 
     function handleTitleKeydown(event: KeyboardEvent): void {
+        if (event.isComposing || options.isComposingText()) return;
         if (event.key === "Escape") {
             event.preventDefault();
             const input = getTitleInput();

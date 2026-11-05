@@ -3,7 +3,7 @@ import "katex/dist/katex.min.css";
 import "./styles/theme.css";
 import "./formats/markdown/markdown.css";
 import "./editor/layout.css";
-import "./formats/latex/latex-preview.css";
+import "./editor/document-preview.css";
 import "./editor/find-replace.css";
 import "./editor/document-outline.css";
 import "./documents/file-tree.css";

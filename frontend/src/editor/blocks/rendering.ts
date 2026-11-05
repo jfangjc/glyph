@@ -1,6 +1,5 @@
 import { caretSpacerHtml } from "../selection/rendered-content-dom";
 import { escapeHtml } from "../../utils/text";
-import { getPlainTextBoundaryOffset } from "../../utils/dom";
 
 export type BlockSource = {
     prefix?: string;
@@ -88,40 +87,14 @@ export function getBlockSourceElement(content: HTMLElement, position: BlockSourc
 }
 
 export function readBlockSourcePosition(source: HTMLElement): BlockSourcePosition | null {
-    if (source.dataset.blockSourcePosition === "prefix") {
-        return "prefix";
-    }
-
-    if (source.dataset.blockSourcePosition === "suffix") {
-        return "suffix";
-    }
-
-    if (source.dataset.blockSourcePosition === "atomic") {
-        return "atomic";
-    }
-
-    if (source.classList.contains("format-block-source-prefix")) {
-        return "prefix";
-    }
-
-    if (source.classList.contains("format-block-source-suffix")) {
-        return "suffix";
-    }
-
-    if (source.classList.contains("format-block-source-atomic")) {
-        return "atomic";
-    }
-
-    return null;
+    const positions = ["prefix", "suffix", "atomic"] as const;
+    return positions.find(position => source.dataset.blockSourcePosition === position)
+        ?? positions.find(position => source.classList.contains(`format-block-source-${position}`)) ?? null;
 }
 
 export function findBlockSourceElement(node: Node | null): HTMLElement | null {
     const element = node instanceof Element ? node : node?.parentElement;
     return element?.closest<HTMLElement>(".format-block-source") ?? null;
-}
-
-export function getBlockSourceOffset(source: HTMLElement, node: Node, offset: number): number {
-    return getPlainTextBoundaryOffset(source, node, offset);
 }
 
 function appendBlockSourceElement(

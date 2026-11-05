@@ -1,6 +1,7 @@
 import "./window-controls.css";
 import windowControlsHtml from "./window-controls.html?raw";
-import { System, Window } from "@wailsio/runtime";
+import { Window } from "@wailsio/runtime";
+import { readHostPlatform } from "../host-platform";
 import type { ShortcutLabelPlatform } from "../../app/keymap";
 import { getElement } from "../../utils/dom";
 import { canUseNativeRuntime } from "../runtime";
@@ -12,28 +13,23 @@ let snapAssistTimer = 0;
 let hostPlatform: AppPlatform | null = null;
 
 export function installWindowControls(): void {
+    // Keep navigation available even in previews with an unrecognised UA.
     const platform = readHostPlatform();
-    if (!platform) {
-        return;
-    }
 
     hostPlatform = platform;
     document.body.insertAdjacentHTML("afterbegin", windowControlsHtml);
-    document.body.classList.add("app-titlebar-host", `${platform}-host`);
+    document.body.classList.add("app-titlebar-host");
+    if (platform) document.body.classList.add(`${platform}-host`);
 
     const titlebar = getElement<HTMLElement>("app-titlebar");
     titlebar.hidden = false;
-    titlebar.dataset.platform = platform;
+    titlebar.dataset.platform = platform ?? "browser";
 
     titlebar.addEventListener("click", handleWindowControlClick);
 
     const controls = getElement<HTMLElement>("app-window-controls");
     if (platform === "windows" || platform === "linux") {
         controls.hidden = false;
-        if (platform === "linux") {
-            syncLinuxWindowControlIcons(controls);
-        }
-
         maximiseButton = getElement<HTMLButtonElement>("app-maximise-button");
         maximiseButton.addEventListener("pointerenter", scheduleSnapAssist);
         maximiseButton.addEventListener("pointerleave", cancelSnapAssist);
@@ -51,43 +47,6 @@ export function installWindowControls(): void {
     });
 
     void syncMaximiseButton();
-}
-
-function readHostPlatform(): AppPlatform | null {
-    if (System.IsWindows() || isWindowsWebViewHost() || isWindowsBrowserPreview()) {
-        return "windows";
-    }
-
-    if (System.IsMac() || isMacBrowserPreview()) {
-        return "mac";
-    }
-
-    if (System.IsLinux() || isLinuxBrowserPreview()) {
-        return "linux";
-    }
-
-    return null;
-}
-
-function isWindowsWebViewHost(): boolean {
-    const chromeHost = (window as Window & { chrome?: { webview?: { postMessage?: unknown } } }).chrome;
-
-    return Boolean(
-        chromeHost?.webview?.postMessage &&
-            (navigator.userAgent.includes("Windows") || navigator.platform.startsWith("Win")),
-    );
-}
-
-function isWindowsBrowserPreview(): boolean {
-    return navigator.platform.toLowerCase().startsWith("win") || navigator.userAgent.includes("Windows");
-}
-
-function isMacBrowserPreview(): boolean {
-    return navigator.platform.toLowerCase().includes("mac") || navigator.userAgent.includes("Mac OS");
-}
-
-function isLinuxBrowserPreview(): boolean {
-    return navigator.platform.toLowerCase().includes("linux") || navigator.userAgent.includes("Linux");
 }
 
 function handleWindowControlClick(event: MouseEvent): void {
@@ -154,30 +113,12 @@ async function syncMaximiseButton(): Promise<void> {
     }
 
     const isMaximised = await Window.IsMaximised().catch(() => false);
-    const icon = maximiseButton.querySelector<HTMLElement>(".window-control-icon");
+    const icon = maximiseButton.querySelector(".window-control-icon path");
 
     maximiseButton.setAttribute("aria-label", isMaximised ? "Restore" : "Maximize");
     if (icon) {
-        if (hostPlatform === "linux") {
-            icon.innerHTML = isMaximised ? "&#x2750;" : "&#x25A1;";
-        } else {
-            icon.innerHTML = isMaximised ? "&#xE923;" : "&#xE922;";
-        }
-    }
-}
-
-function syncLinuxWindowControlIcons(controls: HTMLElement): void {
-    const icons: Record<string, string> = {
-        minimise: "-",
-        maximise: "&#x25A1;",
-        close: "&times;",
-    };
-
-    for (const button of Array.from(controls.querySelectorAll<HTMLButtonElement>("[data-window-action]"))) {
-        const icon = button.querySelector<HTMLElement>(".window-control-icon");
-        const action = button.dataset.windowAction ?? "";
-        if (icon) {
-            icon.innerHTML = icons[action] ?? "";
-        }
+        icon.setAttribute("d", isMaximised
+            ? "M3.5 3.5h7v7h-7zM1.5 8.5v-7h7"
+            : "M1.5 1.5h9v9h-9z");
     }
 }

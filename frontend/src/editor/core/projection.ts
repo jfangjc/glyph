@@ -22,7 +22,6 @@ import {
 import {
     findBlockSourceElement,
     getBlockSourceElement,
-    getBlockSourceOffset,
     readBlockSourcePosition,
 } from "../blocks/rendering";
 import {
@@ -30,7 +29,7 @@ import {
     getRenderedContentBoundaryOffset,
     getRenderedContentText,
 } from "../selection/rendered-content-dom";
-import { getElement } from "../../utils/dom";
+import { getElement, getPlainTextBoundaryOffset } from "../../utils/dom";
 import type { ProjectionCapability } from "./types";
 import { nextGraphemeBoundary, previousGraphemeBoundary } from "../../utils/text-boundaries";
 import { getCaretPositionFromPoint } from "../selection/caret";
@@ -123,38 +122,19 @@ export function applySourceBlockProjectionMetadata(
     setProjectionData(content, "sourceFrom", String(block.contentFrom));
     setProjectionData(content, "sourceTo", String(block.contentTo));
 
-    if (block.type === "code") {
-        const prefix = getBlockSourceElement(content, "prefix");
-        const suffix = getBlockSourceElement(content, "suffix");
-        if (prefix) {
-            updateSourceElementText(
-                prefix,
-                documentSource.slice(block.sourceFrom, block.contentFrom).replace(/\r?\n$/, ""),
-            );
-        }
-        if (suffix) {
-            updateSourceElementText(
-                suffix,
-                documentSource.slice(block.contentTo, block.sourceTo).replace(/^\r?\n/, ""),
-            );
-        }
-
-        applySourceElementRange(prefix, block.sourceFrom);
-        applySourceElementRange(suffix, block.sourceTo, "end");
-        applySourceElementRange(getBlockSourceElement(content, "atomic"), block.sourceFrom);
-        return;
-    }
-
     const prefix = getBlockSourceElement(content, "prefix");
     const suffix = getBlockSourceElement(content, "suffix");
+    const isCode = block.type === "code";
     if (prefix) {
-        updateSourceElementText(prefix, documentSource.slice(block.sourceFrom, block.contentFrom));
+        const text = documentSource.slice(block.sourceFrom, block.contentFrom);
+        updateSourceElementText(prefix, isCode ? text.replace(/\r?\n$/, "") : text);
     }
     if (suffix) {
-        updateSourceElementText(suffix, documentSource.slice(block.contentTo, block.sourceTo));
+        const text = documentSource.slice(block.contentTo, block.sourceTo);
+        updateSourceElementText(suffix, isCode ? text.replace(/^\r?\n/, "") : text);
     }
-
-    applyPrefixSourceElementRange(prefix, block.sourceFrom, block.contentFrom);
+    if (isCode) applySourceElementRange(prefix, block.sourceFrom);
+    else applyPrefixSourceElementRange(prefix, block.sourceFrom, block.contentFrom);
     applySourceElementRange(suffix, block.sourceTo, "end");
     applySourceElementRange(getBlockSourceElement(content, "atomic"), block.sourceFrom);
 }
@@ -409,18 +389,9 @@ export function domPointToSourceOffset(node: Node, offset: number): number {
         return atomicBoundaryOffset;
     }
 
-    const inactiveSourceTokenOffset = content === node || content.contains(node)
-        ? readInactiveSourceTokenOffset(content, node, offset)
-        : null;
-    const activeSourceTokenOffset = content === node || content.contains(node)
-        ? readActiveSourceTokenOffset(content, node, offset)
-        : null;
-    if (activeSourceTokenOffset !== null) {
-        return clampOffset(contentFrom + activeSourceTokenOffset, contentTo);
-    }
-    if (inactiveSourceTokenOffset !== null) {
-        return clampOffset(contentFrom + inactiveSourceTokenOffset, contentTo);
-    }
+    const tokenOffset = content === node || content.contains(node)
+        ? readSourceTokenOffset(content, node, offset) : null;
+    if (tokenOffset !== null) return clampOffset(contentFrom + tokenOffset, contentTo);
 
     const localOffset = content === node || content.contains(node)
         ? getRenderedContentBoundaryOffset(content, node, offset)
@@ -1104,45 +1075,18 @@ function readDomSelectionOwnsSource(selection: Selection): boolean {
     return false;
 }
 
-function readInactiveSourceTokenOffset(content: HTMLElement, node: Node, offset: number): number | null {
-    const token = findInactiveSourceTokenAtDomPoint(node);
-    if (!token || !content.contains(token)) {
-        return null;
-    }
-
-    const rawSource = readRawSourceTokenText(token);
-    const contentFrom = readDatasetNumber(content.dataset.sourceFrom);
-    const documentRange = rawSource === null ? null : readSourceTokenDocumentRange(token);
-    const tokenRange = contentFrom === null || !documentRange
-        ? null
-        : { from: documentRange.from - contentFrom, to: documentRange.to - contentFrom };
-    if (rawSource === null || !tokenRange) {
-        return null;
-    }
-
-    return tokenRange.from + readInactiveTokenRawOffset(token, rawSource, node, offset);
-}
-
-function findInactiveSourceTokenAtDomPoint(node: Node): HTMLElement | null {
+function readSourceTokenOffset(content: HTMLElement, node: Node, offset: number): number | null {
     const element = node instanceof Element ? node : node.parentElement;
-    const token = element?.closest<HTMLElement>(".markdown-token") ?? null;
-    if (!token || token.dataset.active === "true" || readRawSourceTokenText(token) === null) {
-        return null;
-    }
-
-    return token;
-}
-
-function readActiveSourceTokenOffset(content: HTMLElement, node: Node, offset: number): number | null {
-    const element = node instanceof Element ? node : node.parentElement;
-    const token = element?.closest<HTMLElement>(".markdown-token[data-active='true']") ?? null;
+    const token = element?.closest<HTMLElement>(".markdown-token[data-active='true']")
+        ?? element?.closest<HTMLElement>(".markdown-token");
+    const rawSource = token ? readRawSourceTokenText(token) : null;
     const contentFrom = readDatasetNumber(content.dataset.sourceFrom);
-    const tokenRange = token ? readSourceTokenDocumentRange(token) : null;
-    if (!token || contentFrom === null || !tokenRange) {
-        return null;
-    }
-
-    return tokenRange.from - contentFrom + getTokenPreviewBoundaryOffset(token, node, offset);
+    const range = token ? readSourceTokenDocumentRange(token) : null;
+    if (!token || !content.contains(token) || rawSource === null || contentFrom === null || !range) return null;
+    const localOffset = token.dataset.active === "true"
+        ? getPlainTextBoundaryOffset(token, node, offset)
+        : readInactiveTokenRawOffset(token, rawSource, node, offset);
+    return range.from - contentFrom + localOffset;
 }
 
 function readInactiveTokenRawOffset(token: HTMLElement, rawSource: string, node: Node, offset: number): number {
@@ -1156,7 +1100,7 @@ function readInactiveTokenRawOffset(token: HTMLElement, rawSource: string, node:
         }
     }
 
-    const previewText = readTokenPreviewText(token);
+    const previewText = (token.textContent ?? "");
     const contentRange = readTokenContentRange(token);
     if (!contentRange || previewText.length === 0) {
         return offset <= 0 ? 0 : rawSource.length;
@@ -1164,37 +1108,6 @@ function readInactiveTokenRawOffset(token: HTMLElement, rawSource: string, node:
 
     const previewOffset = getNestedSourceBoundaryOffset(token, node, offset);
     return clampOffset(contentRange.from + previewOffset, contentRange.to);
-}
-
-function readTokenPreviewText(token: HTMLElement): string {
-    return (token.textContent ?? "");
-}
-
-function getTokenPreviewBoundaryOffset(current: Node, anchorNode: Node, anchorOffset: number): number {
-    if (current === anchorNode) {
-        if (current.nodeType === Node.TEXT_NODE) {
-            return (current.textContent ?? "").slice(0, anchorOffset).length;
-        }
-
-        return Array.from(current.childNodes)
-            .slice(0, Math.max(0, anchorOffset))
-            .reduce((length, child) => length + readTokenPreviewTextFromNode(child), 0);
-    }
-
-    let offset = 0;
-    for (const child of Array.from(current.childNodes)) {
-        if (child === anchorNode || child.contains(anchorNode)) {
-            return offset + getTokenPreviewBoundaryOffset(child, anchorNode, anchorOffset);
-        }
-
-        offset += readTokenPreviewTextFromNode(child);
-    }
-
-    return offset;
-}
-
-function readTokenPreviewTextFromNode(node: Node): number {
-    return (node.textContent ?? "").length;
 }
 
 function readTokenContentRange(token: HTMLElement): { from: number; to: number } | null {
@@ -1251,42 +1164,34 @@ function getSelectionBoundary(
     return { parent: node, offset };
 }
 
-function readSourceTokenRange(root: HTMLElement, token: HTMLElement): { from: number; to: number } | null {
+function readSourceTokenRange(root: HTMLElement, token: HTMLElement, nested = false): { from: number; to: number } | null {
     let cursor = 0;
     for (const child of Array.from(root.childNodes)) {
-        const range = readSourceTokenRangeInNode(child, token, cursor);
-        if (range) {
-            return range;
-        }
-
-        cursor += readSourceTokenSearchLength(child);
+        const range = readSourceTokenRangeInNode(child, token, cursor, nested);
+        if (range) return range;
+        cursor += readSourceTokenSearchLength(child, nested);
     }
-
     return null;
 }
 
-function readSourceTokenRangeInNode(node: Node, token: HTMLElement, start: number): { from: number; to: number } | null {
-    if (node === token) {
-        return {
-            from: start,
-            to: start + readSourceTokenSearchLength(node),
-        };
+function readSourceTokenRangeInNode(node: Node, token: HTMLElement, start: number, nested: boolean): { from: number; to: number } | null {
+    if (node === token) return { from: start, to: start + readSourceTokenSearchLength(node, nested) };
+    if (!node.contains(token)) return null;
+    if (node instanceof HTMLElement) {
+        if (readRawSourceTokenText(node) !== null) {
+            const contentRange = readTokenContentRange(node);
+            if (!contentRange) return null;
+            const range = readSourceTokenRange(node, token, true);
+            return range ? { from: start + contentRange.from + range.from, to: start + contentRange.from + range.to } : null;
+        }
+        if (!nested && node.dataset.sourceIgnore === "true") return null;
     }
-
-    if (node instanceof HTMLElement && node.dataset.sourceIgnore === "true") {
-        return null;
-    }
-
     let cursor = start;
     for (const child of Array.from(node.childNodes)) {
-        const range = readSourceTokenRangeInNode(child, token, cursor);
-        if (range) {
-            return range;
-        }
-
-        cursor += readSourceTokenSearchLength(child);
+        const range = readSourceTokenRangeInNode(child, token, cursor, nested);
+        if (range) return range;
+        cursor += readSourceTokenSearchLength(child, nested);
     }
-
     return null;
 }
 
@@ -1361,7 +1266,7 @@ function getNestedSourceBoundaryOffset(current: Node, anchorNode: Node, anchorOf
             const raw = readRawSourceTokenText(child);
             if (raw !== null && child instanceof HTMLElement && child.classList.contains("markdown-token")) {
                 return sourceOffset + (child.classList.contains(markdownTokenEditingClass)
-                    ? getTokenPreviewBoundaryOffset(child, anchorNode, anchorOffset)
+                    ? getPlainTextBoundaryOffset(child, anchorNode, anchorOffset)
                     : readInactiveTokenRawOffset(child, raw, anchorNode, anchorOffset));
             }
             return sourceOffset + getNestedSourceBoundaryOffset(child, anchorNode, anchorOffset);
@@ -1379,7 +1284,7 @@ function findActiveNestedSourceTokenAtOffset(
     if (!contentRange) return null;
 
     for (const nested of Array.from(token.querySelectorAll<HTMLElement>(".markdown-token[data-active='true']"))) {
-        const nestedRange = readNestedSourceTokenRange(token, nested);
+        const nestedRange = readSourceTokenRange(token, nested, true);
         const from = nestedRange ? contentRange.from + nestedRange.from : null;
         const to = nestedRange ? contentRange.from + nestedRange.to : null;
         if (from !== null && to !== null && offset >= from && offset <= to) {
@@ -1476,7 +1381,7 @@ function createMarkdownDelimiterSegment(value: string): HTMLElement {
 
 function getInactiveSourceTokenDomPoint(token: HTMLElement, rawSource: string, offset: number, affinity: SourceAffinity): DomPoint {
     if (offset <= 0 || offset >= rawSource.length) return getElementBoundaryDomPoint(token, offset > 0);
-    const previewText = readTokenPreviewText(token);
+    const previewText = (token.textContent ?? "");
     const contentRange = readTokenContentRange(token);
     if (!contentRange || previewText.length === 0) {
         return getElementBoundaryDomPoint(token, offset > rawSource.length / 2 || (offset === rawSource.length / 2 && affinity === "downstream"));
@@ -1526,21 +1431,9 @@ export function readSourceTokenDocumentRange(token: HTMLElement): { from: number
     const block = findBlock(token);
     const content = block ? getBlockContent(block) : null;
     const contentFrom = content ? readDatasetNumber(content.dataset.sourceFrom) : null;
-    const tokenRange = content ? readSourceTokenRange(content, token) : null;
-    if (contentFrom !== null && tokenRange) {
-        return { from: contentFrom + tokenRange.from, to: contentFrom + tokenRange.to };
-    }
-
-    const owner = token.parentElement?.closest<HTMLElement>(".markdown-token") ?? null;
-    const ownerRange = owner ? readSourceTokenDocumentRange(owner) : null;
-    const ownerContentRange = owner ? readTokenContentRange(owner) : null;
-    const nestedRange = owner ? readNestedSourceTokenRange(owner, token) : null;
-    return ownerRange && ownerContentRange && nestedRange
-        ? {
-            from: ownerRange.from + ownerContentRange.from + nestedRange.from,
-            to: ownerRange.from + ownerContentRange.from + nestedRange.to,
-        }
-        : null;
+    const range = content ? readSourceTokenRange(content, token) : null;
+    return contentFrom !== null && range
+        ? { from: contentFrom + range.from, to: contentFrom + range.to } : null;
 }
 
 export function readSourceTokenEditOffsetFromPreviewOffset(
@@ -1550,7 +1443,7 @@ export function readSourceTokenEditOffsetFromPreviewOffset(
     const rawSource = readRawSourceTokenText(token) ?? "";
     const contentRange = readTokenContentRange(token);
     if (!contentRange) {
-        return readAtomicPreviewEditOffset(rawSource.length, previewOffset, readTokenPreviewText(token).length);
+        return readAtomicPreviewEditOffset(rawSource.length, previewOffset, (token.textContent ?? "").length);
     }
 
     return clampOffset(
@@ -1569,7 +1462,7 @@ function readNestedPreviewSourceOffset(node: Node, previewOffset: number): numbe
     let sourceCursor = 0;
     for (let index = 0; index < children.length; index += 1) {
         const child = children[index];
-        const previewLength = readTokenPreviewTextFromNode(child);
+        const previewLength = (child.textContent ?? "").length;
         const sourceLength = readNestedSourceSearchLength(child);
         const previewEnd = previewCursor + previewLength;
         if (previewOffset < previewEnd || index === children.length - 1 && previewOffset <= previewEnd) {
@@ -1595,59 +1488,8 @@ function readAtomicPreviewEditOffset(rawLength: number, previewOffset: number, p
     return previewOffset * 2 < previewLength ? 1 : rawLength - 1;
 }
 
-function readNestedSourceTokenRange(
-    owner: HTMLElement,
-    token: HTMLElement,
-): { from: number; to: number } | null {
-    let cursor = 0;
-    for (const child of Array.from(owner.childNodes)) {
-        const range = readNestedSourceTokenRangeInNode(child, token, cursor);
-        if (range) return range;
-        cursor += readNestedSourceSearchLength(child);
-    }
-    return null;
-}
-
-function readNestedSourceTokenRangeInNode(
-    node: Node,
-    token: HTMLElement,
-    start: number,
-): { from: number; to: number } | null {
-    if (node === token) {
-        return { from: start, to: start + readNestedSourceSearchLength(node) };
-    }
-
-    if (node instanceof HTMLElement && node.classList.contains("markdown-token")) {
-        if (!node.contains(token)) return null;
-        const contentRange = readTokenContentRange(node);
-        if (!contentRange) return null;
-        const nestedRange = readNestedSourceTokenRange(node, token);
-        return nestedRange
-            ? {
-                from: start + contentRange.from + nestedRange.from,
-                to: start + contentRange.from + nestedRange.to,
-            }
-            : null;
-    }
-
-    let cursor = start;
-    for (const child of Array.from(node.childNodes)) {
-        const range = readNestedSourceTokenRangeInNode(child, token, cursor);
-        if (range) return range;
-        cursor += readNestedSourceSearchLength(child);
-    }
-    return null;
-}
-
 function readNestedSourceSearchLength(node: Node): number {
-    const rawSource = readRawSourceTokenText(node);
-    if (rawSource !== null) return rawSource.length;
-    if (node instanceof HTMLElement && node.dataset.caretSpacer === "true") return 0;
-    if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? "").length;
-    return Array.from(node.childNodes).reduce(
-        (length, child) => length + readNestedSourceSearchLength(child),
-        0,
-    );
+    return readSourceTokenSearchLength(node, true);
 }
 
 function readAllActiveSourceTokenBlocks(): HTMLElement[] {
@@ -1691,13 +1533,13 @@ function readRawSourceTokenText(node: Node): string | null {
     return null;
 }
 
-function readSourceTokenSearchLength(node: Node): number {
+function readSourceTokenSearchLength(node: Node, nested = false): number {
     const rawSource = readRawSourceTokenText(node);
     if (rawSource !== null) {
         return rawSource.length;
     }
 
-    if (node instanceof HTMLElement && node.dataset.sourceIgnore === "true") {
+    if (node instanceof HTMLElement && (node.dataset.caretSpacer === "true" || !nested && node.dataset.sourceIgnore === "true")) {
         return 0;
     }
 
@@ -1705,7 +1547,7 @@ function readSourceTokenSearchLength(node: Node): number {
         return node.textContent?.length ?? 0;
     }
 
-    return Array.from(node.childNodes).reduce((length, child) => length + readSourceTokenSearchLength(child), 0);
+    return Array.from(node.childNodes).reduce((length, child) => length + readSourceTokenSearchLength(child, nested), 0);
 }
 
 function isRawSourceTokenBoundary(node: Node, offset: number): boolean {
@@ -1731,7 +1573,7 @@ function getBlockSourceDomPoint(source: HTMLElement, sourceOffset: number): DomP
 }
 
 function readBlockSourceOffset(source: HTMLElement, node: Node, offset: number): number {
-    return readHiddenPrefixLength(source) + getBlockSourceOffset(source, node, offset);
+    return readHiddenPrefixLength(source) + getPlainTextBoundaryOffset(source, node, offset);
 }
 
 function readHiddenPrefixLength(source: HTMLElement): number {

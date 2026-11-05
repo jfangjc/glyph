@@ -898,7 +898,7 @@ export function createEditorInputController(options: EditorInputControllerOption
             syncStateSelectionFromDom();
             const state = getEditorState();
             dispatch(
-                (!options.isSourceMode()
+                (useFormatEditing()
                     ? options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state, { shiftKey: event.shiftKey })
                     : null)
                 ?? createSourceInsertTextTransaction(state, "\n"),
@@ -910,7 +910,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (event.key === "Tab") {
             syncStateSelectionFromDom();
             const state = getEditorState();
-            const transaction = options.isSourceMode()
+            const transaction = !useFormatEditing()
                 ? null
                 : options.getActiveDocumentFormat().editing?.createTabTransaction?.(
                     state,
@@ -1162,7 +1162,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
             return () => {
                 const state = getEditorState();
-                return (!options.isSourceMode()
+                return (useFormatEditing()
                     ? options.getActiveDocumentFormat().editing?.createEnterTransaction?.(state, { shiftKey: event.inputType === "insertLineBreak" })
                     : null)
                     ?? createSourceInsertTextTransaction(state, "\n");
@@ -1522,6 +1522,13 @@ export function createEditorInputController(options: EditorInputControllerOption
         return Boolean(format.clipboard?.richHtml && format.clipboard.mimeTypes.includes("text/markdown"));
     }
 
+    function useFormatEditing(): boolean {
+        // A source-only format may still provide language-specific Enter,
+        // indent or paste behavior. Only a rich format's literal source view
+        // bypasses its structured editing transactions.
+        return !options.isSourceMode() || !options.getActiveDocumentFormat().livePreview;
+    }
+
     function canUsePendingInlineFormat(state: ReturnType<typeof getEditorState>): boolean {
         const block = findSourceBlockAtOffset(state.blocks, state.selection.head);
         return Boolean(block && [
@@ -1575,7 +1582,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         state: ReturnType<typeof getEditorState>,
         text: string,
     ): Parameters<typeof dispatch>[0] {
-        const transaction = (!options.isSourceMode()
+        const transaction = (useFormatEditing()
             ? options.getActiveDocumentFormat().editing?.createInsertTextTransaction?.(state, text)
             : null)
             ?? createInsertTextTransaction(state, text);
@@ -1586,7 +1593,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         state: ReturnType<typeof getEditorState>,
         text: string,
     ): Parameters<typeof dispatch>[0] {
-        const transaction = (!options.isSourceMode()
+        const transaction = (useFormatEditing()
             ? options.getActiveDocumentFormat().editing?.createPasteTransaction?.(state, text)
             : null)
             ?? createPasteTransaction(state, text);
@@ -1598,7 +1605,7 @@ export function createEditorInputController(options: EditorInputControllerOption
         direction: "backward" | "forward",
         granularity: "grapheme" | "word" | "soft-line" | "hard-line",
     ): Parameters<typeof dispatch>[0] | null {
-        const transaction = (!options.isSourceMode()
+        const transaction = (useFormatEditing()
             ? options.getActiveDocumentFormat().editing?.createDeleteTransaction?.(state, direction, granularity)
             : null)
             ?? createDeleteTransaction(state, direction, granularity);

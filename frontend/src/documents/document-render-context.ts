@@ -2,20 +2,8 @@ import {
     configureBlockView,
     applyBlockProperties,
     createBlock,
-    getBlockText,
-    getTodoCheckbox,
     getEditorBlocks,
-    readBlockCodeFence,
     readBlockCodeFenceClosed,
-    readBlockHeadingId,
-    readBlockHeadingIdExplicit,
-    readBlockIndent,
-    readBlockListMarker,
-    readBlockListNumber,
-    readBlockListDelimiter,
-    readBlockTodoMarker,
-    readBlockQuoteLevel,
-    readBlockRuleMarker,
     setBlockText,
 } from "../editor/blocks/view";
 import { updateCodeBlockBodyContent } from "../editor/blocks/rendering";
@@ -27,6 +15,7 @@ import type {
     DocumentFormat,
     DocumentRenderContext,
 } from "../formats/types";
+import { createRenderContextCache } from "../formats/render-context-cache";
 
 // Source properties share strict equality; DOM properties below have distinct defaults.
 const renderBlockPropertyKeys = [
@@ -50,27 +39,30 @@ const renderBlockPropertyKeys = [
 ] as const satisfies readonly (keyof ParsedBlock)[];
 
 let documentRenderContext: DocumentRenderContext = { references: {} };
-let documentRenderContextSnapshot = "{}";
+const renderContextCache = createRenderContextCache();
 let footerHtml: string | undefined;
 
 export function loadDocumentRenderContext(
     format: DocumentFormat,
     blocks: ParsedBlock[],
 ): boolean {
-    const nextContext = format.render.readRenderContext?.(blocks) ?? { references: {} };
-    // Snapshot before rendering: Markdown rendering mutates footnote cursors.
-    const nextSnapshot = JSON.stringify(nextContext);
-    if (nextSnapshot === documentRenderContextSnapshot) {
-        return false;
-    }
-
-    documentRenderContext = nextContext;
-    documentRenderContextSnapshot = nextSnapshot;
-    return true;
+    const changed = renderContextCache.update(format.render, blocks);
+    documentRenderContext = renderContextCache.current;
+    return changed;
 }
 
 export function syncBlockViewContext(format: DocumentFormat, activeFilePath: string | null = null): void {
-    createBlockViewContext(format, activeFilePath);
+    configureBlockView({
+        context: documentRenderContext,
+        activeFilePath,
+        renderInlineContent: format.render.renderInline,
+        renderPlainTextContent: format.render.renderPlainTextContent,
+        renderBlockContent: format.render.renderBlock,
+        hydrateRenderedContent: format.render.hydrateRenderedContent,
+        readBlockSource: format.render.readBlockSource,
+        readInteractiveBlockText: format.render.readInteractiveBlockText,
+        plainTextHighlightPolicy: format.render.plainTextHighlightPolicy,
+    });
 }
 
 export function applyDocumentRenderContext(format: DocumentFormat): void {
@@ -102,9 +94,7 @@ export function replaceEditorBlocksFromSourceState(state: EditorState, previous?
             element = createBlock(block.type, block.text, block);
         } else if (sourceChanged || renderContextChanged) {
             const block = readParsedBlockFromSourceState(state, sourceBlock);
-            if (!previous || renderContextChanged || projectedBlockNeedsUpdate(element, block)) {
-                element = updateProjectedBlock(element, block);
-            }
+            element = updateProjectedBlock(element, block);
         }
         // IDs are intentionally reused across reparses, including for visually
         // identical empty blocks. Their absolute source ranges can still move,
@@ -136,32 +126,8 @@ function sourceBlocksEquivalent(
     );
 }
 
-function projectedBlockNeedsUpdate(element: HTMLElement, block: ParsedBlock): boolean {
-    const type = readBlockType(element.dataset.type);
-    return (
-        getBlockText(element) !== block.text ||
-        readBlockIndent(element) !== (block.indent ?? 0) ||
-        readBlockListMarker(element) !== block.listMarker ||
-        readBlockListNumber(element) !== block.listNumber ||
-        readBlockListDelimiter(element) !== block.listDelimiter ||
-        readBlockTodoMarker(element) !== block.todoMarker ||
-        readBlockQuoteLevel(element) !== block.quoteLevel ||
-        element.dataset.continuationPrefix !== block.continuationPrefix ||
-        readBlockCodeFence(element) !== block.codeFence ||
-        readBlockCodeFenceClosed(element) !== block.codeFenceClosed ||
-        (element.dataset.codeInfo ?? "") !== (block.codeInfo ?? "") ||
-        readBlockRuleMarker(element) !== block.ruleMarker ||
-        (type === "todo" && getTodoCheckbox(element).checked !== Boolean(block.checked)) ||
-        (type === "math" && element.dataset.mathSource !== block.mathSource) ||
-        readBlockHeadingId(element) !== block.headingId ||
-        readBlockHeadingIdExplicit(element) !== Boolean(block.headingIdExplicit) ||
-        element.dataset.headingSourcePrefix !== block.headingSourcePrefix ||
-        element.dataset.headingSourceSuffix !== block.headingSourceSuffix
-    );
-}
-
 function updateProjectedBlock(element: HTMLElement, block: ParsedBlock): HTMLElement {
-    const canUpdateCodeContent = block.type === "code" && codeSourceStructureMatches(element, block);
+    const canUpdateCodeContent = block.type === "code" && readBlockCodeFenceClosed(element) === block.codeFenceClosed;
     applyBlockProperties(element, block);
     const content = element.querySelector<HTMLElement>(".block-content");
     if (canUpdateCodeContent && content && updateCodeBlockBodyContent(content, block.text)) {
@@ -172,10 +138,6 @@ function updateProjectedBlock(element: HTMLElement, block: ParsedBlock): HTMLEle
     // as well as body text. Re-render even when the visible body is unchanged.
     setBlockText(element, block.text);
     return element;
-}
-
-function codeSourceStructureMatches(element: HTMLElement, block: ParsedBlock): boolean {
-    return readBlockCodeFenceClosed(element) === block.codeFenceClosed;
 }
 
 function reconcileEditorBlocks(editor: HTMLElement, currentBlocks: HTMLElement[], nextBlocks: HTMLElement[]): void {
@@ -201,20 +163,6 @@ function reconcileEditorBlocks(editor: HTMLElement, currentBlocks: HTMLElement[]
 
 export function readParsedBlocksFromSourceState(state: EditorState): ParsedBlock[] {
     return state.blocks.blocks.map((block) => readParsedBlockFromSourceState(state, block));
-}
-
-function createBlockViewContext(format: DocumentFormat, activeFilePath: string | null): void {
-    configureBlockView({
-        context: documentRenderContext,
-        activeFilePath,
-        renderInlineContent: format.render.renderInline,
-        renderPlainTextContent: format.render.renderPlainTextContent,
-        renderBlockContent: format.render.renderBlock,
-        hydrateRenderedContent: format.render.hydrateRenderedContent,
-        readBlockSource: format.render.readBlockSource,
-        readInteractiveBlockText: format.render.readInteractiveBlockText,
-        plainTextHighlightPolicy: format.render.plainTextHighlightPolicy,
-    });
 }
 
 function readParsedBlockFromSourceState(state: EditorState, block: SourceBlock): ParsedBlock {

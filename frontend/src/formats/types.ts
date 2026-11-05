@@ -23,13 +23,18 @@ export type DocumentRenderContext = {
 };
 
 export type DocumentPreviewContext = {
+    sessionId: number;
     activeFilePath: string | null;
     isSavingDocument: boolean;
+    hasUnsavedChanges: boolean;
 };
 
 export type DocumentPreviewBehavior = {
+    kind: "pdf";
     sync: (context: DocumentPreviewContext) => void;
     deactivate: (context: DocumentPreviewContext) => void;
+    onSaved?: (context: DocumentPreviewContext) => void;
+    compile?: (saveDocument: () => Promise<boolean>) => Promise<void>;
 };
 
 export type PlainTextHighlightPolicy = {
@@ -56,16 +61,18 @@ export type BlockFormatCommand =
 export type InsertContentCommand = "table" | "image" | "math" | "rule";
 
 export type DocumentFormatDescriptor = {
-    id: string;
-    label: string;
-    extensions: string[];
-    defaultExtension: string;
-    defaultFileName: string;
-    editableTitle: boolean;
+    readonly id: string;
+    readonly label: string;
+    readonly extensions: readonly string[];
+    readonly defaultExtension: string;
+    readonly defaultFileName: string;
+    readonly editableTitle: boolean;
 };
 
 export type RenderCapability = {
+    shouldRefreshRenderContext?: (state: EditorState, previous: EditorState, transaction: Transaction) => boolean;
     readRenderContext?: (blocks: ParsedBlock[]) => DocumentRenderContext;
+    readRenderContextKey?: (context: DocumentRenderContext) => string;
     applyRenderContext?: (blocks: HTMLElement[], context: DocumentRenderContext) => void;
     renderDocumentFooter?: (context: DocumentRenderContext) => string;
     readBlockSource?: (block: HTMLElement, type: BlockType, text: string) => BlockSource;
@@ -130,6 +137,7 @@ export type ExportCapability = {
 
 export type DocumentFormat = {
     descriptor: DocumentFormatDescriptor;
+    livePreview?: boolean;
     index: { build: BlockIndexBuilder };
     render: RenderCapability;
     editing?: EditingCapability;

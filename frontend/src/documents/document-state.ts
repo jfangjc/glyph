@@ -46,6 +46,14 @@ export function recordSavedDocumentContent(content: string): void {
         : source;
 }
 
+export function commitSavedFileName(savedFileName: string, fileNameAtSave?: string): void {
+    const pendingFileName = fileNameAtSave !== undefined && documentState.fileName !== fileNameAtSave
+        ? documentState.fileName : null;
+    documentState.committedFileName = savedFileName;
+    documentState.fileName = pendingFileName ?? savedFileName;
+    documentState.fileNameDirty = documentState.fileName !== savedFileName;
+}
+
 let notifiedMetadata: unknown[] = [];
 
 export function beginDocumentSession(options: {
@@ -54,11 +62,12 @@ export function beginDocumentSession(options: {
     fileName: string;
     lineEnding?: "\n" | "\r\n";
     hasUtf8Bom?: boolean;
+    editingMode?: DocumentEditingMode;
 }): number {
     documentState.sessionId += 1;
     documentState.activeFilePath = options.path;
     documentState.activeFormatId = options.formatId;
-    documentState.editingMode = "live-preview";
+    documentState.editingMode = options.editingMode ?? "live-preview";
     documentState.fileName = options.fileName;
     documentState.committedFileName = options.fileName;
     documentState.fileNameDirty = false;

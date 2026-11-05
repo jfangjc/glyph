@@ -17,6 +17,8 @@ Glyph is a focused desktop editor built with [Wails v3](https://v3.wails.io/), G
 - Edit LaTeX in a split source/PDF preview view, with PDF compilation triggered when the document is saved.
 - Preview LaTeX PDF output when a generated PDF is available.
 - Restore the last opened document and autosave changes.
+- Use the available window width for writing, with margins that adapt as the window is resized.
+- Create Markdown, LaTeX, Org mode, Typst and plain-text documents from the command menu. Org mode and Typst currently use literal source editing.
 
 # Screenshots
 ![Glyph editing a Markdown document](assets/Markdown.png)
@@ -50,5 +52,8 @@ wails3 package GOOS=darwin
 wails3 package GOOS=linux
 ```
 
+For format architecture, supported extension points and the next implementation steps for Org mode and Typst, see [Adding markup formats](docs/format-adapters.md).
+
 # License
+
 This project is licensed under the terms of the [MIT License](LICENSE).

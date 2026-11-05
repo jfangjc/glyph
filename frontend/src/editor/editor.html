@@ -2,7 +2,7 @@
     <div class="document-title-row">
         <input id="document-title" class="document-title" aria-label="Document name" aria-describedby="document-extension" value="Untitled" />
         <span id="document-extension" class="document-extension" aria-label="File extension">.md</span>
-        <button id="markdown-mode-toggle" class="markdown-mode-toggle" type="button" aria-pressed="false" title="Switch to Markdown source mode">
+        <button id="editing-mode-toggle" class="editing-mode-toggle" type="button" aria-pressed="false" title="Switch to source mode">
             Live Preview
         </button>
     </div>
@@ -13,9 +13,9 @@
     </div>
     <section id="document-render-footer" class="document-render-footer" aria-label="Rendered document footer" contenteditable="false" hidden></section>
     <output id="editor-status" class="editor-status" role="status" aria-live="polite"></output>
-    <aside id="latex-preview" class="latex-preview" aria-label="PDF preview" contenteditable="false">
-        <iframe id="latex-pdf-frame" class="latex-pdf-frame" title="PDF preview"></iframe>
-        <div id="latex-preview-status" class="latex-preview-status" role="status"></div>
+    <aside id="document-preview" class="document-preview" aria-label="PDF preview" contenteditable="false">
+        <iframe id="document-pdf-frame" class="document-pdf-frame" title="PDF preview"></iframe>
+        <div id="document-preview-status" class="document-preview-status" role="status"></div>
     </aside>
 </section>
 

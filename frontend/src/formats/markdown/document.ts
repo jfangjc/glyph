@@ -33,13 +33,17 @@ import {
     writeMarkdownClipboardPayload,
 } from "./clipboard";
 import { readMathSourceText } from "./math";
+import { shouldRefreshMarkdownRenderContext } from "./context-invalidation";
 
 export function createMarkdownDocumentFormat(descriptor: DocumentFormatDescriptor): DocumentFormat {
     return {
         descriptor,
+        livePreview: true,
         index: { build: buildBlockIndex },
         render: {
+            shouldRefreshRenderContext: shouldRefreshMarkdownRenderContext,
             readRenderContext: readMarkdownRenderContext,
+            readRenderContextKey: context => JSON.stringify(context),
             applyRenderContext: applyMarkdownRenderContext,
             renderDocumentFooter: renderMarkdownDocumentFooter,
             readBlockSource: readMarkdownBlockSource,

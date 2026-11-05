@@ -14,6 +14,9 @@ import { renderDefinitionListBlock } from "./definition-list";
 type MarkdownRenderData = {
     headingIds: string[];
     footnotes: {
+        // A changed reference-bearing block must rerender the complete sequence,
+        // even if its labels and numbers did not change.
+        sources: string[];
         definitions: Record<string, { label: string; text: string }>;
         numbers: Record<string, number>;
         order: string[];
@@ -194,5 +197,5 @@ function readMarkdownFootnotes(blocks: ParsedBlock[]): MarkdownRenderData["footn
         }
     }
 
-    return { definitions, numbers, order, referenceIds };
+    return { definitions, numbers, order, referenceIds, sources: blocks.filter(block => block.text.includes("[^")).map(block => block.text) };
 }

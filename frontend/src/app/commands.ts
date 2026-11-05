@@ -94,8 +94,8 @@ export const commands = [
         group: "Edit",
     },
     {
-        id: "view:toggle-markdown-source",
-        label: "Markdown Source Mode",
+        id: "view:toggle-source",
+        label: "Source Mode",
         group: "View",
     },
     {

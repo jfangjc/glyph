@@ -47,10 +47,11 @@ body.app-titlebar-host .editor-shell {
 }
 
 .document-surface {
-    width: min(100%, 880px);
-    min-height: 100vh;
+    width: 100%;
+    min-width: 0;
+    min-height: calc(100vh / var(--glyph-editor-zoom, 1));
     margin: 0 auto;
-    padding: 72px 48px 120px;
+    padding: 72px clamp(22px, 6vw, 96px) 120px;
     cursor: text;
     zoom: var(--glyph-editor-zoom, 1);
 }
@@ -62,16 +63,15 @@ body.app-titlebar-host .editor-shell {
 }
 
 body.app-titlebar-host .document-surface {
-    min-height: calc(100vh - var(--glyph-titlebar-height, 37px));
+    min-height: calc((100vh - var(--glyph-titlebar-height, 37px)) / var(--glyph-editor-zoom, 1));
     padding-top: calc(72px - var(--glyph-titlebar-height, 37px));
 }
 
 .document-title {
-    width: auto;
+    width: 100%;
     min-width: 0;
     max-width: calc(100% - 3rem);
-    flex: 0 1 auto;
-    field-sizing: content;
+    flex: 1 1 0;
     border: 0;
     outline: 0;
     background: transparent;
@@ -96,7 +96,7 @@ body.app-titlebar-host .document-surface {
     letter-spacing: -0.01em;
 }
 
-.markdown-mode-toggle {
+.editing-mode-toggle {
     align-self: center;
     flex: 0 0 auto;
     margin-left: auto;
@@ -111,18 +111,18 @@ body.app-titlebar-host .document-surface {
     transition: background-color 100ms ease, border-color 100ms ease, color 100ms ease;
 }
 
-.markdown-mode-toggle:hover {
+.editing-mode-toggle:hover {
     border-color: color-mix(in srgb, var(--glyph-text-muted) 45%, var(--glyph-border));
     background: var(--glyph-control-hover);
     color: var(--glyph-text-strong);
 }
 
-.markdown-mode-toggle:focus-visible {
+.editing-mode-toggle:focus-visible {
     outline: 2px solid var(--glyph-focus-ring);
     outline-offset: 2px;
 }
 
-.markdown-mode-toggle[aria-pressed="true"] {
+.editing-mode-toggle[aria-pressed="true"] {
     border-color: color-mix(in srgb, var(--glyph-accent) 35%, var(--glyph-border));
     background: var(--glyph-accent-soft);
     color: var(--glyph-accent);
@@ -310,7 +310,7 @@ body.app-titlebar-host .document-surface {
     }
 
     .app-titlebar,
-    .latex-preview,
+    .document-preview,
     .find-replace-panel,
     .find-highlight-layer,
     .document-outline {

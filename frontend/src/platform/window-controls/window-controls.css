@@ -69,19 +69,10 @@
     display: block;
     width: var(--windows-caption-icon-size);
     height: var(--windows-caption-icon-size);
-    font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", "Segoe UI Symbol", sans-serif;
-    font-size: var(--windows-caption-icon-size);
-    font-weight: 400;
-    line-height: var(--windows-caption-icon-size);
-    text-align: center;
-}
-
-body.linux-host .window-control-icon {
-    width: auto;
-    height: auto;
-    font-family: var(--glyph-font-text);
-    font-size: 0.92rem;
-    line-height: 1;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1;
+    pointer-events: none;
 }
 
 .window-control:hover {

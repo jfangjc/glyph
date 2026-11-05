@@ -89,7 +89,7 @@ function findRenderedContentTextPositionInNode(
         const text = node.textContent ?? "";
         const length = text.length;
         if (remaining.value <= length) {
-            return { node, offset: getDomTextOffsetForRenderedContentOffset(text, remaining.value) };
+            return { node, offset: Math.max(0, remaining.value) };
         }
 
         remaining.value -= length;
@@ -123,20 +123,6 @@ function getAtomicNodePosition(node: Node, after: boolean): { node: Node; offset
 
     const childIndex = Array.from(parent.childNodes).findIndex((child) => child === node);
     return { node: parent, offset: Math.max(0, childIndex) + (after ? 1 : 0) };
-}
-
-function getDomTextOffsetForRenderedContentOffset(text: string, offset: number): number {
-    let renderedOffset = 0;
-
-    for (let index = 0; index < text.length; index += 1) {
-        if (renderedOffset >= offset) {
-            return index;
-        }
-
-        renderedOffset += 1;
-    }
-
-    return text.length;
 }
 
 function readRenderedContentRawText(node: Node): string | null {

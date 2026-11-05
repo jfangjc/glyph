@@ -2,13 +2,11 @@ import type { BlockIndex, BlockIndexBuildContext } from "../../editor/core/types
 import type {
     DocumentFormat,
     DocumentFormatDescriptor,
-    DocumentPreviewBehavior,
     RenderCapability,
 } from "../types";
 
-type SourceDocumentCapabilities = {
+export type SourceDocumentCapabilities = Pick<DocumentFormat, "editing" | "clipboard" | "projection" | "preview"> & {
     render?: RenderCapability;
-    preview?: DocumentPreviewBehavior;
 };
 
 export function createSourceDocumentFormat(
@@ -17,10 +15,11 @@ export function createSourceDocumentFormat(
 ): DocumentFormat {
     return {
         descriptor,
+        livePreview: false,
         index: { build: buildSourceBlockIndex },
+        ...capabilities,
         render: capabilities.render ?? {},
-        preview: capabilities.preview,
-        clipboard: {
+        clipboard: capabilities.clipboard ?? {
             mimeTypes: ["text/plain"],
             richHtml: false,
         },

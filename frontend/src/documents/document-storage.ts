@@ -1,13 +1,15 @@
+import { readStoredValue, writeStoredValue, removeStoredValue } from "../utils/storage";
+
 const lastOpenDocumentPathStorageKey = "glyph:last-open-document-path";
 
 export function getLastOpenDocumentPath(): string | null {
-    return window.localStorage.getItem(lastOpenDocumentPathStorageKey);
+    return readStoredValue(lastOpenDocumentPathStorageKey);
 }
 
 export function rememberLastOpenDocumentPath(path: string): void {
-    window.localStorage.setItem(lastOpenDocumentPathStorageKey, path);
+    writeStoredValue(lastOpenDocumentPathStorageKey, path);
 }
 
 export function forgetLastOpenDocumentPath(): void {
-    window.localStorage.removeItem(lastOpenDocumentPathStorageKey);
+    removeStoredValue(lastOpenDocumentPathStorageKey);
 }

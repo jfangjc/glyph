@@ -236,7 +236,7 @@ export function readPerformanceNow(): number {
 }
 
 export function measureEditorPerformance(name: string, startedAt: number): void {
-    if (!import.meta.env.DEV || typeof performance === "undefined") {
+    if (!import.meta.env?.DEV || typeof performance === "undefined") {
         return;
     }
     performance.measure(name, { start: startedAt, end: performance.now() });

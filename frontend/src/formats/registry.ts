@@ -1,37 +1,22 @@
-import { extensionFromPath } from "./file-names";
-import { catalog, getCatalogDescriptor, type CatalogEntry } from "./catalog";
+import { catalog } from "./catalog";
+import { createFormatRegistry, type FormatAdapter } from "./format-registry";
 import { createLatexDocumentFormat } from "./latex/document";
 import { createMarkdownDocumentFormat } from "./markdown/document";
-import { createSourceDocumentFormat } from "./source/document";
-import type { DocumentFormat, DocumentFormatDescriptor } from "./types";
+import { createOrgDocumentFormat } from "./org/document";
+import { createTypstDocumentFormat } from "./typst/document";
 
-const specializedFormats: Record<
-    NonNullable<CatalogEntry["adapter"]>,
-    (descriptor: DocumentFormatDescriptor) => DocumentFormat
-> = {
+const adapters = {
     markdown: createMarkdownDocumentFormat,
     latex: createLatexDocumentFormat,
-};
+    org: createOrgDocumentFormat,
+    typst: createTypstDocumentFormat,
+} satisfies Record<string, FormatAdapter>;
 
-const documentFormats: DocumentFormat[] = catalog.map((entry) => {
-    const descriptor = getCatalogDescriptor(entry);
-    return entry.adapter
-        ? specializedFormats[entry.adapter](descriptor)
-        : createSourceDocumentFormat(descriptor);
+const registry = createFormatRegistry(catalog, adapters, {
+    defaultFormatId: "markdown",
+    fallbackFormatId: "plain-text",
 });
 
-const defaultDocumentFormat = documentFormats.find((format) => format.descriptor.id === "markdown") ?? documentFormats[0];
-const fallbackDocumentFormat = documentFormats.find((format) => format.descriptor.id === "plain-text") ?? defaultDocumentFormat;
-
-export function getDocumentFormatById(id: string | null | undefined): DocumentFormat {
-    return documentFormats.find((format) => format.descriptor.id === id) ?? defaultDocumentFormat;
-}
-
-export function getDocumentFormatForPath(path: string | null | undefined): DocumentFormat {
-    const extension = path ? extensionFromPath(path) : "";
-    if (!extension) {
-        return fallbackDocumentFormat;
-    }
-
-    return documentFormats.find((format) => format.descriptor.extensions.includes(extension)) ?? fallbackDocumentFormat;
-}
+export const getDocumentFormats = registry.getAll;
+export const getDocumentFormatById = registry.getById;
+export const getDocumentFormatForPath = registry.getForPath;

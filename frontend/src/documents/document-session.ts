@@ -34,6 +34,7 @@ import {
 } from "./document-render-context";
 import {
     beginDocumentSession,
+    commitSavedFileName,
     documentState,
     notifyDocumentStateChanged,
     recordSavedDocumentContent,
@@ -49,13 +50,13 @@ export function getActiveDocumentFormat(): DocumentFormat {
     return getDocumentFormatById(documentState.activeFormatId);
 }
 
-export function isMarkdownSourceMode(): boolean {
-    return documentState.activeFormatId === "markdown" && documentState.editingMode === "source";
+export function isSourceEditingMode(): boolean {
+    return documentState.editingMode === "source";
 }
 
-export function toggleMarkdownEditingMode(): void {
-    const mode: DocumentEditingMode = isMarkdownSourceMode() ? "live-preview" : "source";
-    if (documentState.activeFormatId !== "markdown" || documentState.editingMode === mode) {
+export function toggleDocumentEditingMode(): void {
+    const mode: DocumentEditingMode = isSourceEditingMode() ? "live-preview" : "source";
+    if (!getActiveDocumentFormat().livePreview || documentState.editingMode === mode) {
         return;
     }
 
@@ -115,6 +116,7 @@ export function loadDocument(documentFile: DocumentFile): void {
         fileName,
         lineEnding: decoded.lineEnding,
         hasUtf8Bom: decoded.hasUtf8Bom,
+        editingMode: format.livePreview ? "live-preview" : "source",
     });
     sourceViewFormat = null;
     resetPendingImagesForSession();
@@ -135,19 +137,17 @@ export function serializeDocument(): string {
     return documentState.hasUtf8Bom ? `\uFEFF${source}` : source;
 }
 
-export function commitSavedDocument(path: string, savedContent: string): void {
+export function commitSavedDocument(path: string, savedContent: string, fileNameAtSave?: string): void {
     const nextFormat = getDocumentFormatForPath(path);
     const formatChanged = nextFormat.descriptor.id !== documentState.activeFormatId;
     documentState.activeFilePath = path;
     documentState.activeFormatId = nextFormat.descriptor.id;
-    documentState.fileName = fileNameFromPath(path);
-    documentState.committedFileName = documentState.fileName;
-    documentState.fileNameDirty = false;
+    commitSavedFileName(fileNameFromPath(path), fileNameAtSave);
     recordSavedDocumentContent(savedContent);
 
     if (formatChanged) {
-        if (nextFormat.descriptor.id !== "markdown") {
-            documentState.editingMode = "live-preview";
+        if (!nextFormat.livePreview) {
+            documentState.editingMode = "source";
         }
         sourceViewFormat = null;
         initializeDocumentEditor(getDocumentSource(), getEditorState().selection);
@@ -189,7 +189,8 @@ function syncDocumentProjectionFromState(
 ): void {
     const projectionStartedAt = readPerformanceNow();
     const format = getActiveEditorFormat();
-    const refreshRenderContext = shouldRefreshDocumentRenderContext(state, previous, transaction);
+    const refreshRenderContext = !previous || !transaction ||
+        (format.render.shouldRefreshRenderContext?.(state, previous, transaction) ?? Boolean(format.render.readRenderContext));
     const renderContextStartedAt = readPerformanceNow();
     const blocks = refreshRenderContext ? readParsedBlocksFromSourceState(state) : null;
     const renderContextChanged = blocks
@@ -218,7 +219,7 @@ function syncDocumentProjectionFromState(
 
 function getActiveEditorFormat(): DocumentFormat {
     const format = getActiveDocumentFormat();
-    if (!isMarkdownSourceMode()) {
+    if (!isSourceEditingMode() || !format.livePreview) {
         return format;
     }
 
@@ -245,40 +246,9 @@ function decodeDocumentSource(content: string): {
     };
 }
 
-function shouldRefreshDocumentRenderContext(
-    state: ReturnType<typeof getEditorState>,
-    previous: ReturnType<typeof getEditorState> | undefined,
-    transaction: Parameters<Parameters<typeof subscribeEditorState>[0]>[2] | undefined,
-): boolean {
-    if (!previous || !transaction) {
-        return true;
-    }
-
-    const contextTypes = new Set(["reference", "footnote-definition"]);
-    for (const change of transaction.changes) {
-        const removed = previous.doc.slice(change.from, change.to);
-        if (/[\n#\[\]<>`$|:]/.test(change.insert + removed)) {
-            return true;
-        }
-
-        const previousBlock = previous.blocks.blocks.find((block) => change.from <= block.sourceTo && change.to >= block.sourceFrom);
-        const nextBlock = state.blocks.blocks.find((block) => change.from <= block.sourceTo);
-        if (
-            previousBlock?.type.startsWith("heading-") ||
-            nextBlock?.type.startsWith("heading-") ||
-            previousBlock && contextTypes.has(previousBlock.type) ||
-            nextBlock && contextTypes.has(nextBlock.type)
-        ) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 /** Two frames bracket a paint opportunity, not a native input-to-paint trace. */
 function measureAfterPaintOpportunity(name: string, startedAt: number): void {
-    if (!import.meta.env.DEV) return;
+    if (!import.meta.env?.DEV) return;
     const session = documentState.sessionId;
     const revision = getDocumentRevision();
     const mode = documentState.editingMode;

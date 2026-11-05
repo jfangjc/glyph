@@ -14,7 +14,8 @@ export function resolveEditedActiveFilePath(
     }
 
     const extension = readFileExtension(currentFileName) ?? defaultExtension;
-    const nextFileName = normalizeSuggestedFileName(sanitizeFileNameBase(normalizedTitle), extension);
+    // The title field contains a stem, so dots in it are not a new extension.
+    const nextFileName = `${sanitizeFileNameBase(normalizedTitle)}.${extension}`;
     const separatorIndex = Math.max(activeFilePath.lastIndexOf("\\"), activeFilePath.lastIndexOf("/"));
 
     return separatorIndex >= 0 ? `${activeFilePath.slice(0, separatorIndex + 1)}${nextFileName}` : nextFileName;
@@ -49,5 +50,6 @@ function readFileExtension(fileName: string): string | null {
 }
 
 function normalizeComparablePath(path: string): string {
-    return path.replace(/\\/g, "/").toLowerCase();
+    // Preserve spelling so case-only renames reach the filesystem too.
+    return path.replace(/\\/g, "/");
 }

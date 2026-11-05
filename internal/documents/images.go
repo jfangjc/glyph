@@ -63,11 +63,11 @@ func (*Service) SavePastedImage(baseFilePath string, dataURL string, originalNam
 		return nil, err
 	}
 
-	fileName := uniquePastedImageFileName(assetsDir, originalName, mimeType)
-	path := filepath.Join(assetsDir, fileName)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	fileName, err := writeUniquePastedImage(assetsDir, originalName, mimeType, data)
+	if err != nil {
 		return nil, err
 	}
+	path := filepath.Join(assetsDir, fileName)
 
 	return &PastedImageFile{
 		Path:         path,
@@ -99,7 +99,7 @@ func decodeImageDataURL(dataURL string) (string, []byte, error) {
 	return mediaType, data, nil
 }
 
-func uniquePastedImageFileName(dir string, originalName string, mimeType string) string {
+func writeUniquePastedImage(dir string, originalName string, mimeType string, data []byte) (string, error) {
 	extension := strings.ToLower(filepath.Ext(originalName))
 	if extension == "" || len(extension) > 10 {
 		extension = extensionForImageMimeType(mimeType)
@@ -118,9 +118,27 @@ func uniquePastedImageFileName(dir string, originalName string, mimeType string)
 		}
 
 		fileName := fmt.Sprintf("%s-%s%s", base, suffix, extension)
-		if _, err := os.Stat(filepath.Join(dir, fileName)); os.IsNotExist(err) {
-			return fileName
+		path := filepath.Join(dir, fileName)
+		// Reserve the name atomically: simultaneous pastes must never overwrite
+		// one another, and existing symlinks must not be followed.
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if os.IsExist(err) {
+			continue
 		}
+		if err != nil {
+			return "", err
+		}
+		_, writeErr := file.Write(data)
+		closeErr := file.Close()
+		if writeErr != nil {
+			_ = os.Remove(path)
+			return "", writeErr
+		}
+		if closeErr != nil {
+			_ = os.Remove(path)
+			return "", closeErr
+		}
+		return fileName, nil
 	}
 }
 

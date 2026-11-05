@@ -10,7 +10,8 @@ import {
 } from "../bridge/documents";
 import { onOpenDocumentRequested, takePendingOpenDocumentPaths } from "../bridge/launch";
 import type { DocumentFile } from "../bridge/types";
-import { getDocumentFormatById, getDocumentFormatForPath } from "../formats/registry";
+import { getDocumentFormatById, getDocumentFormatForPath, getDocumentFormats } from "../formats/registry";
+import { titleFromFileName } from "../formats/file-names";
 import {
     finalizePendingImages,
     hasPendingImagesInContent,
@@ -37,7 +38,7 @@ import {
 type DocumentActionHost = {
     loadDocument: (documentFile: DocumentFile) => void;
     serializeDocument: () => string;
-    commitSavedDocument: (path: string, savedContent: string) => void;
+    commitSavedDocument: (path: string, savedContent: string, fileNameAtSave?: string) => void;
 };
 
 type SaveDocumentOptions = {
@@ -177,6 +178,10 @@ async function openDocumentWithPath(path?: string): Promise<void> {
 }
 
 export async function createNewMarkdownDocument(suggestedFileName?: string): Promise<void> {
+    return createNewDocument("markdown", suggestedFileName);
+}
+
+export async function createNewDocument(formatId: string, suggestedFileName?: string): Promise<void> {
     if (documentState.isOpeningDocument) {
         return;
     }
@@ -185,17 +190,19 @@ export async function createNewMarkdownDocument(suggestedFileName?: string): Pro
     notifyDocumentStateChanged();
 
     try {
+        const format = getDocumentFormats().find(format => format.descriptor.id === formatId);
+        if (!format) throw new Error(`Unknown document format: ${formatId}`);
         if (!(await prepareToLeaveDocument({ suggestedFileName }))) {
             return;
         }
 
         getHost().loadDocument({
             path: "",
-            name: "Untitled.md",
+            name: format.descriptor.defaultFileName,
             content: "",
         });
     } catch (error) {
-        console.error("Failed to create new markdown file:", error);
+        console.error("Failed to create new document:", error);
         reportEditorError("Could not create a new document session.");
     } finally {
         documentState.isOpeningDocument = false;
@@ -239,6 +246,7 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
         }
 
         const targetFormat = getDocumentFormatForPath(path);
+        const fileNameAtSave = documentState.fileName;
         let content = getHost().serializeDocument();
         const pathChanged = Boolean(previousPath && !areSamePath(previousPath, path));
         let preparedImages: PreparedPendingImages = { content, replacements: [] };
@@ -262,16 +270,20 @@ export async function saveCurrentDocument(options: SaveDocumentOptions = {}): Pr
 
         writeStarted = true;
         if (pathChanged && previousPath && !options.promptForPath) {
+            // Keep the original path valid if writing fails. A failed rename
+            // then leaves the latest content saved at the original path.
+            await saveDocument(previousPath, content);
             await renameDocument(previousPath, path);
+        } else {
+            await saveDocument(path, content);
         }
-
-        await saveDocument(path, content);
         if (documentState.sessionId !== saveSessionId) {
             return false;
         }
         finalizePendingImages(preparedImages, saveSessionId);
-        getHost().commitSavedDocument(path, content);
-        documentState.hasUnsavedChanges = getHost().serializeDocument() !== content || documentState.fileNameDirty;
+        getHost().commitSavedDocument(path, content, fileNameAtSave);
+        documentState.hasUnsavedChanges = getHost().serializeDocument() !== content ||
+            documentState.fileNameDirty || hasDirtyPendingEdit();
         rememberLastOpenDocumentPath(path);
         if (!previousPath || pathChanged) {
             notifyDirectoryTreeChanged();
@@ -354,7 +366,7 @@ async function resolveSavePath(options: SaveDocumentOptions): Promise<string | n
     if (!options.promptForPath && documentState.activeFilePath) {
         return resolveEditedActiveFilePath(
             documentState.activeFilePath,
-            getElement<HTMLInputElement>("document-title").value,
+            titleFromFileName(documentState.fileName),
             getDocumentFormatById(documentState.activeFormatId).descriptor.defaultExtension,
         );
     }
